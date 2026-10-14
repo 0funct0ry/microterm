@@ -1,0 +1,5 @@
+internal-docs/
+.idea/
+.claude/
+target/
+node_modules/

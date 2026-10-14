@@ -1,0 +1,21 @@
+[package]
+name = "microterm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "microterm"
+path = "src/main.rs"
+
+[features]
+runtime-shaders = ["mt_ui/runtime-shaders"]
+
+[dependencies]
+clap.workspace = true
+mt_ui = { path = "../mt_ui" }
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true

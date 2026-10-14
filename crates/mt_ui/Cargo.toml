@@ -1,0 +1,20 @@
+[package]
+name = "mt_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Compile Metal shaders at runtime instead of build time. Lets macOS builds work with only the
+# Command Line Tools installed (no Xcode / Metal toolchain). The Makefile enables it when
+# `xcrun metal` is missing.
+runtime-shaders = ["gpui/runtime_shaders"]
+
+[dependencies]
+gpui.workspace = true
+nucleo-matcher.workspace = true
+anyhow = "1"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

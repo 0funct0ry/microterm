@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/0funct0ry/microterm"
+
+[workspace.dependencies]
+# gpui is pre-1.0 and its API churns between releases, so it is pinned to an exact
+# crates.io version (not a Zed git rev: reproducible, small clone, simple CI). Only
+# `mt_ui` may depend on it. Upgrade deliberately and re-run the UI tests.
+gpui = "=0.2.2"
+clap = { version = "4", features = ["derive"] }
+nucleo-matcher = "0.3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
