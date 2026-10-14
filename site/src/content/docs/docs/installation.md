@@ -14,6 +14,23 @@ cd microterm
 make run
 ```
 
-On Linux you need a Vulkan 1.1 driver, `libxkbcommon`, and either the Wayland or X11 client
-libraries. On macOS you need Xcode's Metal toolchain, or just the Command Line Tools: the
-Makefile falls back to runtime shader compilation automatically.
+## Requirements
+
+**macOS** needs Xcode's Metal toolchain, or just the Command Line Tools: the Makefile falls
+back to runtime shader compilation automatically.
+
+**Linux** (glibc 2.35 or newer) needs:
+
+- a Vulkan 1.1 driver. Mesa's `llvmpipe` software renderer works as a fallback;
+- `libxkbcommon`;
+- the Wayland **or** X11 client libraries (microterm picks the native backend at start-up).
+
+| Distro family | Install |
+|---|---|
+| Debian, Ubuntu | `sudo apt install libvulkan1 mesa-vulkan-drivers libxkbcommon0` |
+| Fedora, RHEL | `sudo dnf install vulkan-loader mesa-vulkan-drivers libxkbcommon` |
+| Arch | `sudo pacman -S vulkan-icd-loader vulkan-radeon libxkbcommon` (or your GPU's driver) |
+| openSUSE | `sudo zypper install libvulkan1 Mesa-vulkan-drivers libxkbcommon0` |
+
+If no Vulkan loader is found, microterm exits with a message naming the package to install for
+your distro.

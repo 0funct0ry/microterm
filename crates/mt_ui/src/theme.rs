@@ -13,6 +13,8 @@ pub struct TermPalette {
     pub magenta: Hsla,
     pub cyan: Hsla,
     pub dim: Hsla,
+    /// Full 16-colour ANSI palette (0-7 normal, 8-15 bright) for the live terminal.
+    pub ansi: [Hsla; 16],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +72,24 @@ impl Theme {
                 magenta: c(0xb477cf),
                 cyan: c(0x6eb4bf),
                 dim: c(0x878a98),
+                ansi: [
+                    c(0x282c33),
+                    c(0xd07277),
+                    c(0xa1c181),
+                    c(0xdec184),
+                    c(0x74ade8),
+                    c(0xb477cf),
+                    c(0x6eb4bf),
+                    c(0xdce0e5),
+                    c(0x555a66),
+                    c(0xe0878c),
+                    c(0xb4d19a),
+                    c(0xeacf9a),
+                    c(0x8fc0f2),
+                    c(0xc994df),
+                    c(0x8cc6d0),
+                    c(0xffffff),
+                ],
             },
         }
     }
@@ -101,6 +121,24 @@ impl Theme {
                 magenta: c(0x994cc3),
                 cyan: c(0x3b82b7),
                 dim: c(0x7e8086),
+                ansi: [
+                    c(0x242529),
+                    c(0xd36151),
+                    c(0x669f59),
+                    c(0xa48819),
+                    c(0x5c78e2),
+                    c(0x994cc3),
+                    c(0x3b82b7),
+                    c(0xdcdcdc),
+                    c(0x58585a),
+                    c(0xe0786a),
+                    c(0x7db470),
+                    c(0xb89c2c),
+                    c(0x7a90e8),
+                    c(0xad6bd3),
+                    c(0x56a0cf),
+                    c(0xfafafa),
+                ],
             },
         }
     }

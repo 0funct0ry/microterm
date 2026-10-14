@@ -11,7 +11,13 @@ export default defineConfig({
       description: 'A minimal GPU-accelerated terminal emulator for macOS and Linux.',
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/0funct0ry/microterm' }],
       sidebar: [
-        { label: 'Getting started', items: [{ label: 'Installation', slug: 'docs/installation' }] },
+        {
+          label: 'Getting started',
+          items: [
+            { label: 'Installation', slug: 'docs/installation' },
+            { label: 'Quick start', slug: 'docs/quick-start' },
+          ],
+        },
       ],
     }),
   ],

@@ -4,13 +4,17 @@
 pub mod actions;
 pub mod app;
 pub mod assets;
+mod builtin_glyphs;
 pub mod components;
+mod gpu_check;
 pub mod keychips;
 pub mod metrics;
 pub mod mock;
 pub mod overlay_stack;
 pub mod picker_state;
 pub mod platform;
+pub mod session;
+pub mod terminal_view;
 pub mod theme;
 mod view;
 
@@ -29,6 +33,7 @@ pub fn open_main_window(cx: &mut App) {
 
 /// Launches the GUI and blocks until the last window closes.
 pub fn run() {
+    gpu_check::ensure_gpu_available();
     Application::new()
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
@@ -65,3 +70,5 @@ pub fn run() {
 
 #[cfg(test)]
 mod app_tests;
+#[cfg(test)]
+mod live_tests;

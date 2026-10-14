@@ -17,6 +17,8 @@ actions!(
         Copy,
         Paste,
         ClearScrollback,
+        ScrollToTop,
+        ScrollToBottom,
         ShowCommandPalette,
         ShowLauncher,
         ShowWorkspaceSwitcher,
@@ -53,6 +55,14 @@ pub struct ActivateTabRelative(pub isize);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct SwitchWorkspaceRelative(pub isize);
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ScrollByPage(pub isize);
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ScrollByLine(pub isize);
 
 /// Key context of the root view; overlays add `Overlay` and `Picker`.
 pub const CONTEXT_ROOT: &str = "MicroTerm";
@@ -274,6 +284,54 @@ pub static ACTIONS: &[ActionDef] = &[
         &["cmd-k"],
         &["ctrl-shift-k"],
         ClearScrollback
+    ),
+    def!(
+        "ScrollByPage(-1)",
+        "Scroll page up",
+        "Scroll the terminal one page towards older output",
+        &["shift-pageup"],
+        &["shift-pageup"],
+        ScrollByPage(-1)
+    ),
+    def!(
+        "ScrollByPage(1)",
+        "Scroll page down",
+        "Scroll the terminal one page towards newer output",
+        &["shift-pagedown"],
+        &["shift-pagedown"],
+        ScrollByPage(1)
+    ),
+    def!(
+        "ScrollByLine(-1)",
+        "Scroll line up",
+        "Scroll the terminal one line towards older output",
+        &[],
+        &[],
+        ScrollByLine(-1)
+    ),
+    def!(
+        "ScrollByLine(1)",
+        "Scroll line down",
+        "Scroll the terminal one line towards newer output",
+        &[],
+        &[],
+        ScrollByLine(1)
+    ),
+    def!(
+        "ScrollToTop",
+        "Scroll to top",
+        "Jump to the oldest scrollback line",
+        &["shift-home"],
+        &["shift-home"],
+        ScrollToTop
+    ),
+    def!(
+        "ScrollToBottom",
+        "Scroll to bottom",
+        "Jump back to the live screen",
+        &["shift-end"],
+        &["shift-end"],
+        ScrollToBottom
     ),
     def!(
         "ReloadConfig",

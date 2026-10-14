@@ -39,8 +39,10 @@ check-facade:
 themes:
 	@echo "themes: not implemented yet (M3)"
 
+# Headless 100 MB throughput baseline -> bench/results/<date>.json. vtebench must run inside a
+# microterm tab: `bench/vtebench.sh` (see bench/README.md).
 bench:
-	@echo "bench: not implemented yet (M2)"
+	bench/throughput.sh
 
 bundle:
 	@echo "bundle: not implemented yet (M11)"

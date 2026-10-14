@@ -1,10 +1,11 @@
 //! Rendering for [`AppWindow`]: title bar, tab bar, viewport and every overlay.
 
 use gpui::{
-    div, font, prelude::*, px, AnyElement, ClickEvent, Context, Decorations, FontStyle, FontWeight,
-    Hsla, KeyContext, MouseButton, SharedString, StrikethroughStyle, StyledText, TextRun,
-    UnderlineStyle, Window, WindowControlArea,
+    canvas, div, font, prelude::*, px, relative, AnyElement, ClickEvent, Context, Decorations,
+    FontStyle, FontWeight, Hsla, KeyContext, MouseButton, SharedString, StrikethroughStyle,
+    StyledText, TextRun, UnderlineStyle, Window, WindowControlArea,
 };
+use mt_term::ScrollCmd;
 
 use crate::{
     actions::*,
@@ -15,6 +16,7 @@ use crate::{
     mock::{Domain, Line, SpanStyle, Underline},
     overlay_stack::OverlayKind,
     platform::Platform,
+    terminal_view::{paint_terminal, TerminalPaint},
     theme::Theme,
 };
 
@@ -56,7 +58,7 @@ impl Render for AppWindow {
 
         root = root
             .child(self.tab_bar(cx))
-            .child(self.viewport(&t, cx))
+            .child(self.viewport(&t, window, cx))
             .child(self.toast_stack(cx))
             .when_some(self.hud, |el, (cols, rows)| {
                 el.child(resize_hud(&t, cols, rows))
@@ -67,6 +69,9 @@ impl Render for AppWindow {
         }
         if let Some(picker) = &self.picker {
             root = root.child(self.picker_modal(picker, cx));
+        }
+        if let Some(text) = &self.paste_confirm {
+            root = root.child(self.paste_modal(&t, text, cx));
         }
         if let Some(top) = self.overlays.top() {
             root = root.child(self.focus_node(top, cx));
@@ -90,9 +95,29 @@ impl Render for AppWindow {
             }))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.on_stub("Copy", "M7", cx)))
-            .on_action(cx.listener(|this, _: &Paste, _, cx| this.on_stub("Paste", "M2", cx)))
-            .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| {
-                this.on_stub("Clear scrollback", "M2", cx)
+            .on_action(cx.listener(|this, _: &Paste, w, cx| this.paste(w, cx)))
+            .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
+            .on_action(cx.listener(|this, a: &ScrollByPage, _, cx| {
+                let cmd = if a.0 < 0 {
+                    ScrollCmd::PageUp
+                } else {
+                    ScrollCmd::PageDown
+                };
+                for _ in 0..a.0.unsigned_abs().max(1) {
+                    this.scroll_terminal(cmd, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, a: &ScrollByLine, _, cx| {
+                // Negative scrolls towards older output, like the keyboard direction.
+                this.scroll_terminal(ScrollCmd::Lines(-(a.0 as i32)), cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ScrollToTop, _, cx| {
+                    this.scroll_terminal(ScrollCmd::Top, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| {
+                this.scroll_terminal(ScrollCmd::Bottom, cx)
             }))
             .on_action(cx.listener(|this, _: &IncreaseFontSize, _, cx| {
                 this.on_stub("Font size changes", "M4", cx)
@@ -173,7 +198,10 @@ impl AppWindow {
             (false, Some(Domain::Prod)) => (StatusKind::Connected, "prod"),
             _ => (StatusKind::Connected, "local"),
         };
-        let title = kind.map(|k| k.window_title()).unwrap_or("microterm");
+        let title = match self.live() {
+            Some(_) => self.tabs[self.active_tab].title.as_str(),
+            None => kind.map(|k| k.window_title()).unwrap_or("microterm"),
+        };
         let workspace = self.workspaces[self.active_workspace].name.clone();
         let linux = self.platform == Platform::Linux;
         let csd = matches!(window.window_decorations(), Decorations::Client { .. }) && linux;
@@ -206,6 +234,15 @@ impl AppWindow {
                     }
                 })
             })
+            // macOS: the transparent title bar is ours, so honour the system double-click
+            // preference (zoom or minimize) like native apps.
+            .when(!csd && self.platform == Platform::Mac, |el| {
+                el.on_mouse_down(MouseButton::Left, |e, window, _| {
+                    if e.click_count == 2 {
+                        window.titlebar_double_click();
+                    }
+                })
+            })
             .child(
                 div()
                     .absolute()
@@ -215,7 +252,7 @@ impl AppWindow {
                     .justify_center()
                     .text_size(px(UI_TEXT_SIZE_SMALL))
                     .text_color(t.text_muted)
-                    .child(title),
+                    .child(title.to_string()),
             )
             .child(
                 div()
@@ -358,8 +395,20 @@ impl AppWindow {
 
     // ------------------------------------------------------------------ viewport
 
-    fn viewport(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let screen = self.screen();
+    fn viewport(&self, t: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let live = self.live().map(|s| {
+            (
+                s.snapshot.clone(),
+                s.term.clone(),
+                s.size.clone(),
+                s.cache.clone(),
+            )
+        });
+        let screen = if live.is_some() {
+            Vec::new()
+        } else {
+            self.screen()
+        };
         let copy_active = self.overlays.contains(OverlayKind::CopyMode);
         let hits = if self.overlays.contains(OverlayKind::Search) {
             self.search_hits()
@@ -368,6 +417,7 @@ impl AppWindow {
         };
         let last_row = screen.len().saturating_sub(1);
         let focused_viewport = self.overlays.is_empty();
+        let cell = self.cell;
 
         let lines = screen.iter().enumerate().map(|(row, line)| {
             let line_hits: Vec<(usize, usize, bool)> = hits
@@ -415,8 +465,71 @@ impl AppWindow {
                     }
                 }),
             )
-            .on_scroll_wheel(cx.listener(|this, _, _, cx| this.on_scroll(cx)))
-            .child(
+            .on_scroll_wheel(cx.listener(|this, ev, _, cx| this.on_scroll_wheel(ev, cx)))
+            .on_key_down(cx.listener(|this, ev, _, cx| this.on_viewport_key(ev, cx)))
+            .on_key_up(cx.listener(|this, ev, _, cx| this.on_viewport_key_up(ev, cx)));
+
+        if let Some((snapshot, term, size, cache)) = live {
+            let paint = TerminalPaint {
+                snapshot: snapshot.clone(),
+                theme: *t,
+                metrics: cell,
+                focused: self.viewport_focus.is_focused(window) && window.is_window_active(),
+                cursor_on: self.cursor_phase,
+                cache,
+                font_generation: 0,
+            };
+            let entity = cx.entity();
+            let armed = self.hud_armed.clone();
+            view = view.child(
+                div()
+                    .size_full()
+                    .px(px(VIEWPORT_PADDING_X))
+                    .py(px(VIEWPORT_PADDING_Y))
+                    .child(
+                        canvas(
+                            |bounds, _, _| bounds,
+                            move |bounds, _, window, cx| {
+                                let (cols, rows) = paint.metrics.grid_for(
+                                    f32::from(bounds.size.width),
+                                    f32::from(bounds.size.height),
+                                );
+                                if size.get() != (cols, rows) {
+                                    size.set((cols, rows));
+                                    term.resize(
+                                        cols,
+                                        rows,
+                                        paint.metrics.width as u16,
+                                        paint.metrics.height as u16,
+                                    );
+                                    // The first layout is not a user resize.
+                                    if armed.replace(true) {
+                                        let entity = entity.clone();
+                                        window.defer(cx, move |_, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.show_hud(cols as usize, rows as usize, cx)
+                                            });
+                                        });
+                                    }
+                                }
+                                paint_terminal(bounds, &paint, window, cx);
+                            },
+                        )
+                        .size_full(),
+                    ),
+            );
+            view = view.child(self.live_marks(t, &hits, copy_active));
+            if self.bell_flash {
+                view = view.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(t.text.opacity(0.10))
+                        .into_any_element(),
+                );
+            }
+        } else {
+            view = view.child(
                 div()
                     .px(px(VIEWPORT_PADDING_X))
                     .py(px(VIEWPORT_PADDING_Y))
@@ -426,6 +539,7 @@ impl AppWindow {
                     .text_color(t.term.fg)
                     .children(lines),
             );
+        }
 
         if self.tabs.is_empty() {
             view = view.child(
@@ -445,21 +559,142 @@ impl AppWindow {
         }
         view = view.child(self.mode_strip(t, cx));
         if self.scrollbar_visible {
-            view = view.child(
-                div()
-                    .absolute()
-                    .top(px(8.))
-                    .right(px(3.))
-                    .w(px(4.))
-                    .h(px(120.))
-                    .rounded_full()
-                    .bg(t.text_muted.opacity(0.45)),
-            );
+            view = view.child(self.scrollbar(t));
         }
         if self.overlays.contains(OverlayKind::SshReconnect) {
             view = view.child(self.ssh_overlay(t, cx));
         }
         view
+    }
+
+    /// Overlay scrollbar: thumb size and position follow the scrollback position.
+    fn scrollbar(&self, t: &Theme) -> impl IntoElement {
+        let (thumb, top) = match self.live() {
+            Some(s) if s.snapshot.history_size > 0 => {
+                let snap = &s.snapshot;
+                let total = (snap.rows + snap.history_size) as f32;
+                let thumb = (snap.rows as f32 / total).max(0.04);
+                let top =
+                    ((snap.history_size - snap.display_offset) as f32 / total).min(1.0 - thumb);
+                (thumb, top)
+            }
+            _ => (0.3, 0.0),
+        };
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(3.))
+            .w(px(6.))
+            .child(
+                div()
+                    .absolute()
+                    .top(relative(top))
+                    .h(relative(thumb))
+                    .w_full()
+                    .rounded_full()
+                    .bg(t.text_muted.opacity(0.45)),
+            )
+    }
+
+    /// Search hits and the copy-mode cursor, drawn over a live terminal using cell metrics.
+    fn live_marks(
+        &self,
+        t: &Theme,
+        hits: &[(usize, usize, usize)],
+        copy_active: bool,
+    ) -> impl IntoElement {
+        let c = self.cell;
+        let mark = move |row: usize, col: usize, len: usize, color: Hsla| {
+            div()
+                .absolute()
+                .left(px(VIEWPORT_PADDING_X + col as f32 * c.width))
+                .top(px(VIEWPORT_PADDING_Y + row as f32 * c.height))
+                .w(px(len as f32 * c.width))
+                .h(px(c.height))
+                .bg(color)
+        };
+        let current = self.search.current;
+        div()
+            .absolute()
+            .inset_0()
+            .children(hits.iter().enumerate().map(|(i, (row, col, len))| {
+                let color = if i == current {
+                    t.accent.opacity(0.6)
+                } else {
+                    t.warning.opacity(0.35)
+                };
+                mark(*row, *col, *len, color)
+            }))
+            .when(copy_active, |el| {
+                el.child(mark(
+                    self.copy.row,
+                    self.copy.col,
+                    1,
+                    t.term.fg.opacity(0.7),
+                ))
+            })
+    }
+
+    fn paste_modal(&self, t: &Theme, text: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let lines = text.lines().count();
+        let preview: String = text.lines().take(4).collect::<Vec<_>>().join("\n");
+        let more = lines.saturating_sub(4);
+        Modal::new("paste-modal")
+            .width(px(440.))
+            .top(px(TITLE_BAR_HEIGHT + PALETTE_TOP_OFFSET))
+            .on_dismiss(cx.listener_for_dismiss())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_4()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("Paste {lines} lines into the terminal?")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child("This program has not enabled bracketed paste, so each newline runs as Enter."),
+                    )
+                    .child(
+                        div()
+                            .p_2()
+                            .rounded(px(RADIUS_CONTROL))
+                            .border_1()
+                            .border_color(t.border)
+                            .bg(t.background)
+                            .font_family(TERM_FONT)
+                            .text_size(px(12.))
+                            .overflow_hidden()
+                            .child(preview)
+                            .when(more > 0, |el| {
+                                el.child(
+                                    div()
+                                        .text_color(t.text_placeholder)
+                                        .child(format!("… {more} more lines")),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(Button::new("paste-cancel", "Cancel").on_click(
+                                cx.listener(|this, _, w, cx| this.dismiss_top(w, cx)),
+                            ))
+                            .child(
+                                Button::new("paste-confirm", "Paste")
+                                    .style(ButtonStyle::Filled)
+                                    .on_click(cx.listener(|this, _, w, cx| this.confirm_paste(w, cx))),
+                            ),
+                    ),
+            )
     }
 
     fn quick_select_chips(&self, t: &Theme) -> impl IntoElement {
@@ -470,15 +705,15 @@ impl AppWindow {
             .iter()
             .filter(|(label, _)| label.starts_with(&typed))
             .map(|(label, hit)| {
-                let x = hit.col as f32 * CELL_WIDTH;
-                let y = hit.row as f32 * LINE_HEIGHT;
+                let x = hit.col as f32 * self.cell.width;
+                let y = hit.row as f32 * self.cell.height;
                 let rest = label[typed.len()..].to_string();
                 div()
                     .absolute()
                     .left(px(x))
                     .top(px(y))
-                    .h(px(LINE_HEIGHT))
-                    .w(px(hit.text.chars().count() as f32 * CELL_WIDTH))
+                    .h(px(self.cell.height))
+                    .w(px(hit.text.chars().count() as f32 * self.cell.width))
                     .rounded(px(2.))
                     .bg(t.accent.opacity(0.28))
                     .border_1()
@@ -489,7 +724,7 @@ impl AppWindow {
                             .left(px(-1.))
                             .top(px(-1.))
                             .px_1()
-                            .h(px(LINE_HEIGHT))
+                            .h(px(self.cell.height))
                             .flex()
                             .items_center()
                             .rounded(px(2.))

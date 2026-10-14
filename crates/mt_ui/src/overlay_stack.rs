@@ -11,6 +11,7 @@ pub enum OverlayKind {
     CopyMode,
     Search,
     SshReconnect,
+    PasteConfirm,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -20,6 +21,7 @@ enum Class {
     Mode,
     Search,
     Ssh,
+    Paste,
 }
 
 impl OverlayKind {
@@ -32,6 +34,7 @@ impl OverlayKind {
             Self::QuickSelect | Self::CopyMode => Class::Mode,
             Self::Search => Class::Search,
             Self::SshReconnect => Class::Ssh,
+            Self::PasteConfirm => Class::Paste,
         }
     }
 }

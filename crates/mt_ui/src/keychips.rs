@@ -56,6 +56,8 @@ fn key_label(key: &str, platform: Platform) -> String {
         ("right", _) => "Right".into(),
         ("pageup", _) => "PageUp".into(),
         ("pagedown", _) => "PageDown".into(),
+        ("home", _) => "Home".into(),
+        ("end", _) => "End".into(),
         (k, _) => k.to_uppercase(),
     }
 }

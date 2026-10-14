@@ -1,12 +1,15 @@
 //! The application window: all M1 state (tabs, workspaces, overlays, toasts) and its behaviour,
 //! driven by mock data. Rendering lives in `view.rs`.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    prelude::*, px, App, Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, Pixels, Point,
-    SharedString, Subscription, Window,
+    prelude::*, px, App, Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, KeyUpEvent,
+    Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Subscription, Window,
 };
+use mt_term::{KeyEventKind, ScrollCmd, TermEvent};
 
 use crate::{
     actions::*,
@@ -17,6 +20,8 @@ use crate::{
     overlay_stack::{OverlayKind, OverlayStack},
     picker_state::{PickerInput, PickerOutcome, PickerState},
     platform::Platform,
+    session::{self, TerminalSession},
+    terminal_view::CellMetrics,
     theme::Theme,
 };
 
@@ -26,6 +31,8 @@ pub struct MockTab {
     pub id: u64,
     pub kind: MockKind,
     pub title: String,
+    /// A live shell replaces the mock screen when present.
+    pub session: Option<TerminalSession>,
 }
 
 pub struct MockWorkspace {
@@ -122,6 +129,19 @@ pub struct AppWindow {
     pub(crate) scrollbar_visible: bool,
     scrollbar_epoch: u64,
     pub(crate) tab_menu: Option<(Point<Pixels>, u64)>,
+    /// Measured terminal cell size.
+    pub(crate) cell: CellMetrics,
+    /// Cursor blink phase (true = drawn).
+    pub(crate) cursor_phase: bool,
+    pub(crate) bell_flash: bool,
+    bell_epoch: u64,
+    /// Text waiting on the multi-line paste confirmation.
+    pub(crate) paste_confirm: Option<String>,
+    /// `paste.confirm_multiline` (config arrives in M3).
+    pub(crate) confirm_multiline: bool,
+    /// False until the first paint has sized the PTY, so start-up shows no resize HUD.
+    pub(crate) hud_armed: Rc<Cell<bool>>,
+    blink_started: bool,
     theme_restore: Option<Theme>,
     _subscriptions: Vec<Subscription>,
 }
@@ -143,9 +163,11 @@ impl AppWindow {
                 id: i as u64 + 1,
                 kind,
                 title: kind.title().to_string(),
+                session: None,
             });
         }
-        Self {
+        let cell = CellMetrics::measure(window, crate::metrics::TERM_TEXT_SIZE);
+        let mut this = Self {
             viewport_focus,
             overlay_focus,
             platform: Platform::current(),
@@ -185,9 +207,327 @@ impl AppWindow {
             scrollbar_visible: false,
             scrollbar_epoch: 0,
             tab_menu: None,
+            cell,
+            cursor_phase: true,
+            bell_flash: false,
+            bell_epoch: 0,
+            paste_confirm: None,
+            confirm_multiline: true,
+            hud_armed: Rc::new(Cell::new(false)),
+            blink_started: false,
             theme_restore: None,
             _subscriptions: vec![subscription],
+        };
+        // Unit tests build windows by the dozen; they opt in to a shell explicitly.
+        if !cfg!(test) {
+            if let Err(e) = this.attach_terminal(0, mt_term::SpawnOptions::default(), window, cx) {
+                this.toast(
+                    ToastKind::Error,
+                    format!("Could not start the shell: {e}"),
+                    cx,
+                );
+            }
         }
+        this
+    }
+
+    // ---------------------------------------------------------------- live terminal
+
+    /// Replaces tab `index`'s mock screen with a real shell.
+    pub fn attach_terminal(
+        &mut self,
+        index: usize,
+        mut opts: mt_term::SpawnOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
+        opts.cols = session::DEFAULT_COLS;
+        opts.rows = session::DEFAULT_ROWS;
+        opts.cell_width = self.cell.width as u16;
+        opts.cell_height = self.cell.height as u16;
+        opts.palette = palette_of(cx.global::<Theme>());
+        let (tx, rx) = async_channel::bounded::<()>(1);
+        let session = TerminalSession::spawn(opts, tx)?;
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return Ok(());
+        };
+        tab.title = session.default_title.clone();
+        tab.session = Some(session);
+        let tab_id = tab.id;
+        cx.spawn_in(window, async move |this, cx| {
+            while rx.recv().await.is_ok() {
+                let alive = this
+                    .update_in(cx, |this, window, cx| {
+                        this.pump_terminal(tab_id, window, cx)
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+        if !self.blink_started {
+            self.blink_started = true;
+            cx.spawn_in(window, async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(530))
+                    .await;
+                if this.update(cx, |this, cx| this.blink(cx)).is_err() {
+                    break;
+                }
+            })
+            .detach();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn live(&self) -> Option<&TerminalSession> {
+        self.tabs.get(self.active_tab)?.session.as_ref()
+    }
+
+    fn live_mut(&mut self) -> Option<&mut TerminalSession> {
+        self.tabs.get_mut(self.active_tab)?.session.as_mut()
+    }
+
+    fn blink(&mut self, cx: &mut Context<Self>) {
+        if self.live().is_some_and(|s| s.snapshot.cursor.blinking) {
+            self.cursor_phase = !self.cursor_phase;
+            cx.notify();
+        }
+    }
+
+    /// Drains terminal events for a tab and refreshes its snapshot.
+    fn pump_terminal(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+        let active = index == self.active_tab;
+        let tab = &mut self.tabs[index];
+        let Some(session) = tab.session.as_mut() else {
+            return;
+        };
+        let mut bell = false;
+        let mut exit = None;
+        let mut new_title = None;
+        for ev in session.term.drain_events() {
+            match ev {
+                TermEvent::Wakeup | TermEvent::CursorBlinkingChange => {}
+                TermEvent::Title(t) => new_title = Some(t),
+                TermEvent::ResetTitle => new_title = Some(session.default_title.clone()),
+                TermEvent::Bell => bell = true,
+                TermEvent::ClipboardStore(kind, text) => match kind {
+                    mt_term::ClipboardKind::Clipboard => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text))
+                    }
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    mt_term::ClipboardKind::Primary => {
+                        cx.write_to_primary(ClipboardItem::new_string(text))
+                    }
+                    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                    mt_term::ClipboardKind::Primary => {}
+                },
+                TermEvent::ClipboardLoad(_, format) => {
+                    let text = cx
+                        .read_from_clipboard()
+                        .and_then(|i| i.text())
+                        .unwrap_or_default();
+                    session.term.write(format(&text).into_bytes());
+                }
+                TermEvent::ChildExit(code) => exit = Some(code),
+            }
+        }
+        session.refresh();
+        if let Some(title) = new_title {
+            if active {
+                window.set_window_title(&title);
+            }
+            tab.title = title;
+        }
+        self.cursor_phase = true;
+        if bell {
+            self.flash_bell(cx);
+        }
+        if let Some(code) = exit {
+            if let Some(c) = code.filter(|c| *c != 0) {
+                self.toast(
+                    ToastKind::Warning,
+                    format!("Shell exited with status {c}"),
+                    cx,
+                );
+            }
+            self.close_tab(tab_id, cx);
+        }
+        cx.notify();
+    }
+
+    fn flash_bell(&mut self, cx: &mut Context<Self>) {
+        self.bell_flash = true;
+        self.bell_epoch += 1;
+        let epoch = self.bell_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(140))
+                .await;
+            this.update(cx, |this, cx| {
+                if this.bell_epoch == epoch {
+                    this.bell_flash = false;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn on_viewport_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        self.send_key(&ev.keystroke, ev.is_held, KeyEventKind::Press, cx);
+    }
+
+    pub(crate) fn on_viewport_key_up(&mut self, ev: &KeyUpEvent, cx: &mut Context<Self>) {
+        self.send_key(&ev.keystroke, false, KeyEventKind::Release, cx);
+    }
+
+    fn send_key(
+        &mut self,
+        ks: &gpui::Keystroke,
+        held: bool,
+        kind: KeyEventKind,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.overlays.is_empty() {
+            return;
+        }
+        let Some(session) = self.live_mut() else {
+            return;
+        };
+        let Some(input) = session::key_input(ks, held, kind) else {
+            return;
+        };
+        if kind == KeyEventKind::Release && !session.snapshot.modes.kitty.report_events {
+            return;
+        }
+        session.term.send_key(&input);
+        if kind != KeyEventKind::Release && session.snapshot.display_offset > 0 {
+            // Typing returns to the live screen.
+            session.term.scroll_display(ScrollCmd::Bottom);
+            session.refresh();
+        }
+        self.cursor_phase = true;
+        cx.notify();
+    }
+
+    pub(crate) fn on_scroll_wheel(&mut self, ev: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let cell_height = self.cell.height;
+        let Some(session) = self.live_mut() else {
+            self.on_scroll(cx);
+            return;
+        };
+        let lines = match ev.delta {
+            ScrollDelta::Lines(p) => p.y * session::SCROLL_MULTIPLIER,
+            ScrollDelta::Pixels(p) => f32::from(p.y) / cell_height,
+        };
+        session.scroll_remainder += lines;
+        let n = session.scroll_remainder.trunc();
+        session.scroll_remainder -= n;
+        let n = n as i32;
+        if n == 0 {
+            return;
+        }
+        let modes = session.snapshot.modes;
+        if modes.alt_screen {
+            // Alternate scroll: the wheel becomes arrow keys (DECSET 1007), unless the app
+            // asked for mouse reports, which arrive with M7.
+            if modes.alternate_scroll && !modes.mouse_reporting {
+                let key = if n > 0 {
+                    mt_term::Key::Up
+                } else {
+                    mt_term::Key::Down
+                };
+                let input = mt_term::KeyInput::new(key, mt_term::Mods::NONE);
+                for _ in 0..n.unsigned_abs() {
+                    session.term.send_key(&input);
+                }
+            }
+            return;
+        }
+        session.term.scroll_display(ScrollCmd::Lines(n));
+        session.refresh();
+        self.on_scroll(cx);
+    }
+
+    pub(crate) fn scroll_terminal(&mut self, cmd: ScrollCmd, cx: &mut Context<Self>) {
+        if let Some(session) = self.live_mut() {
+            session.term.scroll_display(cmd);
+            session.refresh();
+            self.on_scroll(cx);
+        }
+    }
+
+    pub(crate) fn clear_scrollback(&mut self, cx: &mut Context<Self>) {
+        match self.live_mut() {
+            Some(session) => {
+                session.term.clear_scrollback();
+                session.refresh();
+                cx.notify();
+            }
+            None => self.toast(ToastKind::Info, "No terminal to clear", cx),
+        }
+    }
+
+    /// Paste action: clipboard text goes to the shell, after confirmation if it is multi-line
+    /// and the program has not enabled bracketed paste (SPEC §6.3).
+    pub(crate) fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
+            return;
+        };
+        self.paste_text(text, window, cx);
+    }
+
+    pub(crate) fn paste_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        if text.is_empty() {
+            return;
+        }
+        let confirm = self.confirm_multiline;
+        let Some(session) = self.live() else {
+            self.toast(ToastKind::Info, "Paste needs a live terminal tab", cx);
+            return;
+        };
+        let bracketed = session.term.modes().bracketed_paste;
+        if mt_term::paste_needs_confirmation(&text, bracketed, confirm) {
+            self.paste_confirm = Some(text);
+            self.open_overlay(OverlayKind::PasteConfirm, window, cx);
+        } else {
+            session.term.paste(&text);
+        }
+    }
+
+    pub(crate) fn confirm_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.paste_confirm.take();
+        self.close_overlay(OverlayKind::PasteConfirm, true, window, cx);
+        if let (Some(text), Some(session)) = (text, self.live()) {
+            session.term.paste(&text);
+        }
+    }
+
+    pub(crate) fn show_hud(&mut self, cols: usize, rows: usize, cx: &mut Context<Self>) {
+        self.hud = Some((cols, rows));
+        self.hud_epoch += 1;
+        let epoch = self.hud_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(600))
+                .await;
+            this.update(cx, |this, cx| {
+                if this.hud_epoch == epoch {
+                    this.hud = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     // ---------------------------------------------------------------- screen helpers
@@ -197,6 +537,12 @@ impl AppWindow {
     }
 
     pub(crate) fn screen(&self) -> Vec<Line> {
+        if let Some(session) = self.live() {
+            let snap = &session.snapshot;
+            return (0..snap.rows)
+                .map(|r| Line::new().plain(&snap.row_text(r)))
+                .collect();
+        }
         self.active_kind().map(MockKind::lines).unwrap_or_default()
     }
 
@@ -280,6 +626,7 @@ impl AppWindow {
             }
             OverlayKind::Search => self.search.current = 0,
             OverlayKind::SshReconnect => self.start_ssh_attempts(cx),
+            OverlayKind::PasteConfirm => {}
         }
     }
 
@@ -327,6 +674,7 @@ impl AppWindow {
             }
             OverlayKind::QuickSelect => self.quick = QuickState::default(),
             OverlayKind::SshReconnect => self.ssh_epoch += 1,
+            OverlayKind::PasteConfirm => self.paste_confirm = None,
             OverlayKind::CopyMode | OverlayKind::Search => {}
         }
     }
@@ -586,6 +934,7 @@ impl AppWindow {
             id,
             kind,
             title: title.to_string(),
+            session: None,
         });
         self.active_tab = self.tabs.len() - 1;
         self.workspaces[self.active_workspace].tabs += 1;
@@ -657,31 +1006,18 @@ impl AppWindow {
     }
 
     fn on_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.live().is_some() {
+            // The live viewport resizes its PTY (and shows the HUD) from paint, where the
+            // exact viewport bounds are known.
+            cx.notify();
+            return;
+        }
         let size = window.viewport_size();
-        let cols = ((f32::from(size.width) - 2.0 * VIEWPORT_PADDING_X) / CELL_WIDTH)
-            .floor()
-            .max(1.0) as usize;
-        let chrome = TITLE_BAR_HEIGHT + TAB_BAR_HEIGHT + 2.0 * VIEWPORT_PADDING_Y;
-        let rows = ((f32::from(size.height) - chrome) / LINE_HEIGHT)
-            .floor()
-            .max(1.0) as usize;
-        self.hud = Some((cols, rows));
-        self.hud_epoch += 1;
-        let epoch = self.hud_epoch;
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(600))
-                .await;
-            this.update(cx, |this, cx| {
-                if this.hud_epoch == epoch {
-                    this.hud = None;
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
+        let (cols, rows) = self.cell.grid_for(
+            f32::from(size.width) - 2.0 * VIEWPORT_PADDING_X,
+            f32::from(size.height) - TITLE_BAR_HEIGHT - TAB_BAR_HEIGHT - 2.0 * VIEWPORT_PADDING_Y,
+        );
+        self.show_hud(cols as usize, rows as usize, cx);
     }
 
     pub(crate) fn on_scroll(&mut self, cx: &mut Context<Self>) {
@@ -775,6 +1111,11 @@ impl AppWindow {
             Some(OverlayKind::SshReconnect) => {
                 if ev.keystroke.key == "enter" {
                     self.reconnect_now(cx);
+                }
+            }
+            Some(OverlayKind::PasteConfirm) => {
+                if ev.keystroke.key == "enter" {
+                    self.confirm_paste(window, cx);
                 }
             }
             None => {}
@@ -959,6 +1300,24 @@ impl AppWindow {
 }
 
 /// Printable text of a key press, ignoring shortcuts.
+/// Colours the terminal needs to answer OSC 4/10/11/12 queries.
+fn palette_of(t: &Theme) -> mt_term::Palette {
+    let rgb = |c: gpui::Hsla| {
+        let c = gpui::Rgba::from(c);
+        [
+            (c.r * 255.0).round() as u8,
+            (c.g * 255.0).round() as u8,
+            (c.b * 255.0).round() as u8,
+        ]
+    };
+    mt_term::Palette {
+        fg: rgb(t.term.fg),
+        bg: rgb(t.background),
+        cursor: rgb(t.term.fg),
+        ansi: t.term.ansi.map(rgb),
+    }
+}
+
 pub(crate) fn typed_text(ev: &KeyDownEvent, platform: Platform) -> Option<&str> {
     let m = &ev.keystroke.modifiers;
     if m.control || m.platform || m.function || (m.alt && platform == Platform::Linux) {
