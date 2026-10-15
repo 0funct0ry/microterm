@@ -171,6 +171,34 @@ pub struct TerminalPaint {
     /// Bumped when the font changes so cached lines are discarded.
     pub font_generation: u64,
     pub font: TermFont,
+    /// Hyperlink under the pointer: `(row, start col, end col exclusive)`; drawn with a
+    /// dotted accent underline.
+    pub hover_link: Option<(usize, usize, usize)>,
+}
+
+/// Selected columns `start..end` (end exclusive) on viewport row `r`.
+pub fn selection_cols(
+    span: &mt_term::SelectionSpan,
+    r: usize,
+    cols: usize,
+) -> Option<(usize, usize)> {
+    let r = r as i32;
+    if r < span.start.0 || r > span.end.0 || cols == 0 {
+        return None;
+    }
+    let (s, e) = if span.block {
+        (span.start.1.min(span.end.1), span.start.1.max(span.end.1))
+    } else {
+        (
+            if r == span.start.0 { span.start.1 } else { 0 },
+            if r == span.end.0 {
+                span.end.1
+            } else {
+                cols - 1
+            },
+        )
+    };
+    (s <= e).then(|| (s.min(cols - 1), (e + 1).min(cols)))
 }
 
 fn rgb_hsla(r: u8, g: u8, b: u8) -> Hsla {
@@ -559,18 +587,42 @@ pub fn paint_terminal(
             );
         }
 
+        // 1b. Selection.
+        let sel = snap
+            .selection
+            .and_then(|sp| selection_cols(&sp, r, snap.cols));
+        if let Some((a, b)) = sel {
+            quad(
+                window,
+                ox + a as f32 * m.width,
+                y,
+                (b - a) as f32 * m.width,
+                m.height,
+                t.term.selection_bg,
+            );
+        }
+        let edges: Vec<usize> = sel.map(|(a, b)| vec![a, b]).unwrap_or_default();
+
         // 2. Text.
         // The cursor cell must stay individually addressable, so its row is keyed (and shaped)
         // with the cursor column when ligatures are on.
         let cursor_col = (p.font.ligatures && snap.cursor.visible && snap.cursor.row == r)
             .then_some(snap.cursor.col);
         let row_key = snap.row_hashes[r]
-            ^ cursor_col.map_or(0, |c| (c as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            ^ cursor_col.map_or(0, |c| (c as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            ^ if p.font.ligatures {
+                edges.iter().fold(0u64, |h, &e| {
+                    h.wrapping_mul(31)
+                        .wrapping_add((e as u64 + 1).wrapping_mul(0xC2B2_AE3D_27D4_EB4F))
+                })
+            } else {
+                0
+            };
         let segments = p
             .cache
             .borrow_mut()
             .get_or_shape((row_key, key), capacity, || {
-                Rc::new(shape_row(window, row, t, m, &p.font, cursor_col, &[]))
+                Rc::new(shape_row(window, row, t, m, &p.font, cursor_col, &edges))
             });
         for seg in segments.iter() {
             let x = ox + seg.col as f32 * m.width + seg.dx;
@@ -625,6 +677,19 @@ pub fn paint_terminal(
                 m,
                 color,
             );
+        }
+        if let Some((hr, a, b)) = p.hover_link {
+            if hr == r {
+                paint_underline(
+                    window,
+                    Underline::Dotted,
+                    ox + a as f32 * m.width,
+                    ox + b as f32 * m.width,
+                    y,
+                    m,
+                    t.accent,
+                );
+            }
         }
         let mut c = 0;
         while c < row.len() {
@@ -708,6 +773,28 @@ fn paint_cursor(window: &mut Window, cx: &mut gpui::App, p: &TerminalPaint, ox: 
 
 #[cfg(test)]
 mod tests {
+    use mt_term::SelectionSpan;
+
+    #[test]
+    fn selection_columns_per_row() {
+        let sp = SelectionSpan {
+            start: (1, 4),
+            end: (3, 2),
+            block: false,
+        };
+        assert_eq!(super::selection_cols(&sp, 0, 10), None);
+        assert_eq!(super::selection_cols(&sp, 1, 10), Some((4, 10)));
+        assert_eq!(super::selection_cols(&sp, 2, 10), Some((0, 10)));
+        assert_eq!(super::selection_cols(&sp, 3, 10), Some((0, 3)));
+        assert_eq!(super::selection_cols(&sp, 4, 10), None);
+        let b = SelectionSpan {
+            start: (0, 5),
+            end: (2, 2),
+            block: true,
+        };
+        assert_eq!(super::selection_cols(&b, 1, 10), Some((2, 6)));
+    }
+
     use super::*;
 
     #[test]

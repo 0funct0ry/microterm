@@ -264,3 +264,193 @@ fn bell_flashes_the_viewport(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!view.read_with(cx, |t, _| t.bell_flash));
 }
+
+mod mouse {
+    use super::*;
+    use gpui::{point, px, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+
+    fn run(view: &Entity<AppWindow>, cx: &mut VisualTestContext, cmd: &str) {
+        view.update(cx, |this, _| {
+            this.live()
+                .unwrap()
+                .term
+                .write(format!("{cmd}\n").into_bytes());
+        });
+    }
+
+    /// Window position of the middle of cell (`row`, `col`).
+    fn cell_pos(
+        view: &Entity<AppWindow>,
+        cx: &mut VisualTestContext,
+        row: usize,
+        col: usize,
+    ) -> gpui::Point<gpui::Pixels> {
+        view.read_with(cx, |this, _| {
+            let (ox, oy) = this.live().unwrap().grid_origin.get();
+            point(
+                px(ox + (col as f32 + 0.5) * this.cell.width),
+                px(oy + (row as f32 + 0.5) * this.cell.height),
+            )
+        })
+    }
+
+    fn down(
+        view: &Entity<AppWindow>,
+        cx: &mut VisualTestContext,
+        pos: gpui::Point<gpui::Pixels>,
+        clicks: usize,
+        mods: Modifiers,
+    ) {
+        view.update_in(cx, |this, window, cx| {
+            this.mouse_down(
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: pos,
+                    modifiers: mods,
+                    click_count: clicks,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn up(view: &Entity<AppWindow>, cx: &mut VisualTestContext, pos: gpui::Point<gpui::Pixels>) {
+        view.update(cx, |this, cx| {
+            this.mouse_up(
+                &MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: pos,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                },
+                cx,
+            );
+        });
+    }
+
+    fn row_of(rows: &[String], needle: &str) -> usize {
+        rows.iter().position(|r| r.contains(needle)).expect(needle)
+    }
+
+    #[gpui::test]
+    fn double_click_selects_a_word_and_copy_reads_it(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        run(&view, cx, "echo alpha-beta gamma");
+        let rows = wait_for(&view, cx, |r| r == "alpha-beta gamma");
+        let row = rows.iter().rposition(|r| r == "alpha-beta gamma").unwrap();
+        let pos = cell_pos(&view, cx, row, 13);
+        down(&view, cx, pos, 2, Modifiers::default());
+        up(&view, cx, pos);
+        let copied = view.update(cx, |this, cx| this.copy_selection(cx));
+        assert!(copied);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|i| i.text()).as_deref(),
+            Some("gamma")
+        );
+    }
+
+    #[gpui::test]
+    fn drag_selects_text(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        run(&view, cx, "echo abcdefgh");
+        let rows = wait_for(&view, cx, |r| r == "abcdefgh");
+        let row = rows.iter().rposition(|r| r == "abcdefgh").unwrap();
+        let a = cell_pos(&view, cx, row, 2);
+        let b = cell_pos(&view, cx, row, 5);
+        down(&view, cx, a, 1, Modifiers::default());
+        view.update(cx, |this, cx| {
+            this.mouse_move(
+                &gpui::MouseMoveEvent {
+                    position: b,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                },
+                true,
+                cx,
+            );
+        });
+        up(&view, cx, b);
+        view.update(cx, |this, cx| this.copy_selection(cx));
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|i| i.text()).as_deref(),
+            Some("cde")
+        );
+    }
+
+    #[gpui::test]
+    fn osc8_link_is_found_and_blocked_scheme_toasts(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        run(
+            &view,
+            cx,
+            r"printf '\033]8;;ftp://example.com/x\033\\LINKTEXT\033]8;;\033\\\n'",
+        );
+        let rows = wait_for(&view, cx, |r| r == "LINKTEXT");
+        let row = rows.iter().rposition(|r| r == "LINKTEXT").unwrap();
+        let link = view
+            .update(cx, |this, _| this.link_at(row, 3))
+            .expect("link");
+        assert_eq!((link.start, link.end), (0, 8));
+        assert_eq!(link.target, "ftp://example.com/x");
+        view.update(cx, |this, cx| this.open_link("ftp://example.com/x", cx));
+        let toast = view.read_with(cx, |this, _| this.toasts.last().map(|t| t.text.to_string()));
+        assert!(toast.unwrap().contains("Blocked link scheme"));
+        let _ = row_of(&rows, "LINKTEXT");
+    }
+
+    #[gpui::test]
+    fn implicit_url_and_user_rule(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        view.update(cx, |this, _| {
+            let mut c = (*this.cfg).clone();
+            c.hyperlink_rules.push(mt_config::HyperlinkRule {
+                regex: r"\b([A-Z]{2,}-\d+)\b".into(),
+                format: "https://jira.example/browse/$1".into(),
+            });
+            this.cfg = std::sync::Arc::new(c);
+            this.links = crate::mouse_input::build_links(&this.cfg);
+        });
+        run(&view, cx, "echo see PAY-12 and https://example.com/a.");
+        let rows = wait_for(&view, cx, |r| r == "see PAY-12 and https://example.com/a.");
+        let row = rows
+            .iter()
+            .rposition(|r| r == "see PAY-12 and https://example.com/a.")
+            .unwrap();
+        let jira = view
+            .update(cx, |this, _| this.link_at(row, 5))
+            .expect("jira link");
+        assert_eq!(jira.target, "https://jira.example/browse/PAY-12");
+        assert_eq!((jira.start, jira.end), (4, 10));
+        let url = view
+            .update(cx, |this, _| this.link_at(row, 20))
+            .expect("url");
+        assert_eq!(url.target, "https://example.com/a");
+        assert!(view.update(cx, |this, _| this.link_at(row, 0)).is_none());
+    }
+
+    #[gpui::test]
+    fn right_click_opens_context_menu(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        let pos = cell_pos(&view, cx, 0, 0);
+        view.update_in(cx, |this, window, cx| {
+            this.mouse_down(
+                &MouseDownEvent {
+                    button: MouseButton::Right,
+                    position: pos,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+        });
+        let menu = view
+            .read_with(cx, |this, _| this.mouse.menu.clone())
+            .expect("menu");
+        assert!(!menu.has_selection);
+        assert!(menu.link.is_none());
+    }
+}

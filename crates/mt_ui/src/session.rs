@@ -24,6 +24,8 @@ pub struct TerminalSession {
     pub cache: Rc<RefCell<LineCache>>,
     /// Grid size last pushed to the PTY (set while painting).
     pub size: Rc<Cell<(u16, u16)>>,
+    /// Window position of the grid's top-left corner (set while painting), for hit-testing.
+    pub grid_origin: Rc<Cell<(f32, f32)>>,
     /// Fractional wheel/trackpad lines carried between events.
     pub scroll_remainder: f32,
     pub default_title: String,
@@ -54,6 +56,7 @@ impl TerminalSession {
             snapshot,
             cache: Rc::default(),
             size: Rc::new(Cell::new((0, 0))),
+            grid_origin: Rc::new(Cell::new((0.0, 0.0))),
             scroll_remainder: 0.0,
             default_title,
         })

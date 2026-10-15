@@ -27,6 +27,8 @@ actions!(
         Copy,
         Paste,
         PastePrimary,
+        SelectAll,
+        SearchSelection,
         ClearScrollback,
         ScrollToTop,
         ScrollToBottom,
@@ -295,6 +297,22 @@ pub static ACTIONS: &[ActionDef] = &[
         Paste
     ),
     def!(
+        "SelectAll",
+        "Select all",
+        "Select the whole screen and scrollback",
+        &["cmd-a"],
+        &["ctrl-shift-a"],
+        SelectAll
+    ),
+    def!(
+        "SearchSelection",
+        "Search for selection",
+        "Open search pre-filled with the selected text",
+        &[],
+        &[],
+        SearchSelection
+    ),
+    def!(
         "PastePrimary",
         "Paste primary selection",
         "Paste the Linux primary selection (middle-click buffer)",
@@ -559,15 +577,15 @@ impl ActionDef {
             | "SwitchWorkspaceRelative"
             | "CreateWorkspace"
             | "RenameWorkspace" => "Workspaces",
-            "Copy" | "Paste" | "PastePrimary" | "ClearScrollback" | "ScrollByPage"
-            | "ScrollByLine" | "ScrollToTop" | "ScrollToBottom" | "ScrollToPrompt" => {
-                "Clipboard & scroll"
-            }
+            "Copy" | "Paste" | "PastePrimary" | "SelectAll" | "ClearScrollback"
+            | "ScrollByPage" | "ScrollByLine" | "ScrollToTop" | "ScrollToBottom"
+            | "ScrollToPrompt" => "Clipboard & scroll",
             "ShowCommandPalette"
             | "ShowLauncher"
             | "ActivateQuickSelect"
             | "ActivateCopyMode"
-            | "Search" => "Modes",
+            | "Search"
+            | "SearchSelection" => "Modes",
             "IncreaseFontSize" | "DecreaseFontSize" | "ResetFontSize" | "SelectTheme" => {
                 "Fonts & look"
             }

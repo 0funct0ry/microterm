@@ -3520,6 +3520,7 @@ name = "mt_config"
 version = "0.1.0"
 dependencies = [
  "async-channel 2.5.0",
+ "mt_patterns",
  "notify",
  "serde",
  "strsim",
@@ -3542,6 +3543,9 @@ version = "0.1.0"
 [[package]]
 name = "mt_patterns"
 version = "0.1.0"
+dependencies = [
+ "regex",
+]
 
 [[package]]
 name = "mt_proto"
@@ -3582,6 +3586,7 @@ dependencies = [
  "gpui",
  "mt_config",
  "mt_mux",
+ "mt_patterns",
  "mt_term",
  "mt_theme",
  "nucleo-matcher",

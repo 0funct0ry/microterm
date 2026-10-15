@@ -13,3 +13,4 @@ strsim.workspace = true
 thiserror.workspace = true
 notify.workspace = true
 async-channel.workspace = true
+mt_patterns = { path = "../mt_patterns" }

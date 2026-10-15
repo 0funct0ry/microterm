@@ -11,7 +11,9 @@
 mod emulator;
 mod events;
 mod input;
+mod mouse;
 mod process;
+mod selection;
 mod shell;
 mod snapshot;
 mod terminal;
@@ -23,9 +25,15 @@ pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,
     KittyFlags, Mods,
 };
+pub use mouse::{
+    encode_mouse, MouseButton, MouseEvent, MouseEventKind, MouseModes, MouseTracking,
+    PixelModeSniffer,
+};
 pub use process::ForegroundProcess;
+pub use selection::{SelectionKind, SelectionSpan};
 pub use shell::{resolve_shell, resolve_shell_with};
 pub use snapshot::{
-    Cell, CellColor, CellFlags, Cursor, CursorShape, Damage, Modes, RenderSnapshot, Underline,
+    Cell, CellColor, CellFlags, Cursor, CursorShape, Damage, Hyperlink, Modes, RenderSnapshot,
+    Underline,
 };
 pub use terminal::{SpawnOptions, Terminal};

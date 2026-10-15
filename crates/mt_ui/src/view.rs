@@ -76,6 +76,12 @@ impl Render for AppWindow {
         if let Some((position, tab_id)) = self.tab_menu {
             root = root.child(self.tab_context_menu(position, tab_id, cx));
         }
+        if let Some(menu) = self.mouse.menu.clone() {
+            root = root.child(self.viewport_menu(menu, cx));
+        }
+        if let Some(tip) = self.link_tooltip(&t) {
+            root = root.child(tip);
+        }
         if let Some(picker) = &self.picker {
             root = root.child(self.picker_modal(picker, cx));
         }
@@ -133,11 +139,15 @@ impl Render for AppWindow {
             }))
             .on_action(cx.listener(|this, _: &SpawnWindow, _, cx| this.on_action_spawn_window(cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
-            .on_action(cx.listener(|this, _: &Copy, _, cx| this.on_stub("Copy", "M7", cx)))
-            .on_action(cx.listener(|this, _: &Paste, w, cx| this.paste(w, cx)))
-            .on_action(cx.listener(|this, _: &PastePrimary, _, cx| {
-                this.on_stub("Paste primary selection", "M7", cx)
+            .on_action(cx.listener(|this, _: &Copy, _, cx| {
+                if !this.copy_selection(cx) {
+                    this.toast(ToastKind::Info, "Nothing selected", cx);
+                }
             }))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
+            .on_action(cx.listener(|this, _: &SearchSelection, w, cx| this.search_selection(w, cx)))
+            .on_action(cx.listener(|this, _: &Paste, w, cx| this.paste(w, cx)))
+            .on_action(cx.listener(|this, _: &PastePrimary, w, cx| this.paste_primary(w, cx)))
             .on_action(cx.listener(|this, a: &SendString, _, cx| this.send_string(&a.0, cx)))
             .on_action(cx.listener(|this, a: &SpawnCommand, w, cx| {
                 let spec =
@@ -472,6 +482,7 @@ impl AppWindow {
                 s.term.clone(),
                 s.size.clone(),
                 s.cache.clone(),
+                s.grid_origin.clone(),
             )
         });
         let screen = if live.is_some() {
@@ -529,7 +540,8 @@ impl AppWindow {
             .on_key_down(cx.listener(|this, ev, _, cx| this.on_viewport_key(ev, cx)))
             .on_key_up(cx.listener(|this, ev, _, cx| this.on_viewport_key_up(ev, cx)));
 
-        if let Some((snapshot, term, size, cache)) = live {
+        let pointer = self.pointer_style();
+        if let Some((snapshot, term, size, cache, origin)) = live {
             let paint = TerminalPaint {
                 snapshot: snapshot.clone(),
                 theme: *t,
@@ -540,6 +552,7 @@ impl AppWindow {
                 // The size is part of the key: cached lines were shaped at one size.
                 font_generation: self.font_generation ^ (u64::from(cell.font_size.to_bits()) << 32),
                 font: self.font.clone(),
+                hover_link: self.mouse.hover.as_ref().map(|l| (l.row, l.start, l.end)),
             };
             let entity = cx.entity();
             let armed = self.hud_armed.clone();
@@ -550,8 +563,14 @@ impl AppWindow {
                     .py(px(self.cfg.window.padding.y))
                     .child(
                         canvas(
-                            |bounds, _, _| bounds,
-                            move |bounds, _, window, cx| {
+                            move |bounds, window, _| {
+                                window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal)
+                            },
+                            move |bounds, hitbox, window, cx| {
+                                origin
+                                    .set((f32::from(bounds.origin.x), f32::from(bounds.origin.y)));
+                                window.set_cursor_style(pointer, &hitbox);
+                                Self::register_mouse(&entity, hitbox, window);
                                 let (cols, rows) = paint.metrics.grid_for(
                                     f32::from(bounds.size.width),
                                     f32::from(bounds.size.height),

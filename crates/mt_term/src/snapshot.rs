@@ -13,6 +13,7 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape as EngineShape, NamedColor};
 
 use crate::input::{InputMode, KittyFlags};
+use crate::mouse::{MouseModes, MouseTracking};
 
 /// A colour as stored in a cell. Palette lookup happens in the UI so themes apply live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -55,9 +56,18 @@ pub enum Underline {
     Dashed,
 }
 
+/// An explicit (OSC 8) hyperlink. Cells of one link share the same `id`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Hyperlink {
+    pub id: String,
+    pub uri: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Cell {
     pub ch: char,
+    /// OSC 8 hyperlink covering this cell.
+    pub link: Option<std::sync::Arc<Hyperlink>>,
     pub zerowidth: Option<Box<[char]>>,
     pub fg: CellColor,
     pub bg: CellColor,
@@ -80,6 +90,7 @@ impl Default for Cell {
     fn default() -> Self {
         Cell {
             ch: ' ',
+            link: None,
             zerowidth: None,
             fg: CellColor::DefaultFg,
             bg: CellColor::DefaultBg,
@@ -116,6 +127,9 @@ pub struct Modes {
     pub focus_reporting: bool,
     pub mouse_reporting: bool,
     pub sgr_mouse: bool,
+    pub mouse_tracking: MouseTracking,
+    /// DECSET 1016; tracked outside the engine (see `PixelModeSniffer`).
+    pub sgr_pixels: bool,
     pub alternate_scroll: bool,
     pub kitty: KittyFlags,
 }
@@ -129,6 +143,14 @@ impl Modes {
         }
     }
 
+    pub fn mouse_modes(&self) -> MouseModes {
+        MouseModes {
+            tracking: self.mouse_tracking,
+            sgr: self.sgr_mouse,
+            pixels: self.sgr_pixels,
+        }
+    }
+
     pub(crate) fn from_engine(m: TermMode) -> Self {
         Modes {
             alt_screen: m.contains(TermMode::ALT_SCREEN),
@@ -138,6 +160,16 @@ impl Modes {
             focus_reporting: m.contains(TermMode::FOCUS_IN_OUT),
             mouse_reporting: m.intersects(TermMode::MOUSE_MODE),
             sgr_mouse: m.contains(TermMode::SGR_MOUSE),
+            mouse_tracking: if m.contains(TermMode::MOUSE_MOTION) {
+                MouseTracking::Motion
+            } else if m.contains(TermMode::MOUSE_DRAG) {
+                MouseTracking::Drag
+            } else if m.contains(TermMode::MOUSE_REPORT_CLICK) {
+                MouseTracking::Click
+            } else {
+                MouseTracking::None
+            },
+            sgr_pixels: false,
             alternate_scroll: m.contains(TermMode::ALTERNATE_SCROLL),
             kitty: KittyFlags {
                 disambiguate: m.contains(TermMode::DISAMBIGUATE_ESC_CODES),
@@ -172,6 +204,7 @@ pub struct RenderSnapshot {
     pub history_size: usize,
     pub modes: Modes,
     pub damage: Damage,
+    pub selection: Option<crate::selection::SelectionSpan>,
 }
 
 impl RenderSnapshot {
@@ -254,6 +287,7 @@ fn convert_cell(cell: &EngineCell, colors: &Colors) -> Cell {
     };
     Cell {
         ch: cell.c,
+        link: None,
         zerowidth: cell.zerowidth().map(|z| z.to_vec().into_boxed_slice()),
         fg: convert_color(cell.fg, colors),
         bg: convert_color(cell.bg, colors),
@@ -299,11 +333,26 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
 
     let mut cells = Vec::with_capacity(rows * cols);
     let mut row_hashes = Vec::with_capacity(rows);
+    let mut last_link: Option<std::sync::Arc<Hyperlink>> = None;
     for r in 0..rows {
         let line = Line(r as i32 - offset as i32);
         let start = cells.len();
         for c in 0..cols {
-            cells.push(convert_cell(&grid[Point::new(line, Column(c))], colors));
+            let ec = &grid[Point::new(line, Column(c))];
+            let mut cell = convert_cell(ec, colors);
+            if let Some(h) = ec.hyperlink() {
+                let reuse = last_link
+                    .as_ref()
+                    .is_some_and(|l| l.id == h.id() && l.uri == h.uri());
+                if !reuse {
+                    last_link = Some(std::sync::Arc::new(Hyperlink {
+                        id: h.id().to_owned(),
+                        uri: h.uri().to_owned(),
+                    }));
+                }
+                cell.link = last_link.clone();
+            }
+            cells.push(cell);
         }
         if widen_ri {
             widen_regional_indicators(&mut cells[start..]);
@@ -342,5 +391,6 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
         history_size: grid.history_size(),
         modes: Modes::from_engine(mode),
         damage,
+        selection: crate::selection::span(term),
     }
 }

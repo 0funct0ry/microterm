@@ -205,6 +205,9 @@ pub struct AppWindow {
     pub(crate) scrollbar_visible: bool,
     scrollbar_epoch: u64,
     pub(crate) tab_menu: Option<(Point<Pixels>, u64)>,
+    pub(crate) mouse: crate::mouse_input::MouseState,
+    /// Built-in plus `[[hyperlink_rules]]` patterns; rebuilt on config reload.
+    pub(crate) links: Arc<mt_patterns::LinkSet>,
     /// Measured terminal cell size.
     pub(crate) cell: CellMetrics,
     /// Cursor blink phase (true = drawn).
@@ -300,6 +303,8 @@ impl AppWindow {
             scrollbar_visible: false,
             scrollbar_epoch: 0,
             tab_menu: None,
+            mouse: Default::default(),
+            links: crate::mouse_input::build_links(&cfg),
             cell,
             cursor_phase: true,
             bell_flash: false,
@@ -570,7 +575,7 @@ impl AppWindow {
         self.tabs.get(self.active_tab)?.session.as_ref()
     }
 
-    fn live_mut(&mut self) -> Option<&mut TerminalSession> {
+    pub(crate) fn live_mut(&mut self) -> Option<&mut TerminalSession> {
         self.tabs.get_mut(self.active_tab)?.session.as_mut()
     }
 
@@ -707,6 +712,17 @@ impl AppWindow {
             session.term.scroll_display(ScrollCmd::Bottom);
             session.refresh();
         }
+        if kind != KeyEventKind::Release {
+            // Typing drops the selection and hides the pointer until it moves again.
+            if session.term.has_selection() {
+                session.term.selection_clear();
+                session.refresh();
+            }
+            if self.cfg.mouse.hide_while_typing {
+                self.mouse.pointer_hidden = true;
+                self.mouse.hover = None;
+            }
+        }
         self.cursor_phase = true;
         cx.notify();
     }
@@ -730,9 +746,15 @@ impl AppWindow {
             return;
         }
         let modes = session.snapshot.modes;
+        if self.mouse_wheel_report(ev, n) {
+            return;
+        }
+        let Some(session) = self.live_mut() else {
+            return;
+        };
         if modes.alt_screen {
             // Alternate scroll: the wheel becomes arrow keys (DECSET 1007), unless the app
-            // asked for mouse reports, which arrive with M7.
+            // asked for mouse reports (those were sent above unless Shift bypassed them).
             if modes.alternate_scroll && !modes.mouse_reporting {
                 let key = if n > 0 {
                     mt_term::Key::Up
@@ -888,6 +910,7 @@ impl AppWindow {
         cx: &mut Context<Self>,
     ) {
         self.tab_menu = None;
+        self.mouse.menu = None;
         self.prepare(kind, cx);
         self.overlays.open(kind);
         self.sync_focus(window);
@@ -936,7 +959,7 @@ impl AppWindow {
 
     /// Esc: closes only the top overlay and hands focus back.
     pub(crate) fn dismiss_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tab_menu.take().is_some() {
+        if self.tab_menu.take().is_some() || self.mouse.menu.take().is_some() {
             cx.notify();
             return;
         }
@@ -1702,14 +1725,6 @@ impl AppWindow {
         cx.notify();
     }
 
-    fn not_yet(&mut self, what: &str, milestone: &str, cx: &mut Context<Self>) {
-        self.toast(
-            ToastKind::Info,
-            format!("{what} arrives in {milestone}"),
-            cx,
-        );
-    }
-
     /// Saves the window size 500 ms after the last resize (`window.remember_size`).
     fn remember_size(&mut self, window: &Window, cx: &mut Context<Self>) {
         if cfg!(test)
@@ -1989,10 +2004,6 @@ impl AppWindow {
         cx.defer(move |cx| mux_host::open_new_window(cx, spec));
     }
 
-    pub(crate) fn on_stub(&mut self, what: &str, milestone: &str, cx: &mut Context<Self>) {
-        self.not_yet(what, milestone, cx);
-    }
-
     pub(crate) fn on_picker_confirm(
         &mut self,
         new_window: bool,
@@ -2085,6 +2096,9 @@ impl AppWindow {
             self.font_size_override = None;
         }
         self.cfg = cfg.clone();
+        self.links = crate::mouse_input::build_links(&cfg);
+        self.mouse.link_cache.clear();
+        self.mouse.hover = None;
         self.font = TermFont::from_config(&cfg.font);
         self.font_generation = generation;
         if diff.has(mt_config::Effect::Relayout) {

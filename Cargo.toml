@@ -24,6 +24,7 @@ strsim = "0.11"
 thiserror = "2"
 notify = "8"
 async-channel = "2"
+regex = "1"
 
 [profile.release]
 lto = "thin"

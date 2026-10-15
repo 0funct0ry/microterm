@@ -75,6 +75,8 @@ pub struct Terminal {
     scrollback: usize,
     /// `text.wide_regional_indicators`, shared with the PTY reader.
     wide_ri: Arc<AtomicBool>,
+    /// DECSET 1016 state, set by the PTY reader's sniffer.
+    sgr_pixels: Arc<AtomicBool>,
 }
 
 impl Terminal {
@@ -142,7 +144,8 @@ impl Terminal {
         let pid = pty.child().id();
         let master_fd = pty.file().as_raw_fd();
         let wide_ri = Arc::new(AtomicBool::new(opts.wide_regional_indicators));
-        let pty = FilteredPty::new(pty, wide_ri.clone())?;
+        let sgr_pixels = Arc::new(AtomicBool::new(false));
+        let pty = FilteredPty::new(pty, wide_ri.clone(), sgr_pixels.clone())?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         shared.set_pty(sender.clone());
@@ -156,6 +159,7 @@ impl Terminal {
             master_fd,
             scrollback: opts.scrollback,
             wide_ri,
+            sgr_pixels,
         })
     }
 
@@ -227,11 +231,56 @@ impl Terminal {
     }
 
     pub fn modes(&self) -> Modes {
-        Modes::from_engine(*self.term.lock().mode())
+        let mut m = Modes::from_engine(*self.term.lock().mode());
+        m.sgr_pixels = self.sgr_pixels.load(Ordering::Relaxed);
+        m
+    }
+
+    /// Sends a mouse report if the application asked for one. Returns whether it was sent.
+    pub fn send_mouse(&self, ev: &crate::MouseEvent) -> bool {
+        match crate::encode_mouse(ev, &self.modes().mouse_modes()) {
+            Some(b) => {
+                self.write(b);
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn input_mode(&self) -> InputMode {
         self.modes().input_mode()
+    }
+
+    pub fn selection_start(
+        &self,
+        kind: crate::SelectionKind,
+        row: usize,
+        col: usize,
+        right: bool,
+        word_chars: &str,
+    ) {
+        crate::selection::start(&mut self.term.lock(), kind, row, col, right, word_chars);
+    }
+
+    pub fn selection_update(&self, row: usize, col: usize, right: bool) {
+        crate::selection::update(&mut self.term.lock(), row, col, right);
+    }
+
+    pub fn selection_clear(&self) {
+        crate::selection::clear(&mut self.term.lock());
+    }
+
+    pub fn select_all(&self) {
+        crate::selection::select_all(&mut self.term.lock());
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.term.lock().selection.is_some()
+    }
+
+    /// The selected text, or `None` when nothing (or only blanks) is selected.
+    pub fn selection_text(&self, trim_trailing: bool) -> Option<String> {
+        crate::selection::text(&self.term.lock(), trim_trailing)
     }
 
     pub fn scroll_display(&self, cmd: ScrollCmd) {
@@ -252,7 +301,9 @@ impl Terminal {
     pub fn snapshot(&self) -> RenderSnapshot {
         let mut term = self.term.lock();
         let damage = take_damage(&mut term);
-        snapshot::build(&term, damage, self.wide_ri.load(Ordering::Relaxed))
+        let mut snap = snapshot::build(&term, damage, self.wide_ri.load(Ordering::Relaxed));
+        snap.modes.sgr_pixels = self.sgr_pixels.load(Ordering::Relaxed);
+        snap
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -282,12 +333,13 @@ struct FilterReader {
     file: std::fs::File,
     enabled: Arc<AtomicBool>,
     filter: WidthFilter,
+    sniffer: crate::mouse::PixelModeSniffer,
     raw: Vec<u8>,
     out: Vec<u8>,
 }
 
 impl FilteredPty {
-    fn new(inner: tty::Pty, enabled: Arc<AtomicBool>) -> io::Result<Self> {
+    fn new(inner: tty::Pty, enabled: Arc<AtomicBool>, pixels: Arc<AtomicBool>) -> io::Result<Self> {
         let file = inner.file().try_clone()?;
         Ok(Self {
             inner,
@@ -295,6 +347,7 @@ impl FilteredPty {
                 file,
                 enabled,
                 filter: WidthFilter::new(),
+                sniffer: crate::mouse::PixelModeSniffer::new(pixels),
                 raw: Vec::new(),
                 out: Vec::new(),
             },
@@ -312,7 +365,9 @@ impl io::Read for FilterReader {
                 buf[..held.len()].copy_from_slice(&held);
                 return Ok(held.len());
             }
-            return self.file.read(buf);
+            let n = self.file.read(buf)?;
+            self.sniffer.feed(&buf[..n]);
+            return Ok(n);
         }
         // Every 4-byte indicator grows by one byte and up to 3 held-back bytes are re-emitted,
         // so reading at most 4/5 of the buffer (minus 4) guarantees the output fits.
@@ -329,6 +384,7 @@ impl io::Read for FilterReader {
                 return Ok(held.len());
             }
             self.out.clear();
+            self.sniffer.feed(&self.raw[..n]);
             self.filter.filter(&self.raw[..n], &mut self.out);
             if self.out.is_empty() {
                 continue; // only a partial UTF-8 sequence so far; read on

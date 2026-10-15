@@ -68,6 +68,23 @@
   window. The launcher lists `[[launch]]` profiles, "New tab in <domain>" and workspaces and
   refreshes on hot reload. `cargo run -p xtask -- gen-docs` generates Reference → Actions; CI
   fails when it is stale. Known gap: SSH domains join the launcher in M10.
+- **M7 — Mouse, selection and hyperlinks.** Mouse reporting for X10-style (1000), drag (1002)
+  and motion (1003) tracking with legacy, SGR (1006) and SGR-pixels (1016) encoding; Shift always
+  bypasses reporting; wheel events are reported or, in the alternate screen, become arrow keys.
+  Selection by drag, double-click (word, honouring `selection.word_chars`), triple-click (line),
+  Alt/Option-drag (block) and Shift+click (extend), with auto-scroll past the edges,
+  `trim_trailing_whitespace`, `copy_on_select` and the Linux primary selection (middle-click
+  pastes it). Right-click follows `mouse.right_click` and opens the context menu (Copy, Paste,
+  Select all, Open link, Copy link, Search for selection, Clear scrollback). The pointer is an
+  I-beam, a hand over a link while the activation modifier is held, and hides while typing. New
+  `mt_patterns` crate: OSC 8 links plus built-in URL and `localhost:PORT` rules and user
+  `[[hyperlink_rules]]` with `$0`-`$9`, a scheme allowlist (`hyperlinks.schemes`) and the
+  `hyperlinks.modifier` (Cmd on macOS, Ctrl on Linux); links open through the system opener,
+  never a shell. Hovered links get a dotted accent underline and a tooltip with the real target.
+  New actions `SelectAll` and `SearchSelection`; `Copy` and `PastePrimary` are implemented.
+  Invalid `hyperlink_rules[].regex` values are config errors. Known gaps: implicit links do not
+  span wrapped rows; the pointer shape updates on the next mouse move after the modifier changes;
+  `ftp://` links are recognised but blocked until `ftp` is added to `hyperlinks.schemes`.
 - **`text.wide_regional_indicators`** (default `false`). Counts each regional indicator as two
   cells, so a flag takes four like zsh's line editor assumes. Fixes the cursor jumping to the
   wrong column after zsh-autosuggestions draws a flag emoji. Implemented as a PTY output filter in

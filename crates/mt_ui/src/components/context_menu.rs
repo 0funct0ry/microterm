@@ -8,6 +8,7 @@ use crate::metrics::{LIST_ROW_HEIGHT, RADIUS_CONTROL, RADIUS_POPOVER};
 pub struct ContextMenuItem {
     pub label: SharedString,
     pub chip: Option<SharedString>,
+    pub enabled: bool,
 }
 
 impl ContextMenuItem {
@@ -15,7 +16,14 @@ impl ContextMenuItem {
         Self {
             label: label.into(),
             chip: None,
+            enabled: true,
         }
+    }
+
+    /// A disabled row is dimmed and ignores clicks.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
     }
 
     pub fn chip(mut self, chip: impl Into<SharedString>) -> Self {
@@ -72,6 +80,8 @@ impl RenderOnce for ContextMenu {
         let rows = self.items.into_iter().enumerate().map(|(i, item)| {
             let on_select = on_select.clone();
             let dismiss = dismiss.clone();
+            let enabled = item.enabled;
+            let disabled_color = t.text_placeholder;
             gpui::div()
                 .id(super::child_id(&self.id, i))
                 .flex()
@@ -80,11 +90,16 @@ impl RenderOnce for ContextMenu {
                 .h(px(LIST_ROW_HEIGHT))
                 .px_2()
                 .rounded(px(RADIUS_CONTROL))
-                .cursor_pointer()
-                .hover(move |s| s.bg(hover))
+                .when(enabled, |el| {
+                    el.cursor_pointer().hover(move |s| s.bg(hover))
+                })
+                .when(!enabled, |el| el.text_color(disabled_color))
                 .child(gpui::div().flex_1().child(item.label))
                 .when_some(item.chip, |el, chip| el.child(KeyBinding::from_text(chip)))
                 .on_click(move |_, window, cx| {
+                    if !enabled {
+                        return;
+                    }
                     if let Some(dismiss) = &dismiss {
                         dismiss(window, cx);
                     }

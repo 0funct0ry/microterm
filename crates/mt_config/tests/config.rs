@@ -134,6 +134,13 @@ fn semantic_errors_have_spans() {
 }
 
 #[test]
+fn bad_hyperlink_regex_is_an_error() {
+    let e = err("[[hyperlink_rules]]\nregex = \"(\"\nformat = \"$0\"\n");
+    assert_eq!(e.len(), 1);
+    assert!(e[0].message.contains("hyperlink_rules[0]"));
+}
+
+#[test]
 fn bad_keybinding_reports_value_span() {
     let e = err("[[keys]]\nkey = \"hyper+x\"\naction = \"Copy\"\n");
     assert_eq!(e[0].line, 2);

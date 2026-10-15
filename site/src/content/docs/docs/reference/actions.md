@@ -51,6 +51,7 @@ action = "Disable"   # unbind a default
 |---|---|---|---|
 | `Copy` | **Copy** — Copy the selection | `⌘C` | `Ctrl+Shift+C` |
 | `Paste` | **Paste** — Paste from the clipboard | `⌘V` | `Ctrl+Shift+V` |
+| `SelectAll` | **Select all** — Select the whole screen and scrollback | `⌘A` | `Ctrl+Shift+A` |
 | `PastePrimary` | **Paste primary selection** — Paste the Linux primary selection (middle-click buffer) | — | — |
 | `ClearScrollback` | **Clear scrollback** — Erase the scrollback buffer | `⌘K` | `Ctrl+Shift+K` |
 | `ScrollByPage(-1)` | **Scroll page up** — Scroll the terminal one page towards older output | `⇧PageUp` | `Shift+PageUp` |
@@ -66,6 +67,7 @@ action = "Disable"   # unbind a default
 
 | Action | Description | macOS | Linux |
 |---|---|---|---|
+| `SearchSelection` | **Search for selection** — Open search pre-filled with the selected text | — | — |
 | `ShowCommandPalette` | **Command palette** — Search and run any action | `⌘⇧P` | `Ctrl+Shift+P` |
 | `ShowLauncher` | **Launcher** — Open a launch profile, SSH domain or workspace | `⌘⇧L` | `Ctrl+Shift+L` |
 | `ActivateQuickSelect` | **Quick select** — Label hashes, IPs and paths on screen to copy them | `⌘⇧Space` | `Ctrl+Shift+Space` |

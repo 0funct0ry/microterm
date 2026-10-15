@@ -449,6 +449,14 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
             "mouse.scroll_multiplier must be greater than 0".into(),
         );
     }
+    for (i, rule) in c.hyperlink_rules.iter().enumerate() {
+        if let Err(e) = mt_patterns::LinkSet::check_regex(&rule.regex) {
+            err(
+                &["hyperlink_rules"],
+                format!("hyperlink_rules[{i}].regex is not a valid regular expression: {e}"),
+            );
+        }
+    }
     if c.text.min_contrast < 1.0 {
         err(
             &["text", "min_contrast"],

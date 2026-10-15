@@ -110,6 +110,7 @@ pub struct Emulator {
     /// `text.wide_regional_indicators`: filters output and widens indicators in snapshots.
     wide_ri: bool,
     width_filter: crate::width_filter::WidthFilter,
+    sniffer: crate::mouse::PixelModeSniffer,
 }
 
 impl Emulator {
@@ -140,6 +141,7 @@ impl Emulator {
             shared,
             wide_ri: false,
             width_filter: crate::width_filter::WidthFilter::new(),
+            sniffer: Default::default(),
         }
     }
 
@@ -150,6 +152,7 @@ impl Emulator {
     }
 
     pub fn advance(&mut self, bytes: &[u8]) {
+        self.sniffer.feed(bytes);
         if self.wide_ri {
             let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 4);
             self.width_filter.filter(bytes, &mut out);
@@ -169,7 +172,39 @@ impl Emulator {
 
     pub fn snapshot(&mut self) -> RenderSnapshot {
         let damage = take_damage(&mut self.term);
-        snapshot::build(&self.term, damage, self.wide_ri)
+        let mut snap = snapshot::build(&self.term, damage, self.wide_ri);
+        snap.modes.sgr_pixels = self
+            .sniffer
+            .flag()
+            .load(std::sync::atomic::Ordering::Relaxed);
+        snap
+    }
+
+    pub fn selection_start(
+        &mut self,
+        kind: crate::SelectionKind,
+        row: usize,
+        col: usize,
+        right: bool,
+        word_chars: &str,
+    ) {
+        crate::selection::start(&mut self.term, kind, row, col, right, word_chars);
+    }
+
+    pub fn selection_update(&mut self, row: usize, col: usize, right: bool) {
+        crate::selection::update(&mut self.term, row, col, right);
+    }
+
+    pub fn selection_clear(&mut self) {
+        crate::selection::clear(&mut self.term);
+    }
+
+    pub fn select_all(&mut self) {
+        crate::selection::select_all(&mut self.term);
+    }
+
+    pub fn selection_text(&self, trim_trailing: bool) -> Option<String> {
+        crate::selection::text(&self.term, trim_trailing)
     }
 
     pub fn drain_events(&mut self) -> Vec<TermEvent> {
@@ -664,5 +699,47 @@ mod tests {
             })
             .collect();
         assert_eq!(titles, ["🇯🇵"]);
+    }
+}
+
+#[cfg(test)]
+mod hyperlink_tests {
+    use super::*;
+
+    fn link_at(snap: &RenderSnapshot, col: usize) -> Option<(String, String)> {
+        snap.row(0)[col]
+            .link
+            .as_ref()
+            .map(|l| (l.id.clone(), l.uri.clone()))
+    }
+
+    #[test]
+    fn osc8_explicit_link() {
+        let mut e = Emulator::new(20, 2, 0);
+        e.advance(b"a\x1b]8;;https://x.io/p\x1b\\link\x1b]8;;\x1b\\b");
+        let s = e.snapshot();
+        assert_eq!(link_at(&s, 0), None);
+        assert_eq!(link_at(&s, 1).unwrap().1, "https://x.io/p");
+        assert_eq!(link_at(&s, 4).unwrap().1, "https://x.io/p");
+        assert_eq!(link_at(&s, 5), None);
+    }
+
+    #[test]
+    fn osc8_id_param_and_semicolon_in_uri() {
+        let mut e = Emulator::new(20, 2, 0);
+        e.advance(b"\x1b]8;id=abc:foo=bar;https://x.io/a;b?c=1;2\x07hi\x1b]8;;\x07");
+        let s = e.snapshot();
+        let (id, uri) = link_at(&s, 0).unwrap();
+        assert_eq!(id, "abc");
+        assert_eq!(uri, "https://x.io/a;b?c=1;2");
+    }
+
+    #[test]
+    fn link_changes_row_hash() {
+        let mut a = Emulator::new(10, 1, 0);
+        a.advance(b"hi");
+        let mut b = Emulator::new(10, 1, 0);
+        b.advance(b"\x1b]8;;http://a\x07hi\x1b]8;;\x07");
+        assert_ne!(a.snapshot().row_hashes[0], b.snapshot().row_hashes[0]);
     }
 }
