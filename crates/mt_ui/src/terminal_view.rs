@@ -401,9 +401,10 @@ fn shape_row(
     };
 
     let mut prev_wide = false;
-    let mut skip_next = false;
+    let mut skip = 0usize;
     for (c, cell) in row.iter().enumerate() {
-        if std::mem::take(&mut skip_next) {
+        if skip > 0 {
+            skip -= 1;
             continue;
         }
         if cell.flags.has(CellFlags::WIDE_SPACER) && prev_wide {
@@ -422,21 +423,23 @@ fn shape_row(
             plain.push((ch, cell_style(cell, t)));
         } else {
             flush(&mut plain, plain_start, &mut out);
-            // A flag is two narrow regional indicators: shape the pair across both cells.
+            // A flag is two regional indicators: shape the pair across both. They are one cell
+            // each normally, or two each (indicator + spacer) with `wide_regional_indicators`.
+            let step = if wide { 2 } else { 1 };
             let flag = typography::is_regional_indicator(cell.ch)
-                .then(|| row.get(c + 1))
+                .then(|| row.get(c + step))
                 .flatten()
                 .filter(|n| {
-                    typography::is_regional_indicator(n.ch) && !n.flags.has(CellFlags::WIDE)
+                    typography::is_regional_indicator(n.ch) && n.flags.has(CellFlags::WIDE) == wide
                 });
             let color = cell_colors(cell, t).0;
             let (line, dx) = match flag {
                 Some(next) => {
-                    skip_next = true;
+                    skip = 2 * step - 1;
                     shape_glyphs(
                         window,
                         format!("{}{}", cell.ch, next.ch),
-                        2,
+                        2 * step,
                         cell,
                         color,
                         m,

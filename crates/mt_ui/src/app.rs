@@ -88,15 +88,39 @@ pub struct NamePrompt {
 #[derive(Clone, Debug)]
 pub enum Target {
     Action(usize),
-    NewTab,
+    /// `New tab in <domain>`; only `local` exists until M10.
+    NewTab(String),
     Workspace(String),
     CreateWorkspace,
     Theme(usize),
+    /// Index into this window's tabs.
+    Tab(usize),
+    /// Index into `config.launch`.
+    Launch(usize),
 }
+
+/// Provider groups of the command palette (the `u8` tag in `PickerState`).
+pub mod group {
+    pub const ACTIONS: u8 = 0;
+    pub const WORKSPACES: u8 = 1;
+    pub const TABS: u8 = 2;
+    pub const THEMES: u8 = 3;
+}
+
+/// `>` actions (the default), `@` workspaces, `#` tabs, `~` themes (SPEC §10.1).
+pub const PALETTE_PREFIXES: &[(char, u8)] = &[
+    ('>', group::ACTIONS),
+    ('@', group::WORKSPACES),
+    ('#', group::TABS),
+    ('~', group::THEMES),
+];
 
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub target: Target,
+    /// Stable MRU key, e.g. `action:SpawnTab` or `workspace:api`.
+    pub id: String,
+    pub group: u8,
     pub detail: Option<String>,
     pub chip: Option<String>,
     pub icon: Option<IconName>,
@@ -104,9 +128,11 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn new(target: Target) -> Self {
+    fn new(target: Target, id: impl Into<String>) -> Self {
         Self {
             target,
+            id: id.into(),
+            group: group::ACTIONS,
             detail: None,
             chip: None,
             icon: None,
@@ -753,6 +779,14 @@ impl AppWindow {
         self.paste_text(text, window, cx);
     }
 
+    /// `SendString`: writes text to the active pane unmodified (no bracketed paste).
+    pub(crate) fn send_string(&mut self, text: &str, cx: &mut Context<Self>) {
+        match self.live() {
+            Some(session) => session.term.write(text.as_bytes().to_vec()),
+            None => self.toast(ToastKind::Info, "Send string needs a live terminal tab", cx),
+        }
+    }
+
     pub(crate) fn paste_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         if text.is_empty() {
             return;
@@ -928,7 +962,7 @@ impl AppWindow {
 
     fn teardown(&mut self, kind: OverlayKind, revert_theme: bool, cx: &mut Context<Self>) {
         match kind {
-            OverlayKind::ThemeSelector => {
+            OverlayKind::ThemeSelector | OverlayKind::CommandPalette => {
                 if revert_theme {
                     if let Some(theme) = self.theme_restore.take() {
                         cx.set_global(theme);
@@ -938,9 +972,7 @@ impl AppWindow {
                 self.theme_restore = None;
                 self.picker = None;
             }
-            OverlayKind::CommandPalette
-            | OverlayKind::Launcher
-            | OverlayKind::WorkspaceSwitcher => {
+            OverlayKind::Launcher | OverlayKind::WorkspaceSwitcher => {
                 self.picker = None;
             }
             OverlayKind::QuickSelect => self.quick = QuickState::default(),
@@ -957,44 +989,21 @@ impl AppWindow {
     fn build_picker(&mut self, kind: OverlayKind, cx: &mut Context<Self>) -> PickerData {
         match kind {
             OverlayKind::CommandPalette => {
-                let items = ACTIONS
-                    .iter()
-                    .enumerate()
-                    .map(|(i, def)| {
-                        let mut e = Entry::new(Target::Action(i));
-                        e.detail = Some(def.description.to_string());
-                        e.chip = cx.global::<Settings>().chip(def);
-                        (def.label.to_string(), e)
-                    })
-                    .collect();
+                let current = *cx.global::<Theme>();
+                self.theme_restore = Some(current);
+                let items = self.palette_entries(cx);
                 PickerData {
                     kind,
-                    state: PickerState::new(items),
-                    placeholder: "Type a command…",
+                    state: with_mru(items, cx)
+                        .with_prefixes(PALETTE_PREFIXES, Some(group::ACTIONS)),
+                    placeholder: "Type a command…  (@ workspaces · # tabs · ~ themes)",
                 }
             }
             OverlayKind::Launcher => {
-                let mut items: Vec<(String, Entry)> = vec![(
-                    "New tab in local".to_string(),
-                    Entry {
-                        icon: Some(IconName::Plus),
-                        detail: Some("domain".into()),
-                        ..Entry::new(Target::NewTab)
-                    },
-                )];
-                for (name, detail, _) in self.workspace_rows(cx) {
-                    items.push((
-                        format!("Workspace: {name}"),
-                        Entry {
-                            icon: Some(IconName::Layers),
-                            detail: Some(detail),
-                            ..Entry::new(Target::Workspace(name))
-                        },
-                    ));
-                }
+                let items = self.launcher_entries(cx);
                 PickerData {
                     kind,
-                    state: PickerState::new(items),
+                    state: with_mru(items, cx),
                     placeholder: "Launch a profile, domain or workspace…",
                 }
             }
@@ -1004,7 +1013,10 @@ impl AppWindow {
                 let mut items: Vec<(String, Entry)> = rows
                     .into_iter()
                     .map(|(name, detail, is_active)| {
-                        let mut e = Entry::new(Target::Workspace(name.clone()));
+                        let mut e = Entry::new(
+                            Target::Workspace(name.clone()),
+                            format!("workspace:{name}"),
+                        );
                         e.icon = Some(if is_active {
                             IconName::Check
                         } else {
@@ -1014,7 +1026,7 @@ impl AppWindow {
                         (name, e)
                     })
                     .collect();
-                let mut create = Entry::new(Target::CreateWorkspace);
+                let mut create = Entry::new(Target::CreateWorkspace, "workspace:create");
                 create.icon = Some(IconName::Plus);
                 items.push(("Create workspace…".to_string(), create));
                 let mut state = PickerState::new(items);
@@ -1034,7 +1046,7 @@ impl AppWindow {
                     .iter()
                     .enumerate()
                     .map(|(i, t)| {
-                        let mut e = Entry::new(Target::Theme(i));
+                        let mut e = Entry::new(Target::Theme(i), format!("theme:{}", t.name));
                         e.icon = Some(if t.name == current.name {
                             IconName::Check
                         } else {
@@ -1056,6 +1068,98 @@ impl AppWindow {
             }
             _ => unreachable!("not a picker overlay"),
         }
+    }
+
+    /// Every palette provider's rows: actions, workspaces, tabs, themes (SPEC §10.1).
+    fn palette_entries(&self, cx: &mut Context<Self>) -> Vec<(String, Entry)> {
+        let mut items: Vec<(String, Entry)> = Vec::new();
+        for (i, def) in ACTIONS.iter().enumerate().filter(|(_, d)| d.palette) {
+            let mut e = Entry::new(Target::Action(i), format!("action:{}", def.name));
+            e.detail = Some(def.description.to_string());
+            e.chip = cx.global::<Settings>().chip(def);
+            items.push((def.label.to_string(), e));
+        }
+        for (name, detail, is_active) in self.workspace_rows(cx) {
+            let mut e = Entry::new(Target::Workspace(name.clone()), format!("workspace:{name}"));
+            e.group = group::WORKSPACES;
+            e.icon = Some(if is_active {
+                IconName::Check
+            } else {
+                IconName::Layers
+            });
+            e.detail = Some(detail);
+            items.push((format!("Switch to workspace: {name}"), e));
+        }
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let mut e = Entry::new(Target::Tab(i), format!("tab:{}", tab.title));
+            e.group = group::TABS;
+            e.icon = Some(IconName::Terminal);
+            e.detail = Some(format!("tab {}", i + 1));
+            items.push((format!("Go to tab: {}", tab.title), e));
+        }
+        let current = *cx.global::<Theme>();
+        let registry = cx.global::<Settings>().registry.clone();
+        for (i, t) in registry.all().iter().enumerate() {
+            let mut e = Entry::new(Target::Theme(i), format!("theme:{}", t.name));
+            e.group = group::THEMES;
+            e.icon = Some(if t.name == current.name {
+                IconName::Check
+            } else {
+                IconName::Palette
+            });
+            e.detail = Some(if t.is_dark() { "dark" } else { "light" }.to_string());
+            items.push((format!("Theme: {}", t.name), e));
+        }
+        items
+    }
+
+    /// Launcher providers: `[[launch]]` profiles, "New tab in <domain>", workspaces. Domains are
+    /// generic so M10 can add SSH domains next to `local`.
+    fn launcher_entries(&self, cx: &mut Context<Self>) -> Vec<(String, Entry)> {
+        let mut items: Vec<(String, Entry)> = Vec::new();
+        let profiles = cx.global::<Settings>().config.launch.clone();
+        for (i, p) in profiles.iter().enumerate() {
+            let mut e = Entry::new(Target::Launch(i), format!("launch:{}", p.name));
+            e.icon = Some(IconName::Terminal);
+            e.detail = Some(if p.command.is_empty() {
+                "shell".to_string()
+            } else {
+                p.command.join(" ")
+            });
+            items.push((p.name.clone(), e));
+        }
+        for domain in self.domain_names(cx) {
+            let mut e = Entry::new(Target::NewTab(domain.clone()), format!("domain:{domain}"));
+            e.icon = Some(IconName::Plus);
+            e.detail = Some("domain".into());
+            e.status = Some(StatusKind::Connected);
+            items.push((format!("New tab in {domain}"), e));
+        }
+        for (name, detail, _) in self.workspace_rows(cx) {
+            let mut e = Entry::new(Target::Workspace(name.clone()), format!("workspace:{name}"));
+            e.icon = Some(IconName::Layers);
+            e.detail = Some(detail);
+            items.push((format!("Workspace: {name}"), e));
+        }
+        items
+    }
+
+    /// Names of the domains a tab can open in. Only `local` exists until SSH domains (M10).
+    fn domain_names(&self, _cx: &App) -> Vec<String> {
+        vec!["local".to_string()]
+    }
+
+    /// Rebuilds an open palette or launcher in place (config reload), keeping the query.
+    fn refresh_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(picker) = &self.picker else { return };
+        let kind = picker.kind;
+        if !matches!(kind, OverlayKind::CommandPalette | OverlayKind::Launcher) {
+            return;
+        }
+        let query = picker.state.query().to_string();
+        let mut data = self.build_picker(kind, cx);
+        data.state.set_query(&query);
+        self.picker = Some(data);
     }
 
     /// `(name, "N windows · M tabs", is_active)` per workspace.
@@ -1081,17 +1185,28 @@ impl AppWindow {
             .collect()
     }
 
+    /// Live theme preview: a highlighted theme row previews it, any other row shows the theme
+    /// the overlay opened with.
     fn preview_selected_theme(&self, cx: &mut Context<Self>) {
-        let Some(picker) = &self.picker else { return };
-        if let Some(Entry {
-            target: Target::Theme(i),
-            ..
-        }) = picker.state.selected_item()
-        {
-            let registry = cx.global::<Settings>().registry.clone();
-            if let Some(t) = registry.all().get(*i) {
-                cx.set_global(Theme::from_mt(t));
-                self.sync_palette(cx);
+        let (Some(picker), Some(original)) = (&self.picker, self.theme_restore) else {
+            return;
+        };
+        match picker.state.selected_item() {
+            Some(Entry {
+                target: Target::Theme(i),
+                ..
+            }) => {
+                let registry = cx.global::<Settings>().registry.clone();
+                if let Some(t) = registry.all().get(*i) {
+                    cx.set_global(Theme::from_mt(t));
+                    self.sync_palette(cx);
+                }
+            }
+            _ => {
+                if cx.global::<Theme>().name != original.name {
+                    cx.set_global(original);
+                    self.sync_palette(cx);
+                }
             }
         }
     }
@@ -1116,7 +1231,10 @@ impl AppWindow {
         match picker.state.handle(input) {
             PickerOutcome::None => {}
             PickerOutcome::Changed => {
-                if picker.kind == OverlayKind::ThemeSelector {
+                if matches!(
+                    picker.kind,
+                    OverlayKind::ThemeSelector | OverlayKind::CommandPalette
+                ) {
                     self.preview_selected_theme(cx);
                 }
                 cx.notify();
@@ -1132,15 +1250,24 @@ impl AppWindow {
         let Some(entry) = picker.state.selected_item().cloned() else {
             return;
         };
+        // Only a theme row keeps a previewed theme; anything else restores the original.
+        let keep_theme = matches!(entry.target, Target::Theme(_));
         // Closing first returns focus to the viewport before the entry runs.
-        self.close_overlay(kind, true, window, cx);
+        self.close_overlay(kind, keep_theme, window, cx);
+        crate::mru::MruStore::record(cx, &entry.id);
         match entry.target {
             Target::Action(i) => {
                 let action = (ACTIONS[i].build)();
                 window.defer(cx, move |window, cx| window.dispatch_action(action, cx));
             }
-            Target::NewTab => {
-                if new_window {
+            Target::NewTab(domain) => {
+                if domain != "local" {
+                    self.toast(
+                        ToastKind::Warning,
+                        format!("No domain named \"{domain}\""),
+                        cx,
+                    );
+                } else if new_window {
                     let spec = SpawnSpec {
                         cwd: self.new_tab_cwd(cx),
                         ..Default::default()
@@ -1150,6 +1277,19 @@ impl AppWindow {
                     self.spawn_tab(None, window, cx);
                 }
             }
+            Target::Launch(i) => {
+                let Some(p) = cx.global::<Settings>().config.launch.get(i).cloned() else {
+                    return;
+                };
+                let spec = spawn_spec_for(&p.command, p.cwd.as_deref(), Some(p.name));
+                if new_window {
+                    cx.defer(move |cx| mux_host::open_new_window(cx, spec));
+                } else {
+                    self.spawn_tab(Some(spec), window, cx);
+                }
+            }
+            Target::Tab(i) => self.activate_tab(i, cx),
+            // A workspace switch has no "new window" form; the modifier acts like plain Enter.
             Target::Workspace(name) => self.switch_workspace_named(name, false, cx),
             Target::CreateWorkspace => {
                 self.begin_prompt(PromptKind::CreateWorkspace, String::new(), window, cx)
@@ -1903,6 +2043,7 @@ impl AppWindow {
             osc52: osc52_policy(cfg.clipboard.osc52),
             cursor: cursor_default(&cfg.cursor),
             palette: palette_of(cx.global::<Theme>()),
+            wide_regional_indicators: cfg.text.wide_regional_indicators,
             ..Default::default()
         }
     }
@@ -1956,11 +2097,14 @@ impl AppWindow {
         for tab in &self.tabs {
             if let Some(s) = &tab.session {
                 s.term.set_runtime(osc52, cursor);
+                s.term
+                    .set_wide_regional_indicators(cfg.text.wide_regional_indicators);
             }
         }
         self.cursor_phase = true;
         mux_host::sync_declared(cx);
         self.refresh_titles(cx);
+        self.refresh_picker(cx);
         cx.notify();
     }
 
@@ -2094,6 +2238,27 @@ fn cursor_default(c: &mt_config::Cursor) -> mt_term::CursorDefault {
             mt_config::CursorStyle::Underline => mt_term::CursorShape::Underline,
         },
         blinking: c.blink,
+    }
+}
+
+/// Builds a picker over `items` tagged with provider groups and MRU ranks.
+fn with_mru(items: Vec<(String, Entry)>, cx: &mut App) -> PickerState<Entry> {
+    let ids: Vec<String> = items.iter().map(|(_, e)| e.id.clone()).collect();
+    let groups = items.iter().map(|(_, e)| e.group).collect();
+    let ranks = crate::mru::MruStore::ranks(cx, &ids);
+    PickerState::new(items).with_meta(groups, ranks)
+}
+
+/// A spawn spec for a command with an optional `~`-expanded cwd (`SpawnCommand`, `[[launch]]`).
+pub(crate) fn spawn_spec_for(
+    command: &[String],
+    cwd: Option<&str>,
+    title: Option<String>,
+) -> SpawnSpec {
+    SpawnSpec {
+        cwd: cwd.map(expand_tilde),
+        command: (!command.is_empty()).then(|| command.to_vec()),
+        title,
     }
 }
 

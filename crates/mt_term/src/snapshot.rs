@@ -263,7 +263,34 @@ fn convert_cell(cell: &EngineCell, colors: &Colors) -> Cell {
     }
 }
 
-pub(crate) fn build<T>(term: &Term<T>, damage: Damage) -> RenderSnapshot {
+/// Regional indicator symbols (U+1F1E6..=U+1F1FF).
+fn is_regional_indicator(c: char) -> bool {
+    ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
+}
+
+/// `text.wide_regional_indicators`: the width filter writes a space after every regional
+/// indicator, so an indicator followed by a plain space is shown as one wide cell. Four cells
+/// per flag is what zsh's line editor counts.
+pub(crate) fn widen_regional_indicators(row: &mut [Cell]) {
+    for c in 0..row.len().saturating_sub(1) {
+        let (head, tail) = row.split_at_mut(c + 1);
+        let (ri, next) = (&mut head[c], &mut tail[0]);
+        if is_regional_indicator(ri.ch)
+            && !ri.flags.has(CellFlags::WIDE)
+            && !ri.flags.has(CellFlags::WIDE_SPACER)
+            && ri.zerowidth.is_none()
+            && next.ch == ' '
+            && next.zerowidth.is_none()
+            && !next.flags.has(CellFlags::WIDE)
+            && !next.flags.has(CellFlags::WIDE_SPACER)
+        {
+            ri.flags = CellFlags(ri.flags.0 | CellFlags::WIDE);
+            next.flags = CellFlags(next.flags.0 | CellFlags::WIDE_SPACER);
+        }
+    }
+}
+
+pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> RenderSnapshot {
     let grid = term.grid();
     let rows = grid.screen_lines();
     let cols = grid.columns();
@@ -277,6 +304,9 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage) -> RenderSnapshot {
         let start = cells.len();
         for c in 0..cols {
             cells.push(convert_cell(&grid[Point::new(line, Column(c))], colors));
+        }
+        if widen_ri {
+            widen_regional_indicators(&mut cells[start..]);
         }
         let mut h = DefaultHasher::new();
         cells[start..].hash(&mut h);

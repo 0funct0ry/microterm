@@ -11,6 +11,7 @@ pub mod keychips;
 pub mod ls_fonts;
 pub mod metrics;
 pub mod mock;
+pub mod mru;
 pub mod mux_host;
 pub mod overlay_stack;
 pub mod picker_state;

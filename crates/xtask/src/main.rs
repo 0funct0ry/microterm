@@ -1,4 +1,4 @@
-//! Repository automation: `check-themes` (M3) and `gen-docs` (arrives in M6).
+//! Repository automation: `check-themes` (M3) and `gen-docs` (M6).
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -6,14 +6,50 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match std::env::args().nth(1).unwrap_or_default().as_str() {
         "check-themes" => check_themes(),
-        "gen-docs" => {
-            eprintln!("xtask gen-docs: not implemented yet (M6)");
-            ExitCode::SUCCESS
-        }
+        "gen-docs" => gen_docs(std::env::args().nth(2).as_deref() == Some("--check")),
         _ => {
-            eprintln!("usage: cargo run -p xtask -- check-themes | gen-docs");
+            eprintln!("usage: cargo run -p xtask -- check-themes | gen-docs [--check]");
             ExitCode::from(1)
         }
+    }
+}
+
+/// `gen-docs`: renders generated docs pages from the registries. With `--check` it writes
+/// nothing and fails when a committed page is stale (CI).
+fn gen_docs(check: bool) -> ExitCode {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pages = [(
+        mt_ui::actions::REFERENCE_DOC_PATH,
+        mt_ui::actions::reference_markdown(),
+    )];
+    let mut stale = 0;
+    for (rel, content) in pages {
+        let path = root.join(rel);
+        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        if current == content {
+            continue;
+        }
+        if check {
+            eprintln!("STALE {rel}: run `cargo run -p xtask -- gen-docs` and commit the result");
+            stale += 1;
+        } else {
+            if let Some(dir) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    eprintln!("cannot create {}: {e}", dir.display());
+                    return ExitCode::from(1);
+                }
+            }
+            if let Err(e) = std::fs::write(&path, content) {
+                eprintln!("cannot write {rel}: {e}");
+                return ExitCode::from(1);
+            }
+            println!("wrote {rel}");
+        }
+    }
+    if stale == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 

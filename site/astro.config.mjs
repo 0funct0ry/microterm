@@ -17,6 +17,7 @@ export default defineConfig({
             { label: 'Installation', slug: 'docs/installation' },
             { label: 'Quick start', slug: 'docs/quick-start' },
             { label: 'Tabs & workspaces', slug: 'docs/tabs-and-workspaces' },
+            { label: 'Command palette & launcher', slug: 'docs/command-palette-and-launcher' },
           ],
         },
         {
@@ -27,6 +28,10 @@ export default defineConfig({
             { label: 'Themes', slug: 'docs/themes' },
             { label: 'Fonts', slug: 'docs/fonts' },
           ],
+        },
+        {
+          label: 'Reference',
+          items: [{ label: 'Actions', slug: 'docs/reference/actions' }],
         },
       ],
     }),

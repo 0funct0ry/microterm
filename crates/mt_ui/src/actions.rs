@@ -26,6 +26,7 @@ actions!(
         ToggleFullscreen,
         Copy,
         Paste,
+        PastePrimary,
         ClearScrollback,
         ScrollToTop,
         ScrollToBottom,
@@ -87,6 +88,30 @@ pub struct ScrollByPage(pub isize);
 #[action(namespace = microterm, no_json)]
 pub struct ScrollByLine(pub isize);
 
+/// Jump to the previous (`-1`) or next (`1`) shell prompt. Needs OSC 133 marks (M8).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ScrollToPrompt(pub isize);
+
+/// Writes the string to the active pane as if typed.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct SendString(pub String);
+
+/// Opens a tab running a command: `{ SpawnCommand = { command = ["htop"], cwd = "~" } }`.
+#[derive(Clone, Debug, Default, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct SpawnCommand {
+    pub command: Vec<String>,
+    pub cwd: Option<String>,
+    pub title: Option<String>,
+}
+
+/// New tab on an SSH domain (arrives with M10).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ConnectSsh(pub String);
+
 /// Key context of the root view; overlays add `Overlay` and `Picker`.
 pub const CONTEXT_ROOT: &str = "MicroTerm";
 pub const CONTEXT_OVERLAY: &str = "Overlay";
@@ -102,8 +127,11 @@ pub struct ActionDef {
     pub mac: &'static [&'static str],
     pub linux: &'static [&'static str],
     pub build: fn() -> Box<dyn Action>,
-    /// Hidden from the palette unless it is a debug entry.
+    /// Debug entries have no default binding.
     pub debug: bool,
+    /// Listed in the command palette. Argument-taking actions (`SendString`, ...) are not: they
+    /// exist for the config and the docs, and the palette reaches them through providers.
+    pub palette: bool,
 }
 
 macro_rules! def {
@@ -116,6 +144,19 @@ macro_rules! def {
             linux: $linux,
             build: || Box::new($build),
             debug: false,
+            palette: true,
+        }
+    };
+    (args $name:literal, $label:literal, $desc:literal, $build:expr) => {
+        ActionDef {
+            name: $name,
+            label: $label,
+            description: $desc,
+            mac: &[],
+            linux: &[],
+            build: || Box::new($build),
+            debug: false,
+            palette: false,
         }
     };
     (debug $name:literal, $label:literal, $desc:literal, $build:expr) => {
@@ -127,6 +168,7 @@ macro_rules! def {
             linux: &[],
             build: || Box::new($build),
             debug: true,
+            palette: true,
         }
     };
 }
@@ -251,6 +293,14 @@ pub static ACTIONS: &[ActionDef] = &[
         &["cmd-v"],
         &["ctrl-shift-v"],
         Paste
+    ),
+    def!(
+        "PastePrimary",
+        "Paste primary selection",
+        "Paste the Linux primary selection (middle-click buffer)",
+        &[],
+        &[],
+        PastePrimary
     ),
     def!(
         "ShowCommandPalette",
@@ -389,6 +439,22 @@ pub static ACTIONS: &[ActionDef] = &[
         ScrollByLine(1)
     ),
     def!(
+        "ScrollToPrompt(-1)",
+        "Scroll to previous prompt",
+        "Jump to the previous shell prompt (needs OSC 133 shell integration)",
+        &[],
+        &[],
+        ScrollToPrompt(-1)
+    ),
+    def!(
+        "ScrollToPrompt(1)",
+        "Scroll to next prompt",
+        "Jump to the next shell prompt (needs OSC 133 shell integration)",
+        &[],
+        &[],
+        ScrollToPrompt(1)
+    ),
+    def!(
         "ScrollToTop",
         "Scroll to top",
         "Jump to the oldest scrollback line",
@@ -420,12 +486,96 @@ pub static ACTIONS: &[ActionDef] = &[
         &["ctrl-,"],
         OpenConfig
     ),
+    def!(
+        args "ActivateTab",
+        "Go to tab",
+        "Activate tab N (counting from 1); bound to ⌘1–⌘9 on macOS and Alt+1–Alt+9 on Linux",
+        ActivateTab(0)
+    ),
+    def!(
+        args "SwitchWorkspace",
+        "Switch to workspace",
+        "Switch to the workspace with the given name",
+        SwitchWorkspace(String::new())
+    ),
+    def!(
+        args "SpawnTabInDomain",
+        "New tab in domain",
+        "Open a tab in the named domain (`local`, or an SSH domain once M10 lands)",
+        SpawnTabInDomain(String::new())
+    ),
+    def!(
+        args "SendString",
+        "Send string",
+        "Write the given text to the active pane as if typed",
+        SendString(String::new())
+    ),
+    def!(
+        args "SpawnCommand",
+        "Spawn command",
+        "Open a tab running `command`, with optional `cwd` and `title`",
+        SpawnCommand::default()
+    ),
+    def!(
+        args "ConnectSsh",
+        "Connect SSH",
+        "Open a tab on the named SSH domain (arrives with M10)",
+        ConnectSsh(String::new())
+    ),
     def!(debug "DebugShowSshOverlay", "Debug: Show SSH reconnect overlay", "Show the reconnect card with mock state", DebugShowSshOverlay),
     def!(debug "DebugShowConfigError", "Debug: Show config error banner", "Show the invalid-config banner", DebugShowConfigError),
     def!(debug "DebugShowToast", "Debug: Show toast", "Push a toast onto the stack", DebugShowToast),
 ];
 
+/// Documentation grouping of the registry (SPEC §9.2).
+pub const CATEGORIES: &[&str] = &[
+    "Tabs & windows",
+    "Workspaces",
+    "Clipboard & scroll",
+    "Modes",
+    "Fonts & look",
+    "Config",
+    "Misc",
+    "Debug",
+];
+
 impl ActionDef {
+    pub fn category(&self) -> &'static str {
+        let base = self.name.split('(').next().unwrap_or(self.name);
+        match base {
+            _ if self.debug => "Debug",
+            "SpawnTab"
+            | "SpawnTabInDomain"
+            | "CloseTab"
+            | "ActivateTab"
+            | "ActivateTabRelative"
+            | "MoveTabRelative"
+            | "RenameTab"
+            | "SpawnWindow"
+            | "CloseWindow"
+            | "ToggleFullscreen" => "Tabs & windows",
+            "ShowWorkspaceSwitcher"
+            | "SwitchWorkspace"
+            | "SwitchWorkspaceRelative"
+            | "CreateWorkspace"
+            | "RenameWorkspace" => "Workspaces",
+            "Copy" | "Paste" | "PastePrimary" | "ClearScrollback" | "ScrollByPage"
+            | "ScrollByLine" | "ScrollToTop" | "ScrollToBottom" | "ScrollToPrompt" => {
+                "Clipboard & scroll"
+            }
+            "ShowCommandPalette"
+            | "ShowLauncher"
+            | "ActivateQuickSelect"
+            | "ActivateCopyMode"
+            | "Search" => "Modes",
+            "IncreaseFontSize" | "DecreaseFontSize" | "ResetFontSize" | "SelectTheme" => {
+                "Fonts & look"
+            }
+            "ReloadConfig" | "OpenConfig" => "Config",
+            _ => "Misc",
+        }
+    }
+
     pub fn bindings(&self, platform: Platform) -> &'static [&'static str] {
         match platform {
             Platform::Mac => self.mac,
@@ -474,15 +624,98 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
         }
         ("ScrollByPage", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollByPage(*n as isize))),
         ("ScrollByLine", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollByLine(*n as isize))),
+        ("ScrollToPrompt", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollToPrompt(*n as isize))),
+        ("SendString", Some(ActionArg::Str(s))) => Ok(Box::new(SendString(s.clone()))),
+        ("ConnectSsh", Some(ActionArg::Str(d))) => Ok(Box::new(ConnectSsh(d.clone()))),
+        ("SpawnCommand", Some(ActionArg::Table(t))) => parse_spawn_command(t)
+            .map(|c| Box::new(c) as Box<dyn Action>)
+            .map_err(|e| format!("SpawnCommand: {e}")),
+        ("SpawnCommand", _) => {
+            Err("SpawnCommand takes a table: { command = [\"htop\"], cwd = \"~\" }".into())
+        }
         (_, None) => ACTIONS
             .iter()
-            .find(|d| d.name == name && !name.contains('('))
+            .find(|d| d.name == name && d.palette && !name.contains('('))
             .map(|d| (d.build)())
             .ok_or_else(|| format!("unknown action \"{name}\"")),
         (_, Some(_)) => Err(format!(
             "unknown action \"{name}\" or it takes no such argument"
         )),
     }
+}
+
+/// The generated "Reference → Actions" docs page (`cargo run -p xtask -- gen-docs`).
+pub fn reference_markdown() -> String {
+    fn keys(def: &ActionDef, platform: Platform) -> String {
+        let all: Vec<String> = def
+            .bindings(platform)
+            .iter()
+            .map(|k| format!("`{}`", format_keystroke(k, platform)))
+            .collect();
+        if all.is_empty() {
+            "—".to_string()
+        } else {
+            all.join(" / ")
+        }
+    }
+    let mut out = String::from(
+        "---\ntitle: Actions\ndescription: Every microterm action with its default keybinding on macOS and Linux.\n---\n\n\
+<!-- Generated by `cargo run -p xtask -- gen-docs` from the action registry. Do not edit. -->\n\n\
+Every action can be run from the [command palette](/docs/command-palette-and-launcher/) and bound \
+under `[[keys]]` in the config. Actions that take an argument are written as a table:\n\n\
+```toml\n[[keys]]\nkey = \"cmd+shift+h\"\naction = { SpawnCommand = { command = [\"htop\"], cwd = \"~\" } }\n\n\
+[[keys]]\nkey = \"cmd+shift+k\"\naction = \"Disable\"   # unbind a default\n```\n",
+    );
+    for category in CATEGORIES {
+        let rows: Vec<&ActionDef> = ACTIONS
+            .iter()
+            .filter(|d| d.category() == *category)
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "\n## {category}\n\n| Action | Description | macOS | Linux |\n|---|---|---|---|\n"
+        ));
+        for def in rows {
+            out.push_str(&format!(
+                "| `{}` | **{}** — {} | {} | {} |\n",
+                def.name,
+                def.label,
+                def.description,
+                keys(def, Platform::Mac),
+                keys(def, Platform::Linux)
+            ));
+        }
+    }
+    out
+}
+
+/// Where the generated page lives, relative to the repository root.
+pub const REFERENCE_DOC_PATH: &str = "site/src/content/docs/docs/reference/actions.md";
+
+/// Parses the table text of a `SpawnCommand = { ... }` config argument.
+pub fn parse_spawn_command(table: &str) -> Result<SpawnCommand, String> {
+    let t: toml::Table = table
+        .parse()
+        .map_err(|e: toml::de::Error| e.message().to_string())?;
+    let command: Vec<String> = match t.get("command") {
+        Some(toml::Value::Array(a)) => a
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect::<Option<_>>()
+            .ok_or("`command` must be a list of strings")?,
+        _ => return Err("missing `command = [\"program\", \"args\"...]`".into()),
+    };
+    if command.is_empty() {
+        return Err("`command` must not be empty".into());
+    }
+    let opt = |k: &str| t.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    Ok(SpawnCommand {
+        command,
+        cwd: opt("cwd"),
+        title: opt("title"),
+    })
 }
 
 /// `(gpui keystroke, action)` pairs plus key chips, from the defaults and the user's bindings.
@@ -752,6 +985,108 @@ mod tests {
         assert!(warnings.is_empty());
         for def in ACTIONS.iter().filter(|d| !d.linux.is_empty()) {
             assert!(chips.contains_key(def.name), "{}", def.name);
+        }
+    }
+
+    #[test]
+    fn registry_covers_every_spec_action() {
+        // SPEC §9.2 (Disable is a config keyword, not an action).
+        for name in [
+            "SpawnTab",
+            "SpawnTabInDomain",
+            "CloseTab",
+            "ActivateTab",
+            "ActivateTabRelative(1)",
+            "MoveTabRelative(1)",
+            "RenameTab",
+            "SpawnWindow",
+            "CloseWindow",
+            "ToggleFullscreen",
+            "ShowWorkspaceSwitcher",
+            "SwitchWorkspace",
+            "SwitchWorkspaceRelative(1)",
+            "CreateWorkspace",
+            "RenameWorkspace",
+            "Copy",
+            "Paste",
+            "PastePrimary",
+            "ClearScrollback",
+            "ScrollByPage(1)",
+            "ScrollByLine(1)",
+            "ScrollToTop",
+            "ScrollToBottom",
+            "ScrollToPrompt(1)",
+            "ShowCommandPalette",
+            "ShowLauncher",
+            "ActivateQuickSelect",
+            "ActivateCopyMode",
+            "Search",
+            "IncreaseFontSize",
+            "DecreaseFontSize",
+            "ResetFontSize",
+            "SelectTheme",
+            "ReloadConfig",
+            "OpenConfig",
+            "SendString",
+            "SpawnCommand",
+            "ConnectSsh",
+        ] {
+            assert!(ACTIONS.iter().any(|a| a.name == name), "{name} missing");
+        }
+    }
+
+    #[test]
+    fn every_action_has_label_description_and_category() {
+        for def in ACTIONS {
+            assert!(
+                !def.label.is_empty() && !def.description.is_empty(),
+                "{}",
+                def.name
+            );
+            assert!(CATEGORIES.contains(&def.category()), "{}", def.name);
+            // Building must not panic.
+            let _ = (def.build)();
+        }
+    }
+
+    #[test]
+    fn spawn_command_resolves_from_a_table() {
+        let a = resolve_action(
+            "SpawnCommand",
+            &Some(ActionArg::Table("command = [\"htop\"]\ncwd = \"~\"".into())),
+        )
+        .unwrap();
+        let c = a.as_any().downcast_ref::<SpawnCommand>().unwrap();
+        assert_eq!(c.command, ["htop"]);
+        assert_eq!(c.cwd.as_deref(), Some("~"));
+        assert!(resolve_action("SpawnCommand", &None).is_err());
+        assert!(resolve_action(
+            "SpawnCommand",
+            &Some(ActionArg::Table("cwd = \"~\"".into()))
+        )
+        .is_err());
+        assert!(resolve_action("SendString", &Some(ActionArg::Str("x".into()))).is_ok());
+        assert!(resolve_action("SendString", &None).is_err());
+    }
+
+    #[test]
+    fn generated_actions_doc_matches_the_registry() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(REFERENCE_DOC_PATH);
+        let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            on_disk == reference_markdown(),
+            "{REFERENCE_DOC_PATH} is stale: run `cargo run -p xtask -- gen-docs`"
+        );
+    }
+
+    #[test]
+    fn reference_lists_every_action_once() {
+        let md = reference_markdown();
+        for def in ACTIONS {
+            let row = format!("| `{}` |", def.name);
+            assert_eq!(md.matches(&row).count(), 1, "{}", def.name);
         }
     }
 }

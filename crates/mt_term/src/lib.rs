@@ -15,6 +15,7 @@ mod process;
 mod shell;
 mod snapshot;
 mod terminal;
+mod width_filter;
 
 pub use emulator::{CursorDefault, Emulator, ScrollCmd};
 pub use events::{ClipboardKind, Osc52Policy, Palette, TermEvent, OSC52_MAX_BYTES};

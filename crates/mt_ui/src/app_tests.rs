@@ -651,3 +651,198 @@ fn config_font_size_edit_replaces_window_zoom(cx: &mut TestAppContext) {
     app.update(reload);
     assert_eq!(view.read_with(vcx, |t, _| t.cell.font_size), 18.0);
 }
+
+// ------------------------------------------------------------------ M6: palette and launcher
+
+fn picker_labels(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |t, _| {
+        let p = t.picker.as_ref().unwrap();
+        p.state
+            .matches()
+            .iter()
+            .map(|m| p.state.label(m).to_string())
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn every_palette_action_is_reachable_by_its_label(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowCommandPalette);
+    for (i, def) in actions::ACTIONS
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.palette)
+    {
+        view.update(cx, |t, _| {
+            t.picker.as_mut().unwrap().state.set_query(def.label)
+        });
+        let found = view.read_with(cx, |t, _| {
+            let p = t.picker.as_ref().unwrap();
+            p.state.matches().iter().any(
+                |m| matches!(p.state.item(m.index).target, crate::app::Target::Action(a) if a == i),
+            )
+        });
+        assert!(found, "{} not reachable from the palette", def.name);
+    }
+}
+
+#[gpui::test]
+fn palette_lists_actions_by_default_and_hides_argument_actions(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowCommandPalette);
+    let labels = picker_labels(&view, cx);
+    assert!(labels.contains(&"New tab".to_string()));
+    assert!(
+        !labels.iter().any(|l| l.starts_with("Theme: ")),
+        "{labels:?}"
+    );
+    assert!(!labels.iter().any(|l| l == "Send string"));
+}
+
+#[gpui::test]
+fn at_prefix_jumps_to_a_workspace(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.update(|_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .create_workspace("infra")
+            .unwrap();
+    });
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("@infra");
+    assert_eq!(
+        picker_labels(&view, cx),
+        ["Switch to workspace: infra".to_string()]
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            cx.global::<crate::mux_host::MuxHost>()
+                .mux
+                .active_workspace()
+                .name,
+            "infra"
+        );
+    });
+}
+
+#[gpui::test]
+fn hash_prefix_lists_and_activates_tabs(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    cx.run_until_parked();
+    view.update_in(cx, |t, _, cx| t.activate_tab(0, cx));
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("#");
+    let labels = picker_labels(&view, cx);
+    assert_eq!(labels.len(), 2);
+    assert!(labels.iter().all(|l| l.starts_with("Go to tab: ")));
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |t, _| t.active_tab), 1);
+}
+
+#[gpui::test]
+fn tilde_prefix_previews_a_theme_and_escape_reverts(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("~tokyo");
+    let first = picker_labels(&view, cx).first().cloned().unwrap();
+    assert!(first.starts_with("Theme: Tokyo Night"), "{first}");
+    cx.simulate_keystrokes("down up");
+    let name = cx.update(|_, cx| cx.global::<Theme>().name);
+    assert!(name.starts_with("Tokyo Night"), "previewed {name}");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(cx.update(|_, cx| cx.global::<Theme>().name), "One Dark");
+    assert_eq!(top(&view, cx), None);
+}
+
+#[gpui::test]
+fn tilde_enter_keeps_the_theme_but_other_rows_revert_a_preview(cx: &mut TestAppContext) {
+    let (_view, cx) = setup(cx);
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("~nord");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| cx.global::<Theme>().name), "Nord");
+
+    // Preview a theme, then drop the prefix and run an action: the preview must not stick.
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("~dracula");
+    assert_eq!(cx.update(|_, cx| cx.global::<Theme>().name), "Dracula");
+    for _ in 0..8 {
+        cx.simulate_keystrokes("backspace");
+    }
+    cx.simulate_input("new tab");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| cx.global::<Theme>().name), "Nord");
+}
+
+#[gpui::test]
+fn launcher_has_no_mock_rows_and_lists_real_ones(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowLauncher);
+    let labels = picker_labels(&view, cx);
+    assert_eq!(labels, ["New tab in local", "Workspace: default"]);
+}
+
+#[gpui::test]
+fn launch_profiles_appear_after_a_hot_reload_even_while_open(cx: &mut TestAppContext) {
+    use crate::settings::reload;
+    let f = temp_config("launch", "");
+    let app = cx.clone();
+    let (view, vcx) = setup_with_config(cx, f.clone());
+    vcx.dispatch_action(ShowLauncher);
+    assert!(!picker_labels(&view, vcx).contains(&"htop".to_string()));
+
+    std::fs::write(
+        &f,
+        "[[launch]]\nname = \"htop\"\ncommand = [\"htop\"]\ncwd = \"~\"\n",
+    )
+    .unwrap();
+    app.update(reload);
+    vcx.run_until_parked();
+    let labels = picker_labels(&view, vcx);
+    assert_eq!(labels[0], "htop", "{labels:?}");
+
+    // A closed-and-reopened launcher reads the same config.
+    vcx.simulate_keystrokes("escape");
+    vcx.dispatch_action(ShowLauncher);
+    assert_eq!(picker_labels(&view, vcx)[0], "htop");
+}
+
+#[gpui::test]
+fn confirming_a_launch_profile_opens_a_tab_running_its_command(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "launch-run",
+        "[[launch]]\nname = \"sleeper\"\ncommand = [\"sleep\", \"5\"]\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    let before = view.read_with(cx, |t, _| t.tabs.len());
+    cx.dispatch_action(ShowLauncher);
+    cx.simulate_input("sleeper");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), before + 1);
+    assert_eq!(top(&view, cx), None);
+}
+
+#[gpui::test]
+fn recently_run_items_rank_first(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("rename");
+    let first = picker_labels(&view, cx)[0].clone();
+    let second = picker_labels(&view, cx)[1].clone();
+    // Run the runner-up, then the same query must rank it first.
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("rename");
+    let labels = picker_labels(&view, cx);
+    assert_eq!(labels[0], second, "was {first} before");
+}

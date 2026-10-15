@@ -310,6 +310,9 @@ impl Default for Cursor {
 pub struct Text {
     pub blink: bool,
     pub min_contrast: f32,
+    /// Count each regional indicator as two cells (four per flag), as zsh does. Fixes the
+    /// cursor jumping after zsh-autosuggestions draws a flag emoji.
+    pub wide_regional_indicators: bool,
 }
 
 impl Default for Text {
@@ -317,6 +320,7 @@ impl Default for Text {
         Self {
             blink: false,
             min_contrast: 1.0,
+            wide_regional_indicators: false,
         }
     }
 }

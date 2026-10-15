@@ -45,12 +45,25 @@ pub struct PickerState<T> {
     scroll: usize,
     max_rows: usize,
     matcher: Matcher,
+    /// Provider group of each item (parallel to `items`); 0 when unused.
+    groups: Vec<u8>,
+    /// MRU rank of each item (0 = most recent), parallel to `items`.
+    mru: Vec<Option<usize>>,
+    /// `(prefix char, group)`: a query starting with the char filters to that group.
+    prefixes: Vec<(char, u8)>,
+    /// Group shown when the query has no prefix; `None` shows every group.
+    default_group: Option<u8>,
 }
 
 impl<T> PickerState<T> {
     pub fn new(items: Vec<(String, T)>) -> Self {
+        let len = items.len();
         let mut state = Self {
             items,
+            groups: vec![0; len],
+            mru: vec![None; len],
+            prefixes: Vec::new(),
+            default_group: None,
             query: String::new(),
             matches: Vec::new(),
             selected: 0,
@@ -60,6 +73,34 @@ impl<T> PickerState<T> {
         };
         state.refilter();
         state
+    }
+
+    /// Tags each item with a provider group and an MRU rank (both parallel to the items).
+    pub fn with_meta(mut self, groups: Vec<u8>, mru: Vec<Option<usize>>) -> Self {
+        assert_eq!(groups.len(), self.items.len());
+        assert_eq!(mru.len(), self.items.len());
+        self.groups = groups;
+        self.mru = mru;
+        self.refilter();
+        self
+    }
+
+    /// Enables provider prefixes such as `>` or `@`; see `prefixes` and `default_group`.
+    pub fn with_prefixes(mut self, prefixes: &[(char, u8)], default_group: Option<u8>) -> Self {
+        self.prefixes = prefixes.to_vec();
+        self.default_group = default_group;
+        self.refilter();
+        self
+    }
+
+    /// The group the current query is restricted to, and the query text without its prefix.
+    pub fn scope(&self) -> (Option<u8>, &str) {
+        if let Some(first) = self.query.chars().next() {
+            if let Some((_, g)) = self.prefixes.iter().find(|(c, _)| *c == first) {
+                return (Some(*g), &self.query[first.len_utf8()..]);
+            }
+        }
+        (self.default_group, &self.query)
     }
 
     pub fn with_max_rows(mut self, rows: usize) -> Self {
@@ -161,8 +202,20 @@ impl<T> PickerState<T> {
     fn refilter(&mut self) {
         self.selected = 0;
         self.scroll = 0;
-        if self.query.is_empty() {
-            self.matches = (0..self.items.len())
+        let (group, text) = {
+            let (g, t) = self.scope();
+            (g, t.trim_start().to_string())
+        };
+        let in_scope = |groups: &[u8], i: usize| group.is_none_or(|g| groups[i] == g);
+        // Recency orders equal scores; never-run items come after run ones.
+        let mru_key = |mru: &[Option<usize>], i: usize| mru[i].unwrap_or(usize::MAX);
+        if text.is_empty() {
+            let mut idx: Vec<usize> = (0..self.items.len())
+                .filter(|&i| in_scope(&self.groups, i))
+                .collect();
+            idx.sort_by_key(|&i| mru_key(&self.mru, i));
+            self.matches = idx
+                .into_iter()
                 .map(|index| Match {
                     index,
                     score: 0,
@@ -171,10 +224,13 @@ impl<T> PickerState<T> {
                 .collect();
             return;
         }
-        let pattern = Pattern::parse(&self.query, CaseMatching::Smart, Normalization::Smart);
+        let pattern = Pattern::parse(&text, CaseMatching::Smart, Normalization::Smart);
         let mut buf = Vec::new();
         let mut matches = Vec::new();
         for (index, (label, _)) in self.items.iter().enumerate() {
+            if !in_scope(&self.groups, index) {
+                continue;
+            }
             let mut positions = Vec::new();
             let haystack = Utf32Str::new(label, &mut buf);
             if let Some(score) = pattern.indices(haystack, &mut self.matcher, &mut positions) {
@@ -187,8 +243,14 @@ impl<T> PickerState<T> {
                 });
             }
         }
-        // Highest score first; ties keep the original order (the sort is stable).
-        matches.sort_by(|a, b| b.score.cmp(&a.score));
+        // Highest score first, then most recently used; the sort is stable so remaining ties
+        // keep the original order.
+        let mru = &self.mru;
+        matches.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| mru_key(mru, a.index).cmp(&mru_key(mru, b.index)))
+        });
         self.matches = matches;
     }
 }
@@ -343,5 +405,62 @@ mod tests {
         let mut q = picker();
         type_str(&mut q, "NEW");
         assert_eq!(q.matches().len(), 0, "an uppercase query is case-sensitive");
+    }
+
+    fn grouped() -> PickerState<u32> {
+        PickerState::new(vec![
+            ("New tab".into(), 0),
+            ("Switch to workspace: api".into(), 1),
+            ("Go to tab: cargo".into(), 2),
+            ("Theme: Tokyo Night".into(), 3),
+        ])
+        .with_meta(vec![0, 1, 2, 3], vec![None; 4])
+        .with_prefixes(&[('>', 0), ('@', 1), ('#', 2), ('~', 3)], Some(0))
+    }
+
+    #[test]
+    fn default_scope_shows_only_the_default_group() {
+        let p = grouped();
+        assert_eq!(p.matches().len(), 1);
+        assert_eq!(p.matches()[0].index, 0);
+    }
+
+    #[test]
+    fn prefix_selects_provider_and_strips_from_the_match() {
+        let mut p = grouped();
+        p.set_query("@api");
+        assert_eq!(p.matches().iter().map(|m| m.index).collect::<Vec<_>>(), [1]);
+        p.set_query("~tokyo");
+        assert_eq!(p.matches().iter().map(|m| m.index).collect::<Vec<_>>(), [3]);
+        p.set_query("#");
+        assert_eq!(p.matches().iter().map(|m| m.index).collect::<Vec<_>>(), [2]);
+        p.set_query(">new");
+        assert_eq!(p.matches().iter().map(|m| m.index).collect::<Vec<_>>(), [0]);
+        assert_eq!(p.scope(), (Some(0), "new"));
+    }
+
+    #[test]
+    fn no_default_group_merges_everything() {
+        let p = PickerState::new(vec![("a".to_string(), 0u32), ("b".into(), 1)])
+            .with_meta(vec![0, 1], vec![None, None])
+            .with_prefixes(&[('@', 1)], None);
+        assert_eq!(p.matches().len(), 2);
+    }
+
+    #[test]
+    fn mru_orders_empty_query_and_breaks_score_ties() {
+        let p = PickerState::new(vec![
+            ("alpha".to_string(), 0u32),
+            ("beta".into(), 1),
+            ("gamma".into(), 2),
+        ])
+        .with_meta(vec![0; 3], vec![None, Some(1), Some(0)]);
+        let order: Vec<_> = p.matches().iter().map(|m| m.index).collect();
+        assert_eq!(order, [2, 1, 0]);
+
+        let mut tie = PickerState::new(vec![("ab".to_string(), 0u32), ("ab".into(), 1)])
+            .with_meta(vec![0; 2], vec![None, Some(0)]);
+        tie.set_query("ab");
+        assert_eq!(tie.matches()[0].index, 1);
     }
 }

@@ -3561,6 +3561,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "libc",
+ "polling",
 ]
 
 [[package]]
@@ -3584,6 +3585,7 @@ dependencies = [
  "mt_term",
  "mt_theme",
  "nucleo-matcher",
+ "serde_json",
  "skrifa 0.48.0",
  "toml 0.8.23",
 ]
@@ -7382,6 +7384,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "mt_theme",
+ "mt_ui",
 ]
 
 [[package]]

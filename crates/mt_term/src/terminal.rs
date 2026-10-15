@@ -5,19 +5,21 @@ use std::collections::HashMap;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use alacritty_terminal::event::WindowSize;
+use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::tty::{self, Shell};
+use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite, Shell};
 
 use crate::emulator::{take_damage, term_config, CursorDefault, ScrollCmd, Size};
 use crate::events::{Listener, Osc52Policy, Palette, Shared, TermEvent};
 use crate::input::{encode_key, encode_paste, InputMode, KeyInput};
 use crate::shell::resolve_shell;
 use crate::snapshot::{self, Modes, RenderSnapshot};
+use crate::width_filter::WidthFilter;
 
 pub struct SpawnOptions {
     /// `shell` config value; empty means `$SHELL`, then the passwd entry, then `/bin/sh`.
@@ -31,6 +33,8 @@ pub struct SpawnOptions {
     pub term: String,
     pub cols: u16,
     pub rows: u16,
+    /// `text.wide_regional_indicators`: count regional indicators as two cells like zsh.
+    pub wide_regional_indicators: bool,
     pub cell_width: u16,
     pub cell_height: u16,
     pub scrollback: usize,
@@ -50,6 +54,7 @@ impl Default for SpawnOptions {
             term: "xterm-256color".into(),
             cols: 80,
             rows: 24,
+            wide_regional_indicators: false,
             cell_width: 8,
             cell_height: 16,
             scrollback: 10_000,
@@ -68,6 +73,8 @@ pub struct Terminal {
     /// PTY master fd, for foreground-process queries. Owned by the event loop.
     master_fd: RawFd,
     scrollback: usize,
+    /// `text.wide_regional_indicators`, shared with the PTY reader.
+    wide_ri: Arc<AtomicBool>,
 }
 
 impl Terminal {
@@ -134,6 +141,8 @@ impl Terminal {
         let pty = tty::new(&pty_opts, window_size, 0)?;
         let pid = pty.child().id();
         let master_fd = pty.file().as_raw_fd();
+        let wide_ri = Arc::new(AtomicBool::new(opts.wide_regional_indicators));
+        let pty = FilteredPty::new(pty, wide_ri.clone())?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         shared.set_pty(sender.clone());
@@ -146,6 +155,7 @@ impl Terminal {
             pid,
             master_fd,
             scrollback: opts.scrollback,
+            wide_ri,
         })
     }
 
@@ -207,6 +217,11 @@ impl Terminal {
             .set_options(term_config(self.scrollback, osc52, cursor));
     }
 
+    /// Switches `text.wide_regional_indicators`; it applies to output that arrives afterwards.
+    pub fn set_wide_regional_indicators(&self, on: bool) {
+        self.wide_ri.store(on, Ordering::Relaxed);
+    }
+
     pub fn set_palette(&self, palette: Palette) {
         *self.shared.palette.lock().unwrap() = palette;
     }
@@ -237,7 +252,7 @@ impl Terminal {
     pub fn snapshot(&self) -> RenderSnapshot {
         let mut term = self.term.lock();
         let damage = take_damage(&mut term);
-        snapshot::build(&term, damage)
+        snapshot::build(&term, damage, self.wide_ri.load(Ordering::Relaxed))
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -250,6 +265,124 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.sender.send(Msg::Shutdown);
+    }
+}
+
+/// The PTY handed to the engine's event loop, with the width filter in the read path.
+///
+/// The loop reads through `reader()`; this wrapper reads from a duplicate of the master fd
+/// (same open file, so readiness and `O_NONBLOCK` are shared) and runs the bytes through
+/// `WidthFilter` while `text.wide_regional_indicators` is on.
+struct FilteredPty {
+    inner: tty::Pty,
+    reader: FilterReader,
+}
+
+struct FilterReader {
+    file: std::fs::File,
+    enabled: Arc<AtomicBool>,
+    filter: WidthFilter,
+    raw: Vec<u8>,
+    out: Vec<u8>,
+}
+
+impl FilteredPty {
+    fn new(inner: tty::Pty, enabled: Arc<AtomicBool>) -> io::Result<Self> {
+        let file = inner.file().try_clone()?;
+        Ok(Self {
+            inner,
+            reader: FilterReader {
+                file,
+                enabled,
+                filter: WidthFilter::new(),
+                raw: Vec::new(),
+                out: Vec::new(),
+            },
+        })
+    }
+}
+
+impl io::Read for FilterReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if !self.enabled.load(Ordering::Relaxed) {
+            // Switched off: give back anything held, then read straight through.
+            let held = self.filter.take_pending();
+            self.filter.reset();
+            if !held.is_empty() && held.len() <= buf.len() {
+                buf[..held.len()].copy_from_slice(&held);
+                return Ok(held.len());
+            }
+            return self.file.read(buf);
+        }
+        // Every 4-byte indicator grows by one byte and up to 3 held-back bytes are re-emitted,
+        // so reading at most 4/5 of the buffer (minus 4) guarantees the output fits.
+        let cap = (buf.len() * 4 / 5).saturating_sub(4);
+        if cap == 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        loop {
+            self.raw.resize(cap, 0);
+            let n = self.file.read(&mut self.raw)?;
+            if n == 0 {
+                let held = self.filter.take_pending();
+                buf[..held.len()].copy_from_slice(&held);
+                return Ok(held.len());
+            }
+            self.out.clear();
+            self.filter.filter(&self.raw[..n], &mut self.out);
+            if self.out.is_empty() {
+                continue; // only a partial UTF-8 sequence so far; read on
+            }
+            buf[..self.out.len()].copy_from_slice(&self.out);
+            return Ok(self.out.len());
+        }
+    }
+}
+
+impl EventedReadWrite for FilteredPty {
+    type Reader = FilterReader;
+    type Writer = std::fs::File;
+
+    unsafe fn register(
+        &mut self,
+        poll: &Arc<polling::Poller>,
+        interest: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        unsafe { self.inner.register(poll, interest, mode) }
+    }
+
+    fn reregister(
+        &mut self,
+        poll: &Arc<polling::Poller>,
+        interest: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        self.inner.reregister(poll, interest, mode)
+    }
+
+    fn deregister(&mut self, poll: &Arc<polling::Poller>) -> io::Result<()> {
+        self.inner.deregister(poll)
+    }
+
+    fn reader(&mut self) -> &mut FilterReader {
+        &mut self.reader
+    }
+
+    fn writer(&mut self) -> &mut std::fs::File {
+        self.inner.writer()
+    }
+}
+
+impl EventedPty for FilteredPty {
+    fn next_child_event(&mut self) -> Option<ChildEvent> {
+        self.inner.next_child_event()
+    }
+}
+
+impl OnResize for FilteredPty {
+    fn on_resize(&mut self, window_size: WindowSize) {
+        self.inner.on_resize(window_size);
     }
 }
 
@@ -300,6 +433,50 @@ mod tests {
                 .any(|l| l.contains("env:xterm-256color:truecolor:microterm:yes")),
             "{rows:?}"
         );
+    }
+
+    /// Column of the `x` that follows a flag in the row whose text starts with that flag.
+    fn x_after_flag(t: &Terminal) -> Option<usize> {
+        let s = t.snapshot();
+        (0..s.rows).find_map(|r| {
+            let row = s.row(r);
+            (row.first().is_some_and(|c| c.ch == '\u{1F1EF}'))
+                .then(|| row.iter().position(|c| c.ch == 'x'))
+                .flatten()
+        })
+    }
+
+    #[test]
+    fn wide_regional_indicators_apply_to_live_pty_output_and_toggle_at_runtime() {
+        let (tx, rx) = mpsc::channel();
+        let t = Terminal::spawn(
+            SpawnOptions {
+                shell: "/bin/sh".into(),
+                cols: 80,
+                rows: 8,
+                wide_regional_indicators: true,
+                ..Default::default()
+            },
+            move || {
+                let _ = tx.send(());
+            },
+        )
+        .unwrap();
+        // U+1F1EF U+1F1F5 then x, written as octal bytes so the echoed command is plain ASCII.
+        let flag_x = r"printf '\360\237\207\257\360\237\207\265x\n'";
+        t.write(format!("{flag_x}\n").into_bytes());
+        let rows = wait_for(&t, &rx, "🇯🇵x");
+        assert!(rows.iter().any(|l| l.contains("🇯🇵x")), "{rows:?}");
+        assert_eq!(x_after_flag(&t), Some(4), "four cells per flag when on");
+
+        t.set_wide_regional_indicators(false);
+        t.write(format!("clear; {flag_x}\n").into_bytes());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while x_after_flag(&t) != Some(2) && Instant::now() < deadline {
+            let _ = rx.recv_timeout(Duration::from_millis(100));
+            t.drain_events();
+        }
+        assert_eq!(x_after_flag(&t), Some(2), "two cells per flag when off");
     }
 
     #[test]

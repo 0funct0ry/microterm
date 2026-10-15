@@ -135,6 +135,24 @@ impl Render for AppWindow {
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.on_stub("Copy", "M7", cx)))
             .on_action(cx.listener(|this, _: &Paste, w, cx| this.paste(w, cx)))
+            .on_action(cx.listener(|this, _: &PastePrimary, _, cx| {
+                this.on_stub("Paste primary selection", "M7", cx)
+            }))
+            .on_action(cx.listener(|this, a: &SendString, _, cx| this.send_string(&a.0, cx)))
+            .on_action(cx.listener(|this, a: &SpawnCommand, w, cx| {
+                let spec =
+                    crate::app::spawn_spec_for(&a.command, a.cwd.as_deref(), a.title.clone());
+                this.spawn_tab(Some(spec), w, cx)
+            }))
+            .on_action(cx.listener(|this, a: &ConnectSsh, _, cx| {
+                this.toast(
+                    ToastKind::Info,
+                    format!("SSH domain \"{}\": SSH domains arrive with M10", a.0),
+                    cx,
+                )
+            }))
+            // Needs OSC 133 prompt marks (M8); a no-op until a pane has them.
+            .on_action(cx.listener(|_, _: &ScrollToPrompt, _, _| {}))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
             .on_action(cx.listener(|this, a: &ScrollByPage, _, cx| {
                 let cmd = if a.0 < 0 {

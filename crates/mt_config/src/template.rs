@@ -50,6 +50,7 @@ blink_interval_ms = 530
 [text]
 blink = false
 min_contrast = 1.0               # >1 enforces WCAG-like contrast between fg/bg
+wide_regional_indicators = false # true: flags take 4 cells like zsh counts them (fixes cursor jumps)
 
 [scrollbar]
 mode = "auto"                    # "auto" | "always" | "never"

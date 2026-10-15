@@ -6,10 +6,11 @@ CARGO ?= cargo
 ifeq ($(shell uname -s),Darwin)
 ifeq ($(shell xcrun --find metal >/dev/null 2>&1 && echo yes),)
 FEATURES := --features microterm/runtime-shaders
+XTASK_FEATURES := --features mt_ui/runtime-shaders
 endif
 endif
 
-.PHONY: run build release test lint fmt themes bench bundle install site-dev site-build release-dry check-facade
+.PHONY: run build release test lint fmt themes docs docs-check bench bundle install site-dev site-build release-dry check-facade
 
 run:
 	$(CARGO) run -p microterm $(FEATURES)
@@ -37,7 +38,14 @@ check-facade:
 		echo 'error: only crates/mt_term may use alacritty_terminal'; exit 1; fi
 
 themes:
-	$(CARGO) run -q -p xtask -- check-themes
+	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-themes
+
+# Regenerates site/.../reference/actions.md from the action registry.
+docs:
+	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- gen-docs
+
+docs-check:
+	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- gen-docs --check
 
 # Headless 100 MB throughput baseline -> bench/results/<date>.json. vtebench must run inside a
 # microterm tab: `bench/vtebench.sh` (see bench/README.md).

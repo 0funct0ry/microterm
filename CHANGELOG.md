@@ -60,6 +60,20 @@
   instance over a private Unix socket. `window.remember_size` is honoured.
   Known gap: OSC 7 cwd reports are not read (the engine exposes no hook); the cwd comes from
   process inspection instead.
+- **M6 — Command palette and launcher.** The action registry now covers every SPEC §9.2 action
+  (`PastePrimary`, `ScrollToPrompt`, `SendString`, `SpawnCommand`, `ConnectSsh` added) and
+  feeds the keymap, the palette and the docs. Palette providers with prefixes `>` actions,
+  `@` workspaces, `#` tabs, `~` themes (live preview, `Esc` reverts); nucleo ranking plus an MRU of
+  the last 50 items in `$XDG_STATE_HOME/microterm/mru.json`; `Cmd/Ctrl+Enter` opens in a new
+  window. The launcher lists `[[launch]]` profiles, "New tab in <domain>" and workspaces and
+  refreshes on hot reload. `cargo run -p xtask -- gen-docs` generates Reference → Actions; CI
+  fails when it is stale. Known gap: SSH domains join the launcher in M10.
+- **`text.wide_regional_indicators`** (default `false`). Counts each regional indicator as two
+  cells, so a flag takes four like zsh's line editor assumes. Fixes the cursor jumping to the
+  wrong column after zsh-autosuggestions draws a flag emoji. Implemented as a PTY output filter in
+  `mt_term` plus a snapshot step, without touching the engine. Hot-reloadable; documented under
+  Fonts → Wide characters and emoji. Known gap: a flag at the very last column wraps as two
+  narrow indicators.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

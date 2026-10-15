@@ -179,7 +179,11 @@ const ROOT: &[(&str, K)] = &[
     ),
     (
         "text",
-        K::Table(&[("blink", K::Leaf), ("min_contrast", K::Leaf)]),
+        K::Table(&[
+            ("blink", K::Leaf),
+            ("min_contrast", K::Leaf),
+            ("wide_regional_indicators", K::Leaf),
+        ]),
     ),
     ("scrollbar", K::Table(&[("mode", K::Leaf)])),
     (

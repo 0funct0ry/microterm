@@ -44,6 +44,8 @@ jobs:
       - run: make test
       # Bundled themes: licence, 16 colours, >= 4.5:1 contrast.
       - run: make themes
+      # Generated docs (reference/actions.md) must match the action registry.
+      - run: make docs-check
 
   site:
     runs-on: ubuntu-22.04

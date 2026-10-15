@@ -107,6 +107,9 @@ pub struct Emulator {
     term: Term<Listener>,
     parser: Processor,
     shared: Arc<Shared>,
+    /// `text.wide_regional_indicators`: filters output and widens indicators in snapshots.
+    wide_ri: bool,
+    width_filter: crate::width_filter::WidthFilter,
 }
 
 impl Emulator {
@@ -135,11 +138,25 @@ impl Emulator {
             term,
             parser: Processor::default(),
             shared,
+            wide_ri: false,
+            width_filter: crate::width_filter::WidthFilter::new(),
         }
     }
 
+    /// Counts a regional indicator as two cells (four per flag), as zsh does.
+    pub fn with_wide_regional_indicators(mut self, on: bool) -> Self {
+        self.wide_ri = on;
+        self
+    }
+
     pub fn advance(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
+        if self.wide_ri {
+            let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 4);
+            self.width_filter.filter(bytes, &mut out);
+            self.parser.advance(&mut self.term, &out);
+        } else {
+            self.parser.advance(&mut self.term, bytes);
+        }
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
@@ -152,7 +169,7 @@ impl Emulator {
 
     pub fn snapshot(&mut self) -> RenderSnapshot {
         let damage = take_damage(&mut self.term);
-        snapshot::build(&self.term, damage)
+        snapshot::build(&self.term, damage, self.wide_ri)
     }
 
     pub fn drain_events(&mut self) -> Vec<TermEvent> {
@@ -582,5 +599,70 @@ mod tests {
         assert_eq!(s.row(0)[0].zerowidth.as_deref(), Some(&['\u{200d}'][..]));
         assert!(s.row(0)[0].flags.has(CellFlags::WIDE));
         assert_eq!(s.row(0)[2].ch, '👩');
+    }
+
+    /// zsh-autosuggestions draws `ho 🇯🇵🇫🇷` after `ec`, then moves back by zsh's own count
+    /// (flags are 4 cells there). With the option on the cursor must land after `ec`.
+    #[test]
+    fn wide_regional_indicators_keep_zsh_cursor_moves_in_step() {
+        let typed = "❯ ec";
+        let suggestion = "ho 🇯🇵🇫🇷";
+        let zsh_width = 3 + 4 * 2; // "ho " + two flags of 4 cells each
+        let input = format!("{typed}{suggestion}\x1b[{zsh_width}D");
+
+        let mut off = emu(30, 2);
+        off.advance(input.as_bytes());
+        assert_eq!(
+            off.snapshot().cursor.col,
+            0,
+            "default engine widths: cursor ends up at column 0 (the reported bug)"
+        );
+
+        let mut on = Emulator::new(30, 2, 100).with_wide_regional_indicators(true);
+        on.advance(input.as_bytes());
+        let s = on.snapshot();
+        assert_eq!(s.cursor.col, 4, "cursor sits right after the typed `ec`");
+        assert_eq!(s.row_text(0), "❯ echo 🇯🇵🇫🇷");
+    }
+
+    #[test]
+    fn wide_regional_indicators_occupy_two_cells_each() {
+        let mut e = Emulator::new(16, 2, 100).with_wide_regional_indicators(true);
+        e.advance("🇯🇵x".as_bytes());
+        let s = e.snapshot();
+        assert!(s.row(0)[0].flags.has(CellFlags::WIDE));
+        assert!(s.row(0)[1].flags.has(CellFlags::WIDE_SPACER));
+        assert!(s.row(0)[2].flags.has(CellFlags::WIDE));
+        assert!(s.row(0)[3].flags.has(CellFlags::WIDE_SPACER));
+        assert_eq!(s.row(0)[4].ch, 'x');
+        // Copying the row gives the flag back without the filler spaces.
+        assert_eq!(s.row_text(0), "🇯🇵x");
+    }
+
+    #[test]
+    fn default_widths_are_unchanged_when_the_option_is_off() {
+        assert_eq!(x_col("🇯🇵"), 2);
+    }
+
+    #[test]
+    fn wide_regional_indicators_split_reads_and_titles() {
+        let mut e = Emulator::new(16, 2, 100).with_wide_regional_indicators(true);
+        let flag = "🇯".as_bytes();
+        e.advance(&flag[..2]);
+        e.advance(&flag[2..]);
+        e.advance(b"x");
+        let s = e.snapshot();
+        assert_eq!(s.row(0)[2].ch, 'x');
+        // Indicators in an OSC title are not padded.
+        e.advance("\x1b]0;🇯🇵\x07".as_bytes());
+        let titles: Vec<_> = e
+            .drain_events()
+            .into_iter()
+            .filter_map(|ev| match ev {
+                TermEvent::Title(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles, ["🇯🇵"]);
     }
 }
