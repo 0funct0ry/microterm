@@ -27,7 +27,6 @@ fn help_lists_subcommands() {
 fn stubs_name_their_milestone() {
     for (args, milestone) in [
         (vec!["ssh", "host"], "M10"),
-        (vec!["ls-fonts"], "M4"),
         (vec!["completions", "zsh"], "M9"),
         (vec!["cli", "list"], "M9"),
         (vec!["record", "-o", "a.cast", "--", "ls"], "M9"),
@@ -177,4 +176,21 @@ fn user_themes_are_listed() {
         .assert()
         .success()
         .stdout(predicate::str::contains("My Custom").and(predicate::str::contains("user")));
+}
+
+#[test]
+fn ls_fonts_names_the_font_per_character() {
+    let dir = std::env::temp_dir().join("microterm-lsfonts-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    microterm()
+        .arg("--config")
+        .arg(dir.join("none.toml"))
+        .args(["ls-fonts", "--text", "a"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Fallback chain:")
+                .and(predicate::str::contains("U+0061"))
+                .and(predicate::str::contains("JetBrains Mono  (font.family)")),
+        );
 }

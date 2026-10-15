@@ -24,6 +24,7 @@ export default defineConfig({
             { label: 'Config file', slug: 'docs/config-file' },
             { label: 'Hot reload', slug: 'docs/hot-reload' },
             { label: 'Themes', slug: 'docs/themes' },
+            { label: 'Fonts', slug: 'docs/fonts' },
           ],
         },
       ],

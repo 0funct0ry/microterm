@@ -58,7 +58,7 @@ action = "Disable"          # unbind a default
 | Keys | Effect |
 |---|---|
 | `theme` | colours of the terminal and the UI |
-| `font.family`, `size`, `line_height`, `weight`, `bold_weight` | cell metrics and text; ligatures, features and fallbacks arrive with typography |
+| `font.*` | cell metrics, ligatures, OpenType features and the fallback chain; see [Fonts](/docs/fonts/) |
 | `window.padding`, `opacity`, `blur`, `initial_size` | viewport padding, background transparency, size of new windows |
 | `cursor.style`, `blink`, `blink_interval_ms` | default cursor (programs can still change it with DECSCUSR) |
 | `scrollback_lines`, `shell`, `env`, `term`, `new_tab_cwd` | new panes only |

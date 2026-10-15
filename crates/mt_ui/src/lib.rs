@@ -8,6 +8,7 @@ mod builtin_glyphs;
 pub mod components;
 mod gpu_check;
 pub mod keychips;
+pub mod ls_fonts;
 pub mod metrics;
 pub mod mock;
 pub mod overlay_stack;
@@ -17,6 +18,7 @@ pub mod session;
 pub mod settings;
 pub mod terminal_view;
 pub mod theme;
+pub mod typography;
 mod view;
 
 use gpui::{App, AppContext as _, Application};

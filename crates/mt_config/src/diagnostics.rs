@@ -366,6 +366,22 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
             ),
         }
     }
+    for f in &c.font.features {
+        if crate::schema::parse_font_feature(f).is_none() {
+            err(
+                &["font", "features"],
+                format!(
+                    "font.features entry \"{f}\" must be a 4-character tag, optionally `tag=N`"
+                ),
+            );
+        }
+    }
+    if c.font.fallback.iter().any(|f| f.trim().is_empty()) {
+        err(
+            &["font", "fallback"],
+            "font.fallback entries must not be empty".into(),
+        );
+    }
     if c.cursor.blink_interval_ms == 0 {
         err(
             &["cursor", "blink_interval_ms"],

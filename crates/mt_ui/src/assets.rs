@@ -35,6 +35,9 @@ const FILES: &[(&str, &[u8])] = embed![
     "icons/x.svg",
 ];
 
+const SYMBOLS_NERD_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
+
 const FONTS: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/IBMPlexSans_400Regular.ttf"),
     include_bytes!("../../../assets/fonts/IBMPlexSans_500Medium.ttf"),
@@ -43,7 +46,13 @@ const FONTS: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/JetBrainsMono_400Regular_Italic.ttf"),
     include_bytes!("../../../assets/fonts/JetBrainsMono_700Bold.ttf"),
     include_bytes!("../../../assets/fonts/JetBrainsMono_700Bold_Italic.ttf"),
+    SYMBOLS_NERD_FONT,
 ];
+
+/// Raw bytes of every bundled font face (for tools that inspect fonts without a window).
+pub fn bundled_fonts() -> &'static [&'static [u8]] {
+    FONTS
+}
 
 pub struct Assets;
 
@@ -64,10 +73,64 @@ impl AssetSource for Assets {
     }
 }
 
-/// Registers the bundled IBM Plex Sans and JetBrains Mono faces with the text system.
+/// Registers the bundled IBM Plex Sans, JetBrains Mono and Symbols Nerd Font Mono faces with the text system.
 pub fn load_fonts(cx: &App) -> Result<()> {
     cx.text_system()
-        .add_fonts(FONTS.iter().map(|b| Cow::Borrowed(*b)).collect())
+        .add_fonts(FONTS.iter().map(|b| Cow::Borrowed(*b)).collect())?;
+    #[cfg(target_os = "macos")]
+    register_fallback_fonts_with_coretext();
+    Ok(())
+}
+
+/// GPUI keeps bundled fonts in its own in-memory source, but macOS resolves `font.fallback`
+/// names through CoreText's cascade list, which cannot see them. Symbols Nerd Font Mono also has
+/// no `m` glyph, so GPUI will not select it directly. Registering it process-wide makes the
+/// cascade find it by name, so powerline and devicon glyphs fall back to it.
+#[cfg(target_os = "macos")]
+fn register_fallback_fonts_with_coretext() {
+    use std::ffi::c_void;
+    use std::ptr::null_mut;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGDataProviderCreateWithData(
+            info: *mut c_void,
+            data: *const c_void,
+            size: usize,
+            release: *const c_void,
+        ) -> *mut c_void;
+        fn CGFontCreateWithDataProvider(provider: *mut c_void) -> *mut c_void;
+        fn CGDataProviderRelease(provider: *mut c_void);
+        fn CGFontRelease(font: *mut c_void);
+    }
+    #[link(name = "CoreText", kind = "framework")]
+    extern "C" {
+        fn CTFontManagerRegisterGraphicsFont(font: *mut c_void, error: *mut *mut c_void) -> bool;
+    }
+
+    let bytes = SYMBOLS_NERD_FONT;
+    // SAFETY: `bytes` is `'static`, so the provider needs no release callback; the provider and
+    // font references are released after registration, which retains what it needs.
+    unsafe {
+        let provider = CGDataProviderCreateWithData(
+            null_mut(),
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            std::ptr::null(),
+        );
+        if provider.is_null() {
+            return;
+        }
+        let font = CGFontCreateWithDataProvider(provider);
+        CGDataProviderRelease(provider);
+        if font.is_null() {
+            return;
+        }
+        // An error here (for example the font is already registered) only means the cascade
+        // may miss it; text still renders with the system fallbacks.
+        let _ = CTFontManagerRegisterGraphicsFont(font, null_mut());
+        CGFontRelease(font);
+    }
 }
 
 /// Lucide icons bundled in `assets/icons`.

@@ -7,12 +7,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    fill, font, point, px, size, Bounds, FontStyle, FontWeight, Hsla, PathBuilder, Pixels,
-    ShapedLine, SharedString, TextRun, Window,
+    fill, font, point, px, size, Bounds, FontFallbacks, FontFeatures, FontStyle, FontWeight, Hsla,
+    PathBuilder, Pixels, ShapedLine, SharedString, TextRun, Window,
 };
 use mt_term::{Cell, CellColor, CellFlags, CursorShape, RenderSnapshot, Underline};
 
-use crate::{builtin_glyphs, metrics::*, theme::Theme};
+use crate::{builtin_glyphs, metrics::*, theme::Theme, typography};
 
 /// Measured size of one terminal cell, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,21 +24,22 @@ pub struct CellMetrics {
     pub font_size: f32,
 }
 
-/// The terminal font from the config: family and the regular/bold weights.
+/// The terminal font from the config (SPEC §7.1): family, weights, OpenType features and the
+/// fallback chain handed to the text system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TermFont {
     pub family: SharedString,
     pub weight: f32,
     pub bold_weight: f32,
+    pub ligatures: bool,
+    features_on: Vec<(String, u32)>,
+    features_off: Vec<(String, u32)>,
+    fallbacks: Vec<String>,
 }
 
 impl Default for TermFont {
     fn default() -> Self {
-        Self {
-            family: TERM_FONT.into(),
-            weight: 400.0,
-            bold_weight: 700.0,
-        }
+        Self::from_config(&mt_config::Font::default())
     }
 }
 
@@ -48,16 +49,33 @@ impl TermFont {
             family: f.family.clone().into(),
             weight: f.weight.numeric().map_or(400.0, f32::from),
             bold_weight: f.bold_weight.numeric().map_or(700.0, f32::from),
+            ligatures: f.ligatures,
+            features_on: typography::font_features(f.ligatures, &f.features),
+            features_off: typography::font_features(false, &f.features),
+            fallbacks: typography::fallback_families(&f.family, &f.fallback),
         }
     }
 
-    /// The GPUI font for a style run.
+    /// The GPUI font for a style run, with the configured ligature setting.
     pub fn font(&self, bold: bool, italic: bool) -> gpui::Font {
+        self.font_with(bold, italic, self.ligatures)
+    }
+
+    /// Like [`font`](Self::font) but with ligatures forced off when `ligatures` is false. Used to
+    /// reshape a run whose cursor or selection boundary sits inside a ligature.
+    pub fn font_with(&self, bold: bool, italic: bool, ligatures: bool) -> gpui::Font {
         let mut f = font(self.family.clone());
         f.weight = FontWeight(if bold { self.bold_weight } else { self.weight });
         if italic {
             f.style = FontStyle::Italic;
         }
+        let features = if ligatures {
+            &self.features_on
+        } else {
+            &self.features_off
+        };
+        f.features = FontFeatures(Arc::new(features.clone()));
+        f.fallbacks = Some(FontFallbacks::from_fonts(self.fallbacks.clone()));
         f
     }
 }
@@ -104,10 +122,21 @@ impl CellMetrics {
     }
 }
 
-/// Shaped rows keyed by `(row hash, theme/font generation)`.
+/// One shaped piece of a row, painted at `col` cells from the left plus `dx` pixels. Plain ASCII
+/// stretches are one segment (so ligatures can form); every other cell is its own segment so
+/// fallback, wide and combining glyphs stay locked to the grid.
+pub struct Segment {
+    pub col: usize,
+    pub dx: f32,
+    pub line: ShapedLine,
+}
+
+pub type ShapedRow = Rc<Vec<Segment>>;
+
+/// Shaped rows keyed by `(row hash + cursor/ligature salt, theme/font generation)`.
 #[derive(Default)]
 pub struct LineCache {
-    map: HashMap<(u64, u64), ShapedLine>,
+    map: HashMap<(u64, u64), ShapedRow>,
 }
 
 impl LineCache {
@@ -115,8 +144,8 @@ impl LineCache {
         &mut self,
         key: (u64, u64),
         capacity: usize,
-        shape: impl FnOnce() -> ShapedLine,
-    ) -> ShapedLine {
+        shape: impl FnOnce() -> ShapedRow,
+    ) -> ShapedRow {
         if let Some(line) = self.map.get(&key) {
             return line.clone();
         }
@@ -197,57 +226,230 @@ fn theme_key(t: &Theme, font_generation: u64) -> u64 {
     h
 }
 
+/// Shapes a plain ASCII stretch. If every glyph maps to one cell the line is re-shaped with
+/// `force_width` so rounding drift cannot accumulate; if a merged ligature glyph exists the
+/// font's own advances are kept so the ligature spans exactly its cells.
+fn shape_plain(window: &Window, text: &str, runs: &[TextRun], m: &CellMetrics) -> ShapedLine {
+    let text = SharedString::from(text.to_string());
+    let ts = window.text_system();
+    let free = ts.shape_line(text.clone(), px(m.font_size), runs, None);
+    let glyphs: usize = free.runs.iter().map(|r| r.glyphs.len()).sum();
+    if glyphs == text.len() {
+        ts.shape_line(text, px(m.font_size), runs, Some(px(m.width)))
+    } else {
+        free
+    }
+}
+
+fn glyph_keys(line: &ShapedLine) -> Vec<typography::GlyphKey<gpui::GlyphId>> {
+    line.runs
+        .iter()
+        .flat_map(|r| r.glyphs.iter().map(|g| (g.index, g.id)))
+        .collect()
+}
+
+type Style = (Hsla, bool, bool);
+
+fn cell_style(cell: &Cell, t: &Theme) -> Style {
+    (
+        cell_colors(cell, t).0,
+        cell.flags.has(CellFlags::BOLD),
+        cell.flags.has(CellFlags::ITALIC),
+    )
+}
+
+/// The character drawn for a cell inside a plain segment (blanks, procedural and hidden glyphs
+/// become spaces: they are painted separately).
+fn is_blank_cell(cell: &Cell, prev_wide: bool) -> bool {
+    (cell.flags.has(CellFlags::WIDE_SPACER) && !prev_wide)
+        || builtin_glyphs::is_builtin(cell.ch)
+        || cell.ch == '\0'
+        || cell.flags.has(CellFlags::HIDDEN)
+}
+
+/// Builds the text runs of one plain segment for the given ligature setting.
+fn plain_runs(cells: &[(char, Style)], font: &TermFont, ligatures: bool) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(cells.len());
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut prev: Option<Style> = None;
+    for (ch, style) in cells {
+        text.push(*ch);
+        if prev == Some(*style) {
+            runs.last_mut().expect("run exists").len += 1;
+            continue;
+        }
+        prev = Some(*style);
+        runs.push(TextRun {
+            len: 1,
+            font: font.font_with(style.1, style.2, ligatures),
+            color: style.0,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+    (text, runs)
+}
+
+/// Shapes one non-plain cell (fallback, wide, emoji or combining sequence) on its own: scaled
+/// down if wider than its cells, then centred in them.
+fn shape_cell(
+    window: &Window,
+    cell: &Cell,
+    color: Hsla,
+    m: &CellMetrics,
+    font: &TermFont,
+) -> (ShapedLine, f32) {
+    let cells = if cell.flags.has(CellFlags::WIDE) {
+        2
+    } else {
+        1
+    };
+    let mut text = String::from(cell.ch);
+    if let Some(z) = &cell.zerowidth {
+        text.extend(z.iter());
+    }
+    shape_glyphs(window, text, cells, cell, color, m, font)
+}
+
+/// Shapes `text` (one cluster) into `cells` cells using `cell`'s bold/italic flags.
+fn shape_glyphs(
+    window: &Window,
+    text: String,
+    cells: usize,
+    cell: &Cell,
+    color: Hsla,
+    m: &CellMetrics,
+    font: &TermFont,
+) -> (ShapedLine, f32) {
+    let text = SharedString::from(text);
+    let f = font.font(
+        cell.flags.has(CellFlags::BOLD),
+        cell.flags.has(CellFlags::ITALIC),
+    );
+    let run = |len: usize| TextRun {
+        len,
+        font: f.clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let ts = window.text_system();
+    let mut line = ts.shape_line(text.clone(), px(m.font_size), &[run(text.len())], None);
+    let w = f32::from(line.width);
+    let scale = typography::fit_scale(cells, m.width, w);
+    let mut width = w;
+    if scale < 1.0 {
+        line = ts.shape_line(
+            text.clone(),
+            px(m.font_size * scale),
+            &[run(text.len())],
+            None,
+        );
+        width = f32::from(line.width);
+    }
+    (line, typography::centre_offset(cells, m.width, width))
+}
+
+/// Shapes a row into segments (SPEC §6.2 step 4, §7.2). `cursor` is the cursor column when it is
+/// on this row; with it and `selection_edges`, a plain segment whose ligature would contain the
+/// cursor or a selection boundary is reshaped without ligatures.
 fn shape_row(
     window: &Window,
     row: &[Cell],
     t: &Theme,
     m: &CellMetrics,
     font: &TermFont,
-    cols: usize,
-) -> ShapedLine {
-    let mut text = String::with_capacity(cols);
-    let mut runs: Vec<TextRun> = Vec::new();
-    let mut prev: Option<(Hsla, bool, bool)> = None;
-    for cell in row {
-        let (fg, _) = cell_colors(cell, t);
-        let blank = cell.flags.has(CellFlags::WIDE_SPACER)
-            || builtin_glyphs::is_builtin(cell.ch)
-            || cell.ch == '\0'
-            || cell.flags.has(CellFlags::HIDDEN);
-        let ch = if blank { ' ' } else { cell.ch };
-        let start = text.len();
-        text.push(ch);
-        if !blank {
-            if let Some(z) = &cell.zerowidth {
-                text.extend(z.iter());
-            }
+    cursor: Option<usize>,
+    selection_edges: &[usize],
+) -> Vec<Segment> {
+    let mut out = Vec::new();
+    let mut plain: Vec<(char, Style)> = Vec::new();
+    let mut plain_start = 0;
+
+    let flush = |plain: &mut Vec<(char, Style)>, start: usize, out: &mut Vec<Segment>| {
+        if plain.is_empty() {
+            return;
         }
-        let len = text.len() - start;
-        let style = (
-            fg,
-            cell.flags.has(CellFlags::BOLD),
-            cell.flags.has(CellFlags::ITALIC),
-        );
-        if prev == Some(style) {
-            runs.last_mut().expect("run exists").len += len;
+        if plain.iter().any(|(ch, _)| *ch != ' ') {
+            let (text, runs) = plain_runs(plain, font, font.ligatures);
+            let mut line = shape_plain(window, &text, &runs, m);
+            let end = start + plain.len();
+            let touched = cursor.is_some_and(|c| (start..end).contains(&c))
+                || selection_edges.iter().any(|&e| e > start && e < end);
+            if font.ligatures && touched {
+                let (ptext, pruns) = plain_runs(plain, font, false);
+                let flat = shape_plain(window, &ptext, &pruns, m);
+                let spans =
+                    typography::ligature_spans(&glyph_keys(&line), &glyph_keys(&flat), plain.len());
+                let abs: Vec<_> = spans
+                    .iter()
+                    .map(|r| r.start + start..r.end + start)
+                    .collect();
+                if typography::needs_reshape(&abs, cursor, selection_edges) {
+                    line = flat;
+                }
+            }
+            out.push(Segment {
+                col: start,
+                dx: 0.0,
+                line,
+            });
+        }
+        plain.clear();
+    };
+
+    let mut prev_wide = false;
+    let mut skip_next = false;
+    for (c, cell) in row.iter().enumerate() {
+        if std::mem::take(&mut skip_next) {
             continue;
         }
-        prev = Some(style);
-        runs.push(TextRun {
-            len,
-            font: font.font(style.1, style.2),
-            color: fg,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        });
+        if cell.flags.has(CellFlags::WIDE_SPACER) && prev_wide {
+            prev_wide = false;
+            continue;
+        }
+        let blank = is_blank_cell(cell, prev_wide);
+        prev_wide = cell.flags.has(CellFlags::WIDE);
+        let ch = if blank { ' ' } else { cell.ch };
+        let wide = cell.flags.has(CellFlags::WIDE);
+        let has_z = !blank && cell.zerowidth.is_some();
+        if typography::is_plain_cell(ch, has_z, wide) {
+            if plain.is_empty() {
+                plain_start = c;
+            }
+            plain.push((ch, cell_style(cell, t)));
+        } else {
+            flush(&mut plain, plain_start, &mut out);
+            // A flag is two narrow regional indicators: shape the pair across both cells.
+            let flag = typography::is_regional_indicator(cell.ch)
+                .then(|| row.get(c + 1))
+                .flatten()
+                .filter(|n| {
+                    typography::is_regional_indicator(n.ch) && !n.flags.has(CellFlags::WIDE)
+                });
+            let color = cell_colors(cell, t).0;
+            let (line, dx) = match flag {
+                Some(next) => {
+                    skip_next = true;
+                    shape_glyphs(
+                        window,
+                        format!("{}{}", cell.ch, next.ch),
+                        2,
+                        cell,
+                        color,
+                        m,
+                        font,
+                    )
+                }
+                None => shape_cell(window, cell, color, m, font),
+            };
+            out.push(Segment { col: c, dx, line });
+        }
     }
-    window.text_system().shape_line(
-        SharedString::from(text),
-        px(m.font_size),
-        &runs,
-        Some(px(m.width)),
-    )
+    flush(&mut plain, plain_start, &mut out);
+    out
 }
 
 fn quad(window: &mut Window, x: f32, y: f32, w: f32, h: f32, color: Hsla) {
@@ -355,13 +557,24 @@ pub fn paint_terminal(
         }
 
         // 2. Text.
-        let line = p
+        // The cursor cell must stay individually addressable, so its row is keyed (and shaped)
+        // with the cursor column when ligatures are on.
+        let cursor_col = (p.font.ligatures && snap.cursor.visible && snap.cursor.row == r)
+            .then_some(snap.cursor.col);
+        let row_key = snap.row_hashes[r]
+            ^ cursor_col.map_or(0, |c| (c as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let segments = p
             .cache
             .borrow_mut()
-            .get_or_shape((snap.row_hashes[r], key), capacity, || {
-                shape_row(window, row, t, m, &p.font, snap.cols)
+            .get_or_shape((row_key, key), capacity, || {
+                Rc::new(shape_row(window, row, t, m, &p.font, cursor_col, &[]))
             });
-        let _ = line.paint(point(px(ox), px(y)), px(m.height), window, cx);
+        for seg in segments.iter() {
+            let x = ox + seg.col as f32 * m.width + seg.dx;
+            let _ = seg
+                .line
+                .paint(point(px(x), px(y)), px(m.height), window, cx);
+        }
 
         // 3. Procedural glyphs and decorations.
         for (c, cell) in row.iter().enumerate() {
@@ -481,29 +694,8 @@ fn paint_cursor(window: &mut Window, cx: &mut gpui::App, p: &TerminalPaint, ox: 
                 && cell.ch != '\0'
                 && !cell.flags.has(CellFlags::HIDDEN)
             {
-                let mut text = String::from(cell.ch);
-                if let Some(z) = &cell.zerowidth {
-                    text.extend(z.iter());
-                }
-                let f = p.font.font(
-                    cell.flags.has(CellFlags::BOLD),
-                    cell.flags.has(CellFlags::ITALIC),
-                );
-                let len = text.len();
-                let line = window.text_system().shape_line(
-                    SharedString::from(text),
-                    px(m.font_size),
-                    &[TextRun {
-                        len,
-                        font: f,
-                        color: t.term.cursor_text,
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                    }],
-                    Some(px(m.width)),
-                );
-                let _ = line.paint(point(px(x), px(y)), px(m.height), window, cx);
+                let (line, dx) = shape_cell(window, cell, t.term.cursor_text, m, &p.font);
+                let _ = line.paint(point(px(x + dx), px(y)), px(m.height), window, cx);
             }
         }
         CursorShape::Beam => quad(window, x, y, (m.width / 8.0).max(1.5), h, color),

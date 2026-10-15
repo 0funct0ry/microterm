@@ -37,6 +37,17 @@
   `term`, `tab_bar.position` / `hide_if_single`, scrollbar mode, bell mode, paste confirmation,
   `clipboard.osc52`, scroll multiplier and `[[keys]]`. Other schema keys are accepted and
   validated now and take effect in the milestone that implements them.
+- **M4 — Typography.** The full `[font]` table now drives rendering: `ligatures`
+  (calt/liga/dlig), extra OpenType `features` and the ordered `fallback` list. Symbols Nerd Font
+  Mono (MIT) is bundled and is the first default fallback. Rows are shaped in segments: plain
+  text runs shape together so ligatures span exactly their cells, and a run is reshaped without
+  ligatures when the cursor (or, later, a selection boundary) is inside one. Fallback, wide,
+  emoji and combining glyphs sit on their own cells, scaled to fit and centred; regional
+  indicator pairs draw as flags. `IncreaseFontSize` / `DecreaseFontSize` / `ResetFontSize` work
+  per window and resize the PTYs; the line cache is keyed by font generation and size. New
+  `microterm ls-fonts [--text STR]` prints the font chosen for each character and why. Known gaps:
+  the terminal engine has no grapheme clustering, so ZWJ sequences and skin tones keep one cell
+  pair per scalar.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

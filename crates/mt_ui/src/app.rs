@@ -143,6 +143,8 @@ pub struct AppWindow {
     pub(crate) cfg: Arc<mt_config::Config>,
     pub(crate) font: TermFont,
     pub(crate) font_generation: u64,
+    /// Per-window font size set by Increase/DecreaseFontSize; `None` follows the config.
+    pub(crate) font_size_override: Option<f32>,
     pub(crate) config_banner_kind: ToastKind,
     /// False until the first paint has sized the PTY, so start-up shows no resize HUD.
     pub(crate) hud_armed: Rc<Cell<bool>>,
@@ -233,6 +235,7 @@ impl AppWindow {
             cfg,
             font,
             font_generation,
+            font_size_override: None,
             config_banner_kind: ToastKind::Error,
             hud_armed: Rc::new(Cell::new(false)),
             blink_started: false,
@@ -1404,19 +1407,15 @@ impl AppWindow {
             let s = cx.global::<Settings>();
             (s.config.clone(), s.font_generation)
         };
+        // A config edit of `font.size` takes over from the window's own zoom.
+        if self.cfg.font.size != cfg.font.size {
+            self.font_size_override = None;
+        }
         self.cfg = cfg.clone();
         self.font = TermFont::from_config(&cfg.font);
         self.font_generation = generation;
         if diff.has(mt_config::Effect::Relayout) {
-            self.cell =
-                CellMetrics::measure(window, &self.font, cfg.font.size, cfg.font.line_height);
-            // Paint pushes the new grid size to each PTY; that is not a user resize.
-            self.hud_armed.set(false);
-            for tab in &self.tabs {
-                if let Some(s) = &tab.session {
-                    s.size.set((0, 0));
-                }
-            }
+            self.relayout(window);
         }
         let background = background_appearance(&cfg.window);
         window.set_background_appearance(background);
@@ -1428,6 +1427,41 @@ impl AppWindow {
             }
         }
         self.cursor_phase = true;
+        cx.notify();
+    }
+
+    /// The font size this window renders with: its own zoom, else the config's.
+    pub(crate) fn font_size(&self) -> f32 {
+        self.font_size_override.unwrap_or(self.cfg.font.size)
+    }
+
+    /// Re-measures the cell and makes every PTY pick up the new grid size on the next paint.
+    fn relayout(&mut self, window: &Window) {
+        self.cell = CellMetrics::measure(
+            window,
+            &self.font,
+            self.font_size(),
+            self.cfg.font.line_height,
+        );
+        // Paint pushes the new grid size to each PTY; that is not a user resize.
+        self.hud_armed.set(false);
+        for tab in &self.tabs {
+            if let Some(s) = &tab.session {
+                s.size.set((0, 0));
+            }
+        }
+    }
+
+    /// `IncreaseFontSize` / `DecreaseFontSize` (`Some(step)`) and `ResetFontSize` (`None`).
+    pub(crate) fn change_font_size(
+        &mut self,
+        step: Option<f32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_size_override =
+            step.map(|d| crate::typography::step_font_size(self.font_size(), d));
+        self.relayout(window);
         cx.notify();
     }
 

@@ -458,3 +458,40 @@ fn theme_selector_lists_every_bundled_theme(cx: &mut TestAppContext) {
         assert_eq!(cx.global::<crate::settings::Settings>().registry.len(), 53);
     });
 }
+
+#[gpui::test]
+fn font_size_actions_resize_the_cell_and_reset(cx: &mut TestAppContext) {
+    let f = temp_config("fontsize", "");
+    let (view, cx) = setup_with_config(cx, f);
+    let size = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |t, _| t.cell.font_size);
+    let width = |cx: &mut gpui::VisualTestContext| view.read_with(cx, |t, _| t.cell.width);
+    assert_eq!(size(cx), 13.0);
+    let w0 = width(cx);
+    cx.dispatch_action(IncreaseFontSize);
+    cx.dispatch_action(IncreaseFontSize);
+    assert_eq!(size(cx), 15.0);
+    assert!(width(cx) > w0, "wider cells at a larger size");
+    cx.dispatch_action(DecreaseFontSize);
+    assert_eq!(size(cx), 14.0);
+    cx.dispatch_action(ResetFontSize);
+    assert_eq!(size(cx), 13.0);
+    assert_eq!(width(cx), w0);
+    assert_eq!(
+        view.read_with(cx, |t, _| t.cfg.font.size),
+        13.0,
+        "config untouched"
+    );
+}
+
+#[gpui::test]
+fn config_font_size_edit_replaces_window_zoom(cx: &mut TestAppContext) {
+    use crate::settings::reload;
+    let f = temp_config("fontzoom", "");
+    let app = cx.clone();
+    let (view, vcx) = setup_with_config(cx, f.clone());
+    vcx.dispatch_action(IncreaseFontSize);
+    assert_eq!(view.read_with(vcx, |t, _| t.cell.font_size), 14.0);
+    std::fs::write(&f, "[font]\nsize = 18\n").unwrap();
+    app.update(reload);
+    assert_eq!(view.read_with(vcx, |t, _| t.cell.font_size), 18.0);
+}

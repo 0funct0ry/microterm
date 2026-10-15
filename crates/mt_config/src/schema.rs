@@ -170,8 +170,37 @@ impl Default for Font {
             bold_weight: FontWeight::Name("bold".into()),
             ligatures: true,
             features: Vec::new(),
-            fallback: Vec::new(),
+            fallback: vec!["Symbols Nerd Font Mono".into()],
         }
+    }
+}
+
+/// Parse an OpenType feature spec: `"zero"` (enabled) or `"ss02=1"` / `"calt=0"`.
+/// The tag must be exactly four ASCII graphic characters.
+pub fn parse_font_feature(spec: &str) -> Option<(String, u32)> {
+    let (tag, value) = match spec.split_once('=') {
+        Some((t, v)) => (t.trim(), v.trim().parse::<u32>().ok()?),
+        None => (spec.trim(), 1),
+    };
+    (tag.len() == 4 && tag.bytes().all(|b| b.is_ascii_graphic())).then(|| (tag.to_string(), value))
+}
+
+#[cfg(test)]
+mod font_feature_tests {
+    use super::*;
+
+    #[test]
+    fn parses_tags_and_values() {
+        assert_eq!(parse_font_feature("zero"), Some(("zero".into(), 1)));
+        assert_eq!(parse_font_feature("ss02=0"), Some(("ss02".into(), 0)));
+        assert_eq!(parse_font_feature("ss020"), None);
+        assert_eq!(parse_font_feature("zer"), None);
+        assert_eq!(parse_font_feature("zero=x"), None);
+    }
+
+    #[test]
+    fn default_fallback_starts_with_nerd_symbols() {
+        assert_eq!(Font::default().fallback[0], "Symbols Nerd Font Mono");
     }
 }
 

@@ -127,14 +127,14 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| {
                 this.scroll_terminal(ScrollCmd::Bottom, cx)
             }))
-            .on_action(cx.listener(|this, _: &IncreaseFontSize, _, cx| {
-                this.on_stub("Font size changes", "M4", cx)
+            .on_action(cx.listener(|this, _: &IncreaseFontSize, window, cx| {
+                this.change_font_size(Some(crate::typography::FONT_SIZE_STEP), window, cx)
             }))
-            .on_action(cx.listener(|this, _: &DecreaseFontSize, _, cx| {
-                this.on_stub("Font size changes", "M4", cx)
+            .on_action(cx.listener(|this, _: &DecreaseFontSize, window, cx| {
+                this.change_font_size(Some(-crate::typography::FONT_SIZE_STEP), window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| {
-                this.on_stub("Font size changes", "M4", cx)
+            .on_action(cx.listener(|this, _: &ResetFontSize, window, cx| {
+                this.change_font_size(None, window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ReloadConfig, window, cx| this.reload_config(window, cx)),
@@ -480,7 +480,8 @@ impl AppWindow {
                 focused: self.viewport_focus.is_focused(window) && window.is_window_active(),
                 cursor_on: self.cursor_phase,
                 cache,
-                font_generation: self.font_generation,
+                // The size is part of the key: cached lines were shaped at one size.
+                font_generation: self.font_generation ^ (u64::from(cell.font_size.to_bits()) << 32),
                 font: self.font.clone(),
             };
             let entity = cx.entity();

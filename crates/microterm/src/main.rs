@@ -18,6 +18,9 @@ fn main() {
         Some(Command::Themes(cmd)) => {
             std::process::exit(commands::themes(&cmd, cli.config.as_deref()))
         }
+        Some(Command::LsFonts { text }) => {
+            std::process::exit(mt_ui::ls_fonts::run(cli.config, text))
+        }
         Some(command) => {
             eprintln!("not implemented yet ({})", command.milestone());
             std::process::exit(1);

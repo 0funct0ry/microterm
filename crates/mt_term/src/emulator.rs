@@ -532,4 +532,55 @@ mod tests {
             Damage::Full => panic!("expected partial damage"),
         }
     }
+
+    /// Cells used by `text` followed by `x`, and where `x` landed. The engine has no grapheme
+    /// clustering (SPEC §7.2 defers widths to its tables), so these pin down what the renderer
+    /// has to cope with.
+    fn x_col(text: &str) -> usize {
+        let mut e = emu(16, 2);
+        e.advance(text.as_bytes());
+        e.advance(b"x");
+        let s = e.snapshot();
+        s.row(0)
+            .iter()
+            .position(|c| c.ch == 'x')
+            .expect("x on row 0")
+    }
+
+    #[test]
+    fn emoji_and_cjk_widths() {
+        assert_eq!(x_col("a"), 1);
+        assert_eq!(x_col("🦀"), 2, "emoji presentation is 2 cells");
+        assert_eq!(x_col("漢字"), 4, "CJK is 2 cells each");
+        assert_eq!(x_col("e\u{301}"), 1, "combining mark adds no cell");
+        assert_eq!(x_col("❤\u{fe0f}"), 1, "VS16 does not widen in the engine");
+        assert_eq!(x_col("❤\u{fe0e}"), 1);
+    }
+
+    #[test]
+    fn multi_codepoint_emoji_widths_follow_the_engine() {
+        // No grapheme clustering: each wide scalar takes its own two cells.
+        assert_eq!(
+            x_col("👍🏽"),
+            4,
+            "skin tone modifier is its own wide cell pair"
+        );
+        assert_eq!(
+            x_col("👨\u{200d}👩\u{200d}👧"),
+            6,
+            "ZWJ keeps the joiner on the previous cell"
+        );
+        // Regional indicators are narrow: a flag is two single cells.
+        assert_eq!(x_col("🇯🇵"), 2);
+    }
+
+    #[test]
+    fn zwj_is_stored_as_a_zero_width_mark() {
+        let mut e = emu(16, 2);
+        e.advance("👨\u{200d}👩".as_bytes());
+        let s = e.snapshot();
+        assert_eq!(s.row(0)[0].zerowidth.as_deref(), Some(&['\u{200d}'][..]));
+        assert!(s.row(0)[0].flags.has(CellFlags::WIDE));
+        assert_eq!(s.row(0)[2].ch, '👩');
+    }
 }

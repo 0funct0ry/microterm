@@ -26,7 +26,7 @@ weight = "regular"
 bold_weight = "bold"
 ligatures = true
 features = []
-fallback = []
+fallback = ["Symbols Nerd Font Mono"]
 
 [window]
 padding = { x = 8, y = 6 }

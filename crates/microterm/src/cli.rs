@@ -197,8 +197,7 @@ impl Command {
     pub fn milestone(&self) -> &'static str {
         match self {
             Command::Ssh(_) => "M10",
-            Command::LsFonts { .. } => "M4",
-            Command::Themes(_) | Command::Config(_) => "M3",
+            Command::Themes(_) | Command::Config(_) | Command::LsFonts { .. } => "M3",
             Command::Completions { .. } | Command::Record(_) | Command::Cli(_) => "M9",
         }
     }
