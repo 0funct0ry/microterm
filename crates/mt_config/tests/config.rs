@@ -153,3 +153,25 @@ fn render_format() {
         "microterm.toml:12:5 — unknown key \"fnt\""
     );
 }
+
+#[test]
+fn tab_and_workspace_validation() {
+    let msg = |src: &str| {
+        err(src)
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    assert!(msg("[tab_bar]\ntitle_format = \"{nope}\"\n").contains("unknown placeholder {nope}"));
+    assert!(parse_str("[tab_bar]\ntitle_format = \"{index}:{process} {cwd_basename}\"\n").is_ok());
+    assert!(msg("new_tab_cwd = \"relative/dir\"\n").contains("new_tab_cwd"));
+    assert!(parse_str("new_tab_cwd = \"~/work\"\n").is_ok());
+    assert!(
+        msg("[[workspaces]]\nname = \"a\"\n[[workspaces]]\nname = \"a\"\n")
+            .contains("more than once")
+    );
+    assert!(msg("[[workspaces]]\nname = \" \"\n").contains("must not be empty"));
+    assert!(msg("startup_workspace = \"ghost\"\n").contains("not defined"));
+    assert!(parse_str("startup_workspace = \"api\"\n[[workspaces]]\nname = \"api\"\n").is_ok());
+}

@@ -17,6 +17,9 @@ clap.workspace = true
 mt_ui = { path = "../mt_ui" }
 mt_config = { path = "../mt_config" }
 mt_theme = { path = "../mt_theme" }
+async-channel.workspace = true
+serde_json = "1"
+libc = "0.2"
 
 [dev-dependencies]
 assert_cmd.workspace = true

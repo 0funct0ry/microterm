@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -64,6 +65,8 @@ pub struct Terminal {
     shared: Arc<Shared>,
     sender: EventLoopSender,
     pid: u32,
+    /// PTY master fd, for foreground-process queries. Owned by the event loop.
+    master_fd: RawFd,
     scrollback: usize,
 }
 
@@ -130,6 +133,7 @@ impl Terminal {
         };
         let pty = tty::new(&pty_opts, window_size, 0)?;
         let pid = pty.child().id();
+        let master_fd = pty.file().as_raw_fd();
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         shared.set_pty(sender.clone());
@@ -140,12 +144,25 @@ impl Terminal {
             shared,
             sender,
             pid,
+            master_fd,
             scrollback: opts.scrollback,
         })
     }
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// The foreground process when it is not the shell itself (drives the dirty dot and the
+    /// `confirm_close = \"process\"` policy).
+    pub fn foreground_process(&self) -> Option<crate::ForegroundProcess> {
+        crate::process::foreground(self.master_fd, self.pid)
+    }
+
+    /// Working directory of the foreground process, falling back to the shell's.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        let pid = self.foreground_process().map_or(self.pid, |p| p.pid);
+        crate::process::process_cwd(pid).or_else(|| crate::process::process_cwd(self.pid))
     }
 
     /// Queues bytes for the child. Never blocks on a full PTY buffer.
@@ -309,6 +326,34 @@ mod tests {
         t.send_key(&KeyInput::new(crate::input::Key::Enter, Default::default()));
         let rows = wait_for(&t, &rx, "hi");
         assert!(rows.iter().any(|l| l.trim() == "hi"), "{rows:?}");
+    }
+
+    #[test]
+    fn foreground_process_and_cwd_are_tracked() {
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let (t, _rx) = spawn_sh(&format!("cd {} && exec sleep 20", dir.display()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut cwd = None;
+        while Instant::now() < deadline {
+            cwd = t.cwd().and_then(|p| p.canonicalize().ok());
+            if cwd.as_ref() == Some(&dir) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(cwd, Some(dir));
+    }
+
+    #[test]
+    fn child_of_shell_is_foreground() {
+        let (t, _rx) = spawn_sh("sleep 5");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut name = None;
+        while name.is_none() && Instant::now() < deadline {
+            name = t.foreground_process().map(|p| p.name);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(name.as_deref(), Some("sleep"));
     }
 
     #[test]

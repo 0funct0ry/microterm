@@ -20,7 +20,7 @@ pub use keybinding::KeyBinding;
 pub use list::{ListItem, Picker, PickerRow};
 pub use modal::Modal;
 pub use status::{Pill, StatusDot, StatusKind};
-pub use tab::{Tab, TabBar};
+pub use tab::{DraggedTab, Tab, TabBar};
 pub use text_input::TextInput;
 pub use toast::{Banner, Toast, ToastKind};
 pub use tooltip::Tooltip;

@@ -11,6 +11,7 @@
 mod emulator;
 mod events;
 mod input;
+mod process;
 mod shell;
 mod snapshot;
 mod terminal;
@@ -21,6 +22,7 @@ pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,
     KittyFlags, Mods,
 };
+pub use process::ForegroundProcess;
 pub use shell::{resolve_shell, resolve_shell_with};
 pub use snapshot::{
     Cell, CellColor, CellFlags, Cursor, CursorShape, Damage, Modes, RenderSnapshot, Underline,

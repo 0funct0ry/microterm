@@ -19,6 +19,10 @@ actions!(
         SpawnTab,
         CloseTab,
         SpawnWindow,
+        CloseWindow,
+        RenameTab,
+        CreateWorkspace,
+        RenameWorkspace,
         ToggleFullscreen,
         Copy,
         Paste,
@@ -61,6 +65,19 @@ pub struct ActivateTabRelative(pub isize);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct SwitchWorkspaceRelative(pub isize);
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct MoveTabRelative(pub isize);
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct SwitchWorkspace(pub String);
+
+/// New tab in a named domain. Only `local` exists until SSH domains arrive (M10).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct SpawnTabInDomain(pub String);
 
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
@@ -154,6 +171,54 @@ pub static ACTIONS: &[ActionDef] = &[
         &["cmd-shift-["],
         &["ctrl-shift-tab"],
         ActivateTabRelative(-1)
+    ),
+    def!(
+        "MoveTabRelative(-1)",
+        "Move tab left",
+        "Move the active tab one position left",
+        &[],
+        &[],
+        MoveTabRelative(-1)
+    ),
+    def!(
+        "MoveTabRelative(1)",
+        "Move tab right",
+        "Move the active tab one position right",
+        &[],
+        &[],
+        MoveTabRelative(1)
+    ),
+    def!(
+        "RenameTab",
+        "Rename tab",
+        "Edit the active tab's title",
+        &[],
+        &[],
+        RenameTab
+    ),
+    def!(
+        "CloseWindow",
+        "Close window",
+        "Close the window and all its tabs",
+        &[],
+        &[],
+        CloseWindow
+    ),
+    def!(
+        "CreateWorkspace",
+        "Create workspace",
+        "Create a workspace and switch to it",
+        &[],
+        &[],
+        CreateWorkspace
+    ),
+    def!(
+        "RenameWorkspace",
+        "Rename workspace",
+        "Rename the active workspace",
+        &[],
+        &[],
+        RenameWorkspace
     ),
     def!(
         "SpawnWindow",
@@ -399,6 +464,13 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
         }
         ("SwitchWorkspaceRelative", Some(ActionArg::Int(n))) => {
             Ok(Box::new(SwitchWorkspaceRelative(*n as isize)))
+        }
+        ("MoveTabRelative", Some(ActionArg::Int(n))) => Ok(Box::new(MoveTabRelative(*n as isize))),
+        ("SwitchWorkspace", Some(ActionArg::Str(name))) => {
+            Ok(Box::new(SwitchWorkspace(name.clone())))
+        }
+        ("SpawnTabInDomain", Some(ActionArg::Str(name))) => {
+            Ok(Box::new(SpawnTabInDomain(name.clone())))
         }
         ("ScrollByPage", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollByPage(*n as isize))),
         ("ScrollByLine", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollByLine(*n as isize))),

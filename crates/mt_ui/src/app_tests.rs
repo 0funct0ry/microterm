@@ -168,10 +168,16 @@ fn theme_selector_enter_keeps_the_theme(cx: &mut TestAppContext) {
     assert_eq!(cx.update(|_, cx| cx.global::<Theme>().name), "One Light");
 }
 
+fn tab_ids(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<u64> {
+    view.read_with(cx, |t, _| t.tabs.iter().map(|t| t.id).collect())
+}
+
 #[gpui::test]
 fn tabs_can_be_added_closed_and_switched(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
-    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), 3);
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), 1);
+    cx.dispatch_action(SpawnTab);
+    cx.dispatch_action(SpawnTab);
     cx.dispatch_action(SpawnTab);
     assert_eq!(
         view.read_with(cx, |t, _| (t.tabs.len(), t.active_tab)),
@@ -186,6 +192,156 @@ fn tabs_can_be_added_closed_and_switched(cx: &mut TestAppContext) {
         view.read_with(cx, |t, _| (t.tabs.len(), t.active_tab)),
         (3, 2)
     );
+}
+
+#[gpui::test]
+fn new_tab_opens_after_the_active_tab(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    cx.dispatch_action(SpawnTab);
+    let before = tab_ids(&view, cx);
+    cx.dispatch_action(ActivateTab(0));
+    cx.dispatch_action(SpawnTab);
+    let after = tab_ids(&view, cx);
+    assert_eq!(after.len(), 4);
+    assert_eq!(after[0], before[0]);
+    assert_eq!(&after[2..], &before[1..]);
+    assert_eq!(view.read_with(cx, |t, _| t.active_tab), 1);
+}
+
+#[gpui::test]
+fn tabs_move_and_keep_the_active_one(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    cx.dispatch_action(SpawnTab);
+    let ids = tab_ids(&view, cx);
+    cx.dispatch_action(ActivateTab(0));
+    cx.dispatch_action(MoveTabRelative(1));
+    assert_eq!(tab_ids(&view, cx), vec![ids[1], ids[0], ids[2]]);
+    assert_eq!(view.read_with(cx, |t, _| t.active_tab), 1);
+    cx.dispatch_action(MoveTabRelative(-1));
+    assert_eq!(tab_ids(&view, cx), ids);
+    // Drag-to-reorder: drop the last tab onto the first.
+    view.update_in(cx, |this, window, cx| {
+        this.move_tab_onto(ids[2], ids[0], window, cx)
+    });
+    assert_eq!(tab_ids(&view, cx), vec![ids[2], ids[0], ids[1]]);
+}
+
+#[gpui::test]
+fn tabs_are_renamed_inline(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(RenameTab);
+    assert!(view.read_with(cx, |t, _| t.renaming.is_some()));
+    // Clear the prefilled text, type a name, commit.
+    for _ in 0..16 {
+        cx.simulate_keystrokes("backspace");
+    }
+    cx.simulate_input("api");
+    cx.simulate_keystrokes("enter");
+    assert!(view.read_with(cx, |t, _| t.renaming.is_none()));
+    assert_eq!(view.read_with(cx, |t, _| t.tabs[0].title.clone()), "api");
+    // Escape cancels without changing the title.
+    cx.dispatch_action(RenameTab);
+    cx.simulate_input("zzz");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(view.read_with(cx, |t, _| t.tabs[0].title.clone()), "api");
+}
+
+#[gpui::test]
+fn closing_the_last_tab_closes_the_window(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_global(Theme::one_dark());
+        let bindings = actions::key_bindings(Platform::current(), cx);
+        cx.bind_keys(bindings);
+    });
+    let (view, window) = cx.add_window_view(AppWindow::new);
+    window.run_until_parked();
+    window.dispatch_action(CloseTab);
+    // The test's own handle would keep the view (and so the mux window) alive.
+    drop(view);
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 0);
+    cx.update(|cx| {
+        let host = cx.global::<crate::mux_host::MuxHost>();
+        assert!(host.mux.windows().is_empty(), "the mux window is gone too");
+    });
+}
+
+#[gpui::test]
+fn confirm_close_always_asks_first(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    view.update(cx, |this, _| {
+        let mut c = (*this.cfg).clone();
+        c.confirm_close = mt_config::ConfirmClose::Always;
+        this.cfg = std::sync::Arc::new(c);
+    });
+    cx.dispatch_action(CloseTab);
+    assert_eq!(top(&view, cx), Some(OverlayKind::CloseConfirm));
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), 2);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        view.read_with(cx, |t, _| t.tabs.len()),
+        2,
+        "cancel keeps the tab"
+    );
+    cx.dispatch_action(CloseTab);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), 1);
+    assert_eq!(top(&view, cx), None);
+}
+
+#[gpui::test]
+fn confirm_close_never_closes_immediately(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    view.update(cx, |this, _| {
+        let mut c = (*this.cfg).clone();
+        c.confirm_close = mt_config::ConfirmClose::Never;
+        this.cfg = std::sync::Arc::new(c);
+    });
+    cx.dispatch_action(CloseTab);
+    assert_eq!(top(&view, cx), None);
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), 1);
+}
+
+#[gpui::test]
+fn workspace_prompt_creates_and_switches(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(CreateWorkspace);
+    assert_eq!(top(&view, cx), Some(OverlayKind::NamePrompt));
+    cx.simulate_input("api");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(top(&view, cx), None);
+    cx.update(|_, cx| {
+        let host = cx.global::<crate::mux_host::MuxHost>();
+        assert_eq!(host.mux.active_workspace().name, "api");
+    });
+}
+
+#[gpui::test]
+fn workspace_switcher_lists_real_workspaces(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.update(|_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .create_workspace("infra")
+            .unwrap();
+    });
+    cx.dispatch_action(ShowWorkspaceSwitcher);
+    let labels: Vec<String> = view.read_with(cx, |t, _| {
+        let picker = t.picker.as_ref().unwrap();
+        picker
+            .state
+            .visible()
+            .1
+            .iter()
+            .map(|m| picker.state.label(m).to_string())
+            .collect()
+    });
+    assert_eq!(labels, ["default", "infra", "Create workspace…"]);
 }
 
 #[gpui::test]

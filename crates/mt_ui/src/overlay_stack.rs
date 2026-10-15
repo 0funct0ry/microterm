@@ -12,6 +12,8 @@ pub enum OverlayKind {
     Search,
     SshReconnect,
     PasteConfirm,
+    CloseConfirm,
+    NamePrompt,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -22,6 +24,7 @@ enum Class {
     Search,
     Ssh,
     Paste,
+    Dialog,
 }
 
 impl OverlayKind {
@@ -35,6 +38,7 @@ impl OverlayKind {
             Self::Search => Class::Search,
             Self::SshReconnect => Class::Ssh,
             Self::PasteConfirm => Class::Paste,
+            Self::CloseConfirm | Self::NamePrompt => Class::Dialog,
         }
     }
 }

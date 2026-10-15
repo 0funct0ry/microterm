@@ -16,6 +16,7 @@ export default defineConfig({
           items: [
             { label: 'Installation', slug: 'docs/installation' },
             { label: 'Quick start', slug: 'docs/quick-start' },
+            { label: 'Tabs & workspaces', slug: 'docs/tabs-and-workspaces' },
           ],
         },
         {

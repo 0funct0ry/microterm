@@ -17,6 +17,7 @@ nucleo-matcher.workspace = true
 mt_term = { path = "../mt_term" }
 mt_config = { path = "../mt_config" }
 mt_theme = { path = "../mt_theme" }
+mt_mux = { path = "../mt_mux" }
 async-channel = "2"
 anyhow = "1"
 fontdb = "0.24.0"

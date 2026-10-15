@@ -324,6 +324,57 @@ fn item_at<'a>(doc: &'a ImDocument<&str>, path: &[&str]) -> Option<&'a Item> {
     Some(cur)
 }
 
+/// Placeholders accepted by `tab_bar.title_format` (SPEC §8.3).
+pub const TITLE_PLACEHOLDERS: [&str; 4] = ["{title}", "{process}", "{cwd_basename}", "{index}"];
+
+fn validate_tabs_and_workspaces(c: &Config, err: &mut impl FnMut(&[&str], String)) {
+    // Every `{...}` in the format must be a known placeholder.
+    let mut rest = c.tab_bar.title_format.as_str();
+    while let Some(start) = rest.find('{') {
+        let Some(len) = rest[start..].find('}') else {
+            break;
+        };
+        let token = &rest[start..=start + len];
+        if !TITLE_PLACEHOLDERS.contains(&token) {
+            err(
+                &["tab_bar", "title_format"],
+                format!(
+                    "tab_bar.title_format has unknown placeholder {token} (use {})",
+                    TITLE_PLACEHOLDERS.join(", ")
+                ),
+            );
+            break;
+        }
+        rest = &rest[start + len + 1..];
+    }
+    let cwd = c.new_tab_cwd.as_str();
+    if !(cwd == "inherit" || cwd == "home" || cwd.starts_with('/') || cwd.starts_with('~')) {
+        err(
+            &["new_tab_cwd"],
+            "new_tab_cwd must be \"inherit\", \"home\" or an absolute path".into(),
+        );
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for w in &c.workspaces {
+        if w.name.trim().is_empty() {
+            err(&["workspaces"], "workspace name must not be empty".into());
+        } else if seen.contains(&w.name.as_str()) {
+            err(
+                &["workspaces"],
+                format!("workspace \"{}\" is defined more than once", w.name),
+            );
+        }
+        seen.push(&w.name);
+    }
+    let start = c.startup_workspace.as_str();
+    if start != "default" && !seen.contains(&start) {
+        err(
+            &["startup_workspace"],
+            format!("startup_workspace \"{start}\" is not defined in [[workspaces]]"),
+        );
+    }
+}
+
 fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnostic>) {
     let mut err = |path: &[&str], msg: String| {
         let span = item_at(doc, path).and_then(|i| i.span());
@@ -422,6 +473,8 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
             "quick_select.alphabet must be non-empty with no repeated characters".into(),
         );
     }
+
+    validate_tabs_and_workspaces(c, &mut err);
 
     // Keybindings: report the span of the offending `key = "..."` value.
     for (section, entries) in [("keys", &c.keys), ("copy_mode", &c.copy_mode.keys)] {

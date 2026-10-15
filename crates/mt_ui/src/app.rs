@@ -10,6 +10,7 @@ use gpui::{
     prelude::*, px, App, Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, KeyUpEvent,
     Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Subscription, Window,
 };
+use mt_mux::SpawnSpec;
 use mt_term::{KeyEventKind, ScrollCmd, TermEvent};
 
 use crate::{
@@ -18,6 +19,7 @@ use crate::{
     components::{StatusKind, ToastKind},
     metrics::*,
     mock::{assign_labels, scan_matches, Line, MockKind, QsMatch},
+    mux_host::{self, MuxHost},
     overlay_stack::{OverlayKind, OverlayStack},
     picker_state::{PickerInput, PickerOutcome, PickerState},
     platform::Platform,
@@ -29,26 +31,65 @@ use crate::{
 
 pub const QUICK_SELECT_ALPHABET: &str = "asdfghjkl";
 
-pub struct MockTab {
+/// The view-side companion of a mux tab: its live terminal and display state. The order of
+/// `AppWindow::tabs` always mirrors the mux window's tabs.
+pub struct TabView {
+    /// Mux tab id.
     pub id: u64,
-    pub kind: MockKind,
-    pub title: String,
-    /// A live shell replaces the mock screen when present.
+    /// Mux pane id.
+    pub pane: u64,
+    /// `None` until a shell is attached (and always in unit tests that do not opt in).
     pub session: Option<TerminalSession>,
+    /// Display title after `tab_bar.title_format`.
+    pub title: String,
+    /// Foreground process name when it is not the shell.
+    pub process: Option<String>,
+    /// A non-shell foreground process is running (the tab's dirty dot).
+    pub dirty: bool,
+    wake: Option<async_channel::Receiver<()>>,
+    pump: Option<gpui::Task<()>>,
 }
 
-pub struct MockWorkspace {
-    pub name: String,
-    pub windows: usize,
-    pub tabs: usize,
+impl TabView {
+    fn new(id: u64, pane: u64) -> Self {
+        TabView {
+            id,
+            pane,
+            session: None,
+            title: String::new(),
+            process: None,
+            dirty: false,
+            wake: None,
+            pump: None,
+        }
+    }
+}
+
+/// What a close-confirmation dialog will close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseTarget {
+    Tab(u64),
+    Window,
+}
+
+/// What a name prompt will do with the typed name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptKind {
+    CreateWorkspace,
+    RenameWorkspace(u64),
+}
+
+pub struct NamePrompt {
+    pub kind: PromptKind,
+    pub text: String,
 }
 
 /// What confirming a picker row does.
 #[derive(Clone, Debug)]
 pub enum Target {
     Action(usize),
-    Launch { title: &'static str, kind: MockKind },
-    Workspace(usize),
+    NewTab,
+    Workspace(String),
     CreateWorkspace,
     Theme(usize),
 }
@@ -111,11 +152,18 @@ pub struct AppWindow {
     pub(crate) viewport_focus: FocusHandle,
     pub(crate) overlay_focus: FocusHandle,
     pub(crate) platform: Platform,
-    pub(crate) tabs: Vec<MockTab>,
+    /// The mux window this OS window shows.
+    pub(crate) mux_window: u64,
+    /// Set while the window is being hidden by a workspace switch (tabs are parked, not closed).
+    pub(crate) hiding: bool,
+    pub(crate) tabs: Vec<TabView>,
     pub(crate) active_tab: usize,
-    next_tab_id: u64,
-    pub(crate) workspaces: Vec<MockWorkspace>,
-    pub(crate) active_workspace: usize,
+    /// Inline tab rename in progress: `(tab id, text)`.
+    pub(crate) renaming: Option<(u64, String)>,
+    pub(crate) close_confirm: Option<CloseTarget>,
+    pub(crate) prompt: Option<NamePrompt>,
+    last_window_title: String,
+    size_epoch: u64,
     pub(crate) overlays: OverlayStack,
     pub(crate) picker: Option<PickerData>,
     pub(crate) search: SearchState,
@@ -154,25 +202,31 @@ pub struct AppWindow {
 }
 
 impl AppWindow {
+    /// A new window in the active workspace with one tab (unit tests and the single-window
+    /// fallback). Production windows are opened by `mux_host`, which attaches existing mux
+    /// windows.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        if !cx.has_global::<Settings>() {
+            cx.set_global(Settings::defaults());
+        }
+        let mux_window = {
+            let host = mux_host::host(cx);
+            let w = host.mux.spawn_window(None);
+            host.spawn_tab(w, SpawnSpec::default());
+            w
+        };
+        Self::attach(mux_window, window, cx)
+    }
+
+    /// A window showing `mux_window`. Tabs parked by a workspace switch return with their
+    /// shells still running; tabs without a terminal start one.
+    pub fn attach(mux_window: u64, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let viewport_focus = cx.focus_handle();
         let overlay_focus = cx.focus_handle();
         window.focus(&viewport_focus);
         let subscription = cx.observe_window_bounds(window, |this, window, cx| {
             this.on_resize(window, cx);
         });
-        let mut tabs = Vec::new();
-        for (i, kind) in [MockKind::Zsh, MockKind::Cargo, MockKind::Ssh]
-            .into_iter()
-            .enumerate()
-        {
-            tabs.push(MockTab {
-                id: i as u64 + 1,
-                kind,
-                title: kind.title().to_string(),
-                session: None,
-            });
-        }
         if !cx.has_global::<Settings>() {
             cx.set_global(Settings::defaults());
         }
@@ -187,31 +241,24 @@ impl AppWindow {
         let font = TermFont::from_config(&cfg.font);
         let cell = CellMetrics::measure(window, &font, cfg.font.size, cfg.font.line_height);
         let appearance = window.observe_window_appearance(|_, cx| settings::apply_theme(cx));
+        let release = cx.on_release(|this, cx| this.released(cx));
+        let parked = mux_host::host(cx)
+            .parked
+            .remove(&mux_window)
+            .unwrap_or_default();
         let mut this = Self {
             viewport_focus,
             overlay_focus,
             platform: Platform::current(),
-            tabs,
+            mux_window,
+            hiding: false,
+            tabs: parked,
             active_tab: 0,
-            next_tab_id: 4,
-            workspaces: vec![
-                MockWorkspace {
-                    name: "payments".into(),
-                    windows: 1,
-                    tabs: 3,
-                },
-                MockWorkspace {
-                    name: "infra".into(),
-                    windows: 2,
-                    tabs: 5,
-                },
-                MockWorkspace {
-                    name: "default".into(),
-                    windows: 1,
-                    tabs: 1,
-                },
-            ],
-            active_workspace: 0,
+            renaming: None,
+            close_confirm: None,
+            prompt: None,
+            last_window_title: String::new(),
+            size_epoch: 0,
             overlays: OverlayStack::default(),
             picker: None,
             search: SearchState::default(),
@@ -240,29 +287,191 @@ impl AppWindow {
             hud_armed: Rc::new(Cell::new(false)),
             blink_started: false,
             theme_restore: None,
-            _subscriptions: vec![subscription, appearance],
+            _subscriptions: vec![subscription, appearance, release],
         };
         if let Some(b) = banner {
             this.config_banner_kind = b.kind;
             this.config_error = Some(b.text.into());
         }
-        // Unit tests build windows by the dozen; they opt in to a shell explicitly.
+        this.reconcile(window, cx);
+        // Unit tests build windows by the dozen and never poll processes.
         if !cfg!(test) {
-            let opts = this.spawn_options(cx);
-            if let Err(e) = this.attach_terminal(0, opts, window, cx) {
-                this.toast(
-                    ToastKind::Error,
-                    format!("Could not start the shell: {e}"),
-                    cx,
-                );
-            }
+            this.start_process_poll(cx);
         }
         this
     }
 
+    /// Runs when the OS window goes away: a hidden window parks its tabs for the next time its
+    /// workspace is shown; a closed one removes itself from the mux (dropping its shells).
+    fn released(&mut self, cx: &mut App) {
+        if !cx.has_global::<MuxHost>() {
+            return;
+        }
+        let id = self.mux_window;
+        let host = mux_host::host(cx);
+        host.forget_open(id);
+        if self.hiding {
+            let mut tabs = std::mem::take(&mut self.tabs);
+            for t in &mut tabs {
+                t.pump = None;
+            }
+            host.parked.insert(id, tabs);
+        } else {
+            for t in &self.tabs {
+                host.pending.remove(&t.pane);
+            }
+            let _ = host.mux.close_window(id);
+        }
+    }
+
+    // ---------------------------------------------------------------- tabs mirror the mux
+
+    /// Brings `self.tabs` in line with the mux window: new tabs get a view (and a shell),
+    /// removed ones are dropped, order and the active tab are copied.
+    fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (order, active) = {
+            let host = mux_host::host(cx);
+            match host.mux.window(self.mux_window) {
+                Some(w) => (
+                    w.tabs
+                        .iter()
+                        .map(|t| (t.id, t.pane().id))
+                        .collect::<Vec<_>>(),
+                    w.active,
+                ),
+                None => (Vec::new(), 0),
+            }
+        };
+        let mut old = std::mem::take(&mut self.tabs);
+        let mut fresh = Vec::new();
+        for (id, pane) in order {
+            match old.iter().position(|t| t.id == id) {
+                Some(i) => self.tabs.push(old.swap_remove(i)),
+                None => {
+                    self.tabs.push(TabView::new(id, pane));
+                    fresh.push(id);
+                }
+            }
+        }
+        drop(old);
+        self.active_tab = active.min(self.tabs.len().saturating_sub(1));
+
+        let mut failed = Vec::new();
+        for i in 0..self.tabs.len() {
+            let id = self.tabs[i].id;
+            if self.tabs[i].session.is_some() {
+                if self.tabs[i].pump.is_none() {
+                    self.start_pump(id, window, cx);
+                }
+            } else if fresh.contains(&id) && !cfg!(test) {
+                let spec = mux_host::host(cx)
+                    .pending
+                    .remove(&self.tabs[i].pane)
+                    .unwrap_or_default();
+                let mut opts = self.spawn_options(cx);
+                opts.cwd = spec.cwd;
+                opts.command = spec.command;
+                if let Err(e) = self.attach_terminal(i, opts, window, cx) {
+                    self.toast(
+                        ToastKind::Error,
+                        format!("Could not start the shell: {e}"),
+                        cx,
+                    );
+                    failed.push(id);
+                }
+            }
+        }
+        self.refresh_titles(cx);
+        cx.notify();
+        for id in failed {
+            self.close_tab(id, window, cx);
+        }
+    }
+
+    /// Recomputes every tab's display title and process state from the mux and its terminal.
+    fn refresh_titles(&mut self, cx: &mut Context<Self>) {
+        let fmt = self.cfg.tab_bar.title_format.clone();
+        let show_index = self.cfg.tab_bar.show_index;
+        let host = mux_host::host(cx);
+        let Some(win) = host.mux.window(self.mux_window) else {
+            return;
+        };
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let Some(mt) = win.tabs.get(i) else { continue };
+            let pane = mt.pane();
+            let shell = tab.session.as_ref().map(|s| s.default_title.as_str());
+            let parts = mt_mux::TitleParts {
+                title_override: mt.title_override.as_deref(),
+                pane_title: Some(pane.title.as_str()),
+                process: tab.process.as_deref().or(shell),
+                cwd: pane.cwd.as_deref(),
+                index: i,
+                show_index,
+            };
+            tab.title = mt_mux::format_title(&parts, &fmt);
+            if tab.title.is_empty() {
+                tab.title = "shell".into();
+            }
+        }
+    }
+
+    pub(crate) fn active_title(&self) -> &str {
+        self.tabs
+            .get(self.active_tab)
+            .map_or("microterm", |t| t.title.as_str())
+    }
+
+    /// Foreground process, cwd and dirty-dot state change without any output, so they are
+    /// polled (SPEC §5: per-OS process inspection).
+    fn start_process_poll(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(750))
+                .await;
+            if this.update(cx, |this, cx| this.poll_processes(cx)).is_err() {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn poll_processes(&mut self, cx: &mut Context<Self>) {
+        let before: Vec<(String, bool)> = self
+            .tabs
+            .iter()
+            .map(|t| (t.title.clone(), t.dirty))
+            .collect();
+        let mut cwds = Vec::new();
+        for tab in &mut self.tabs {
+            let Some(session) = &tab.session else {
+                continue;
+            };
+            tab.process = session.term.foreground_process().map(|p| p.name);
+            tab.dirty = tab.process.is_some();
+            if let Some(cwd) = session.term.cwd() {
+                cwds.push((tab.pane, cwd));
+            }
+        }
+        {
+            let host = mux_host::host(cx);
+            for (pane, cwd) in cwds {
+                host.mux.set_pane_cwd(pane, cwd);
+            }
+        }
+        self.refresh_titles(cx);
+        let after: Vec<(String, bool)> = self
+            .tabs
+            .iter()
+            .map(|t| (t.title.clone(), t.dirty))
+            .collect();
+        if before != after {
+            cx.notify();
+        }
+    }
+
     // ---------------------------------------------------------------- live terminal
 
-    /// Replaces tab `index`'s mock screen with a real shell.
+    /// Starts a shell for tab `index`.
     pub fn attach_terminal(
         &mut self,
         index: usize,
@@ -280,22 +489,10 @@ impl AppWindow {
         let Some(tab) = self.tabs.get_mut(index) else {
             return Ok(());
         };
-        tab.title = session.default_title.clone();
         tab.session = Some(session);
+        tab.wake = Some(rx);
         let tab_id = tab.id;
-        cx.spawn_in(window, async move |this, cx| {
-            while rx.recv().await.is_ok() {
-                let alive = this
-                    .update_in(cx, |this, window, cx| {
-                        this.pump_terminal(tab_id, window, cx)
-                    })
-                    .is_ok();
-                if !alive {
-                    break;
-                }
-            }
-        })
-        .detach();
+        self.start_pump(tab_id, window, cx);
         if !self.blink_started {
             self.blink_started = true;
             cx.spawn_in(window, async move |this, cx| loop {
@@ -312,6 +509,35 @@ impl AppWindow {
             .detach();
         }
         Ok(())
+    }
+
+    /// Drains a tab's terminal events whenever it wakes (and once up front, for output that
+    /// arrived while the window was hidden). The task is dropped when the tab is parked.
+    fn start_pump(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+            return;
+        };
+        let Some(rx) = tab.wake.clone() else { return };
+        tab.pump = Some(cx.spawn_in(window, async move |this, cx| {
+            if this
+                .update_in(cx, |this, window, cx| {
+                    this.pump_terminal(tab_id, window, cx)
+                })
+                .is_err()
+            {
+                return;
+            }
+            while rx.recv().await.is_ok() {
+                let alive = this
+                    .update_in(cx, |this, window, cx| {
+                        this.pump_terminal(tab_id, window, cx)
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        }));
     }
 
     pub(crate) fn live(&self) -> Option<&TerminalSession> {
@@ -334,8 +560,8 @@ impl AppWindow {
         let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return;
         };
-        let active = index == self.active_tab;
         let tab = &mut self.tabs[index];
+        let pane = tab.pane;
         let Some(session) = tab.session.as_mut() else {
             return;
         };
@@ -346,7 +572,7 @@ impl AppWindow {
             match ev {
                 TermEvent::Wakeup | TermEvent::CursorBlinkingChange => {}
                 TermEvent::Title(t) => new_title = Some(t),
-                TermEvent::ResetTitle => new_title = Some(session.default_title.clone()),
+                TermEvent::ResetTitle => new_title = Some(String::new()),
                 TermEvent::Bell => bell = true,
                 TermEvent::ClipboardStore(kind, text) => match kind {
                     mt_term::ClipboardKind::Clipboard => {
@@ -371,10 +597,8 @@ impl AppWindow {
         }
         session.refresh();
         if let Some(title) = new_title {
-            if active {
-                window.set_window_title(&title);
-            }
-            tab.title = title;
+            mux_host::host(cx).mux.set_pane_title(pane, &title);
+            self.refresh_titles(cx);
         }
         self.cursor_phase = true;
         if bell {
@@ -388,7 +612,7 @@ impl AppWindow {
                     cx,
                 );
             }
-            self.close_tab(tab_id, cx);
+            self.close_tab(tab_id, window, cx);
         }
         cx.notify();
     }
@@ -421,6 +645,10 @@ impl AppWindow {
     }
 
     pub(crate) fn on_viewport_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.renaming.is_some() {
+            self.rename_key(ev, cx);
+            return;
+        }
         self.send_key(&ev.keystroke, ev.is_held, KeyEventKind::Press, cx);
     }
 
@@ -573,8 +801,9 @@ impl AppWindow {
 
     // ---------------------------------------------------------------- screen helpers
 
+    /// Tabs without a shell (unit tests, failed spawns) show the mock screen.
     pub(crate) fn active_kind(&self) -> Option<MockKind> {
-        self.tabs.get(self.active_tab).map(|t| t.kind)
+        self.tabs.get(self.active_tab).map(|_| MockKind::Zsh)
     }
 
     pub(crate) fn screen(&self) -> Vec<Line> {
@@ -667,7 +896,7 @@ impl AppWindow {
             }
             OverlayKind::Search => self.search.current = 0,
             OverlayKind::SshReconnect => self.start_ssh_attempts(cx),
-            OverlayKind::PasteConfirm => {}
+            OverlayKind::PasteConfirm | OverlayKind::CloseConfirm | OverlayKind::NamePrompt => {}
         }
     }
 
@@ -717,6 +946,8 @@ impl AppWindow {
             OverlayKind::QuickSelect => self.quick = QuickState::default(),
             OverlayKind::SshReconnect => self.ssh_epoch += 1,
             OverlayKind::PasteConfirm => self.paste_confirm = None,
+            OverlayKind::CloseConfirm => self.close_confirm = None,
+            OverlayKind::NamePrompt => self.prompt = None,
             OverlayKind::CopyMode | OverlayKind::Search => {}
         }
     }
@@ -743,73 +974,21 @@ impl AppWindow {
                 }
             }
             OverlayKind::Launcher => {
-                let mut items: Vec<(String, Entry)> = Vec::new();
-                let mut push = |label: &str, mut e: Entry, detail: &str| {
-                    e.detail = Some(detail.to_string());
-                    items.push((label.to_string(), e));
-                };
-                push(
-                    "htop",
-                    Entry {
-                        icon: Some(IconName::Terminal),
-                        ..Entry::new(Target::Launch {
-                            title: "htop",
-                            kind: MockKind::Cargo,
-                        })
-                    },
-                    "launch profile",
-                );
-                push(
-                    "cargo watch",
-                    Entry {
-                        icon: Some(IconName::Terminal),
-                        ..Entry::new(Target::Launch {
-                            title: "cargo watch",
-                            kind: MockKind::Cargo,
-                        })
-                    },
-                    "launch profile · ~/src/payments-api",
-                );
-                push(
-                    "ssh: prod",
-                    Entry {
-                        status: Some(StatusKind::Connected),
-                        ..Entry::new(Target::Launch {
-                            title: "ssh: prod",
-                            kind: MockKind::Ssh,
-                        })
-                    },
-                    "SSH domain · prod.example.com",
-                );
-                push(
-                    "ssh: staging",
-                    Entry {
-                        status: Some(StatusKind::Idle),
-                        ..Entry::new(Target::Launch {
-                            title: "ssh: staging",
-                            kind: MockKind::Ssh,
-                        })
-                    },
-                    "SSH domain · staging.example.com",
-                );
-                push(
-                    "New tab in local",
+                let mut items: Vec<(String, Entry)> = vec![(
+                    "New tab in local".to_string(),
                     Entry {
                         icon: Some(IconName::Plus),
-                        ..Entry::new(Target::Launch {
-                            title: "zsh",
-                            kind: MockKind::Zsh,
-                        })
+                        detail: Some("domain".into()),
+                        ..Entry::new(Target::NewTab)
                     },
-                    "domain",
-                );
-                for (i, w) in self.workspaces.iter().enumerate() {
+                )];
+                for (name, detail, _) in self.workspace_rows(cx) {
                     items.push((
-                        format!("Workspace: {}", w.name),
+                        format!("Workspace: {name}"),
                         Entry {
                             icon: Some(IconName::Layers),
-                            detail: Some(format!("{} windows · {} tabs", w.windows, w.tabs)),
-                            ..Entry::new(Target::Workspace(i))
+                            detail: Some(detail),
+                            ..Entry::new(Target::Workspace(name))
                         },
                     ));
                 }
@@ -820,33 +999,26 @@ impl AppWindow {
                 }
             }
             OverlayKind::WorkspaceSwitcher => {
-                let mut items: Vec<(String, Entry)> = self
-                    .workspaces
-                    .iter()
-                    .enumerate()
-                    .map(|(i, w)| {
-                        let active = i == self.active_workspace;
-                        let mut e = Entry::new(Target::Workspace(i));
-                        e.icon = Some(if active {
+                let rows = self.workspace_rows(cx);
+                let active = rows.iter().position(|r| r.2).unwrap_or(0);
+                let mut items: Vec<(String, Entry)> = rows
+                    .into_iter()
+                    .map(|(name, detail, is_active)| {
+                        let mut e = Entry::new(Target::Workspace(name.clone()));
+                        e.icon = Some(if is_active {
                             IconName::Check
                         } else {
                             IconName::Layers
                         });
-                        e.detail = Some(format!(
-                            "{} window{} · {} tab{}",
-                            w.windows,
-                            plural(w.windows),
-                            w.tabs,
-                            plural(w.tabs)
-                        ));
-                        (w.name.clone(), e)
+                        e.detail = Some(detail);
+                        (name, e)
                     })
                     .collect();
                 let mut create = Entry::new(Target::CreateWorkspace);
                 create.icon = Some(IconName::Plus);
                 items.push(("Create workspace…".to_string(), create));
                 let mut state = PickerState::new(items);
-                state.select(self.active_workspace);
+                state.select(active);
                 PickerData {
                     kind,
                     state,
@@ -884,6 +1056,29 @@ impl AppWindow {
             }
             _ => unreachable!("not a picker overlay"),
         }
+    }
+
+    /// `(name, "N windows · M tabs", is_active)` per workspace.
+    fn workspace_rows(&self, cx: &mut Context<Self>) -> Vec<(String, String, bool)> {
+        let host = mux_host::host(cx);
+        let active = host.mux.active_workspace().id;
+        host.mux
+            .workspaces()
+            .iter()
+            .map(|w| {
+                let (windows, tabs) = host.mux.counts(w.id);
+                let detail = if windows == 0 {
+                    "not started".to_string()
+                } else {
+                    format!(
+                        "{windows} window{} · {tabs} tab{}",
+                        plural(windows),
+                        plural(tabs)
+                    )
+                };
+                (w.name.clone(), detail, w.id == active)
+            })
+            .collect()
     }
 
     fn preview_selected_theme(&self, cx: &mut Context<Self>) {
@@ -944,25 +1139,20 @@ impl AppWindow {
                 let action = (ACTIONS[i].build)();
                 window.defer(cx, move |window, cx| window.dispatch_action(action, cx));
             }
-            Target::Launch { title, kind } => {
+            Target::NewTab => {
                 if new_window {
-                    self.toast(
-                        ToastKind::Info,
-                        "Opening in a new window arrives with M5",
-                        cx,
-                    );
+                    let spec = SpawnSpec {
+                        cwd: self.new_tab_cwd(cx),
+                        ..Default::default()
+                    };
+                    cx.defer(move |cx| mux_host::open_new_window(cx, spec));
+                } else {
+                    self.spawn_tab(None, window, cx);
                 }
-                self.add_tab(kind, title, cx);
             }
-            Target::Workspace(i) => self.switch_workspace(i, cx),
+            Target::Workspace(name) => self.switch_workspace_named(name, false, cx),
             Target::CreateWorkspace => {
-                let name = format!("workspace-{}", self.workspaces.len() + 1);
-                self.workspaces.push(MockWorkspace {
-                    name: name.clone(),
-                    windows: 1,
-                    tabs: 1,
-                });
-                self.switch_workspace(self.workspaces.len() - 1, cx);
+                self.begin_prompt(PromptKind::CreateWorkspace, String::new(), window, cx)
             }
             Target::Theme(i) => {
                 let registry = cx.global::<Settings>().registry.clone();
@@ -978,44 +1168,368 @@ impl AppWindow {
 
     // ---------------------------------------------------------------- tabs & workspaces
 
-    pub(crate) fn add_tab(&mut self, kind: MockKind, title: &str, cx: &mut Context<Self>) {
-        let id = self.next_tab_id;
-        self.next_tab_id += 1;
-        self.tabs.push(MockTab {
-            id,
-            kind,
-            title: title.to_string(),
-            session: None,
+    /// Working directory for a new tab per `new_tab_cwd`: the active pane's, `$HOME`, or a path.
+    pub(crate) fn new_tab_cwd(&self, _cx: &App) -> Option<std::path::PathBuf> {
+        match self.cfg.new_tab_cwd.as_str() {
+            "inherit" => self.live().and_then(|s| s.term.cwd()),
+            "home" => std::env::var_os("HOME").map(std::path::PathBuf::from),
+            path => Some(expand_tilde(path)),
+        }
+    }
+
+    /// Opens a tab after the active one. `None` uses the `new_tab_cwd` policy and a shell.
+    pub(crate) fn spawn_tab(
+        &mut self,
+        spec: Option<SpawnSpec>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_rename(cx);
+        let spec = spec.unwrap_or_else(|| SpawnSpec {
+            cwd: self.new_tab_cwd(cx),
+            ..Default::default()
         });
-        self.active_tab = self.tabs.len() - 1;
-        self.workspaces[self.active_workspace].tabs += 1;
+        mux_host::host(cx).spawn_tab(self.mux_window, spec);
+        self.reconcile(window, cx);
+    }
+
+    /// Closes a tab immediately; the window closes with its last tab.
+    pub(crate) fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.tabs.iter().find(|t| t.id == id).map(|t| t.pane) else {
+            return;
+        };
+        if self.renaming.as_ref().is_some_and(|(t, _)| *t == id) {
+            self.renaming = None;
+        }
+        let empty = {
+            let host = mux_host::host(cx);
+            host.pending.remove(&pane);
+            host.mux.close_tab(self.mux_window, id).unwrap_or(false)
+        };
+        self.reconcile(window, cx);
+        if empty {
+            window.remove_window();
+        }
+    }
+
+    fn busy_process(tab: &TabView) -> bool {
+        tab.session
+            .as_ref()
+            .is_some_and(|s| s.term.foreground_process().is_some())
+    }
+
+    fn confirm_policy(&self) -> mt_mux::ConfirmClose {
+        match self.cfg.confirm_close {
+            mt_config::ConfirmClose::Always => mt_mux::ConfirmClose::Always,
+            mt_config::ConfirmClose::Process => mt_mux::ConfirmClose::Process,
+            mt_config::ConfirmClose::Never => mt_mux::ConfirmClose::Never,
+        }
+    }
+
+    /// CloseTab: asks first when `confirm_close` says so.
+    pub(crate) fn request_close_tab(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let busy = self
+            .tabs
+            .iter()
+            .find(|t| t.id == id)
+            .is_some_and(Self::busy_process);
+        if mt_mux::should_confirm_close(self.confirm_policy(), busy) {
+            self.close_confirm = Some(CloseTarget::Tab(id));
+            self.open_overlay(OverlayKind::CloseConfirm, window, cx);
+        } else {
+            self.close_tab(id, window, cx);
+        }
+    }
+
+    /// CloseWindow: asks first when `confirm_close` says so.
+    pub(crate) fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let busy = self.tabs.iter().any(Self::busy_process);
+        if mt_mux::should_confirm_close(self.confirm_policy(), busy) {
+            self.close_confirm = Some(CloseTarget::Window);
+            self.open_overlay(OverlayKind::CloseConfirm, window, cx);
+        } else {
+            window.remove_window();
+        }
+    }
+
+    pub(crate) fn confirm_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.close_confirm.take();
+        self.close_overlay(OverlayKind::CloseConfirm, true, window, cx);
+        match target {
+            Some(CloseTarget::Tab(id)) => self.close_tab(id, window, cx),
+            Some(CloseTarget::Window) => window.remove_window(),
+            None => {}
+        }
+    }
+
+    /// What the close dialog says: the running process, if any.
+    pub(crate) fn close_confirm_text(&self) -> String {
+        let running = |t: &TabView| t.process.clone().filter(|_| Self::busy_process(t));
+        match self.close_confirm {
+            Some(CloseTarget::Tab(id)) => {
+                match self.tabs.iter().find(|t| t.id == id).and_then(running) {
+                    Some(p) => format!("{p} is still running in this tab. Close it anyway?"),
+                    None => "Close this tab?".into(),
+                }
+            }
+            Some(CloseTarget::Window) => {
+                let n = self.tabs.iter().filter(|t| Self::busy_process(t)).count();
+                if n > 0 {
+                    format!(
+                        "{n} tab{} still running a process. Close the window anyway?",
+                        plural(n)
+                    )
+                } else {
+                    format!("Close this window and its {} tabs?", self.tabs.len())
+                }
+            }
+            None => String::new(),
+        }
+    }
+
+    pub(crate) fn close_other_tabs(
+        &mut self,
+        keep: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let others: Vec<u64> = self
+            .tabs
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| *id != keep)
+            .collect();
+        for id in others {
+            self.close_tab(id, window, cx);
+        }
+    }
+
+    /// Mirrors the active tab's title onto the OS window title.
+    pub(crate) fn sync_window_title(&mut self, window: &mut Window) {
+        let title = self.active_title().to_string();
+        if title != self.last_window_title {
+            window.set_window_title(&title);
+            self.last_window_title = title;
+        }
+    }
+
+    pub(crate) fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        if self
+            .renaming
+            .as_ref()
+            .is_some_and(|(t, _)| *t != self.tabs[index].id)
+        {
+            self.commit_rename(cx);
+        }
+        let _ = mux_host::host(cx).mux.activate_tab(self.mux_window, index);
+        self.active_tab = index;
         cx.notify();
     }
 
-    pub(crate) fn close_tab(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
-            return;
-        };
-        self.tabs.remove(index);
-        let ws = &mut self.workspaces[self.active_workspace];
-        ws.tabs = ws.tabs.saturating_sub(1);
-        if index < self.active_tab || self.active_tab >= self.tabs.len() {
-            self.active_tab = self.active_tab.saturating_sub(1);
+    pub(crate) fn on_action_tab_relative(&mut self, delta: isize, cx: &mut Context<Self>) {
+        self.commit_rename(cx);
+        let host = mux_host::host(cx);
+        let _ = host.mux.activate_tab_relative(self.mux_window, delta);
+        if let Some(w) = host.mux.window(self.mux_window) {
+            self.active_tab = w.active;
         }
         cx.notify();
     }
 
-    pub(crate) fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.tabs.len() && index != self.active_tab {
-            self.active_tab = index;
+    pub(crate) fn move_tab_relative(
+        &mut self,
+        delta: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = mux_host::host(cx)
+            .mux
+            .move_tab_relative(self.mux_window, delta);
+        self.reconcile(window, cx);
+    }
+
+    /// Drag-to-reorder: moves tab `id` to where tab `onto` is.
+    pub(crate) fn move_tab_onto(
+        &mut self,
+        id: u64,
+        onto: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let from = self.tabs.iter().position(|t| t.id == id);
+        let to = self.tabs.iter().position(|t| t.id == onto);
+        if let (Some(from), Some(to)) = (from, to) {
+            let _ = mux_host::host(cx).mux.move_tab(self.mux_window, from, to);
+            self.reconcile(window, cx);
+        }
+    }
+
+    // ---- inline rename
+
+    pub(crate) fn begin_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let id = tab.id;
+        let current = mux_host::host(cx)
+            .mux
+            .window(self.mux_window)
+            .and_then(|w| w.tabs.iter().find(|t| t.id == id))
+            .and_then(|t| t.title_override.clone())
+            .unwrap_or_else(|| self.tabs[self.active_tab].title.clone());
+        self.renaming = Some((id, current));
+        cx.notify();
+    }
+
+    pub(crate) fn commit_rename(&mut self, cx: &mut Context<Self>) {
+        if let Some((id, text)) = self.renaming.take() {
+            let _ = mux_host::host(cx)
+                .mux
+                .rename_tab(self.mux_window, id, Some(text));
+            self.refresh_titles(cx);
             cx.notify();
         }
     }
 
-    fn switch_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.active_workspace = index;
-        let name = self.workspaces[index].name.clone();
-        self.toast(ToastKind::Info, format!("Workspace: {name}"), cx);
+    fn rename_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        match ev.keystroke.key.as_str() {
+            "enter" => self.commit_rename(cx),
+            "escape" => {
+                self.renaming = None;
+                cx.notify();
+            }
+            "backspace" => {
+                if let Some((_, text)) = &mut self.renaming {
+                    text.pop();
+                }
+                cx.notify();
+            }
+            _ => {
+                if let (Some(typed), Some((_, text))) =
+                    (typed_text(ev, self.platform), self.renaming.as_mut())
+                {
+                    text.push_str(typed);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    // ---- workspaces
+
+    /// Switches workspace after the current update finishes (it closes and opens windows,
+    /// this one included).
+    pub(crate) fn switch_workspace_named(
+        &mut self,
+        name: String,
+        create: bool,
+        cx: &mut Context<Self>,
+    ) {
+        cx.defer(move |cx| {
+            if let Err(e) = mux_host::show_workspace(cx, &name, create, None) {
+                eprintln!("microterm: {e}");
+            }
+        });
+    }
+
+    pub(crate) fn on_action_workspace_relative(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let (names, current) = {
+            let host = mux_host::host(cx);
+            let active = host.mux.active_workspace().id;
+            let names: Vec<String> = host
+                .mux
+                .workspaces()
+                .iter()
+                .map(|w| w.name.clone())
+                .collect();
+            let current = host
+                .mux
+                .workspaces()
+                .iter()
+                .position(|w| w.id == active)
+                .unwrap_or(0);
+            (names, current)
+        };
+        let next = (current as isize + delta).rem_euclid(names.len() as isize) as usize;
+        self.switch_workspace_named(names[next].clone(), false, cx);
+    }
+
+    pub(crate) fn begin_prompt(
+        &mut self,
+        kind: PromptKind,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prompt = Some(NamePrompt { kind, text });
+        self.open_overlay(OverlayKind::NamePrompt, window, cx);
+    }
+
+    pub(crate) fn begin_rename_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (id, name) = {
+            let w = mux_host::host(cx).mux.active_workspace();
+            (w.id, w.name.clone())
+        };
+        self.begin_prompt(PromptKind::RenameWorkspace(id), name, window, cx);
+    }
+
+    pub(crate) fn confirm_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(prompt) = self.prompt.take() else {
+            return;
+        };
+        let name = prompt.text.trim().to_string();
+        if name.is_empty() {
+            self.prompt = Some(prompt);
+            return;
+        }
+        match prompt.kind {
+            PromptKind::CreateWorkspace => {
+                self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
+                self.switch_workspace_named(name, true, cx);
+            }
+            PromptKind::RenameWorkspace(id) => {
+                let result = mux_host::host(cx).mux.rename_workspace(id, &name);
+                match result {
+                    Ok(()) => self.close_overlay(OverlayKind::NamePrompt, true, window, cx),
+                    Err(e) => {
+                        self.prompt = Some(prompt);
+                        self.toast(ToastKind::Error, e.to_string(), cx);
+                    }
+                }
+            }
+        }
+    }
+
+    fn prompt_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match ev.keystroke.key.as_str() {
+            "enter" => self.confirm_prompt(window, cx),
+            "backspace" => {
+                if let Some(p) = &mut self.prompt {
+                    p.text.pop();
+                }
+                cx.notify();
+            }
+            _ => {
+                if let (Some(typed), Some(p)) =
+                    (typed_text(ev, self.platform), self.prompt.as_mut())
+                {
+                    p.text.push_str(typed);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn active_workspace_name(&self, cx: &mut Context<Self>) -> String {
+        mux_host::host(cx).mux.active_workspace().name.clone()
     }
 
     // ---------------------------------------------------------------- toasts, HUD, scrollbar
@@ -1056,7 +1570,37 @@ impl AppWindow {
         );
     }
 
+    /// Saves the window size 500 ms after the last resize (`window.remember_size`).
+    fn remember_size(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if cfg!(test)
+            || !self.cfg.window.remember_size
+            || window.is_fullscreen()
+            || window.is_maximized()
+        {
+            return;
+        }
+        let size = window.bounds().size;
+        let (w, h) = (f32::from(size.width), f32::from(size.height));
+        self.size_epoch += 1;
+        let epoch = self.size_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            this.update(cx, |this, _| {
+                if this.size_epoch == epoch {
+                    if let Some(dir) = crate::state::state_dir() {
+                        let _ = crate::state::save_window_size(&dir, w, h);
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn on_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.remember_size(window, cx);
         if self.live().is_some() {
             // The live viewport resizes its PTY (and shows the HUD) from paint, where the
             // exact viewport bounds are known.
@@ -1127,15 +1671,8 @@ impl AppWindow {
     }
 
     pub(crate) fn close_ssh_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The mock SSH tab is gone (real SSH domains arrive with M10); closing just dismisses.
         self.close_overlay(OverlayKind::SshReconnect, true, window, cx);
-        if let Some(id) = self
-            .tabs
-            .iter()
-            .find(|t| t.kind == MockKind::Ssh)
-            .map(|t| t.id)
-        {
-            self.close_tab(id, cx);
-        }
     }
 
     // ---------------------------------------------------------------- keyboard
@@ -1174,6 +1711,12 @@ impl AppWindow {
                     self.confirm_paste(window, cx);
                 }
             }
+            Some(OverlayKind::CloseConfirm) => {
+                if ev.keystroke.key == "enter" {
+                    self.confirm_close(window, cx);
+                }
+            }
+            Some(OverlayKind::NamePrompt) => self.prompt_key(ev, window, cx),
             None => {}
         }
     }
@@ -1287,28 +1830,23 @@ impl AppWindow {
 
     // ---------------------------------------------------------------- action handlers
 
-    pub(crate) fn on_action_spawn_tab(&mut self, cx: &mut Context<Self>) {
-        self.add_tab(MockKind::Zsh, "zsh", cx);
+    pub(crate) fn on_action_spawn_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.spawn_tab(None, window, cx);
     }
 
-    pub(crate) fn on_action_close_tab(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_action_close_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) {
-            self.close_tab(id, cx);
+            self.request_close_tab(id, window, cx);
         }
     }
 
-    pub(crate) fn on_action_tab_relative(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let n = self.tabs.len() as isize;
-        if n > 0 {
-            let next = (self.active_tab as isize + delta).rem_euclid(n) as usize;
-            self.activate_tab(next, cx);
-        }
-    }
-
-    pub(crate) fn on_action_workspace_relative(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let n = self.workspaces.len() as isize;
-        let next = (self.active_workspace as isize + delta).rem_euclid(n) as usize;
-        self.switch_workspace(next, cx);
+    /// SpawnWindow: a new window in the active workspace.
+    pub(crate) fn on_action_spawn_window(&mut self, cx: &mut Context<Self>) {
+        let spec = SpawnSpec {
+            cwd: self.new_tab_cwd(cx),
+            ..Default::default()
+        };
+        cx.defer(move |cx| mux_host::open_new_window(cx, spec));
     }
 
     pub(crate) fn on_stub(&mut self, what: &str, milestone: &str, cx: &mut Context<Self>) {
@@ -1349,18 +1887,12 @@ impl AppWindow {
 
     // ---------------------------------------------------------------- configuration
 
-    /// Spawn options from the active config: shell, env, `$TERM`, scrollback, OSC 52 policy,
+    /// Spawn options from the active config (the caller sets `cwd`/`command`): shell, env, `$TERM`, scrollback, OSC 52 policy,
     /// default cursor and the theme palette. These apply to new panes only (SPEC §8.2).
     pub(crate) fn spawn_options(&self, cx: &App) -> mt_term::SpawnOptions {
         let cfg = &cx.global::<Settings>().config;
-        let cwd = match cfg.new_tab_cwd.as_str() {
-            "inherit" => None,
-            "home" => std::env::var_os("HOME").map(std::path::PathBuf::from),
-            path => Some(expand_tilde(path)),
-        };
         mt_term::SpawnOptions {
             shell: cfg.shell.clone(),
-            cwd,
             env: cfg
                 .env
                 .iter()
@@ -1427,6 +1959,8 @@ impl AppWindow {
             }
         }
         self.cursor_phase = true;
+        mux_host::sync_declared(cx);
+        self.refresh_titles(cx);
         cx.notify();
     }
 
@@ -1509,21 +2043,12 @@ impl AppWindow {
         let title = std::path::Path::new(&argv[0])
             .file_name()
             .map_or_else(|| "editor".into(), |n| n.to_string_lossy().into_owned());
-        self.add_tab(MockKind::Zsh, &title, cx);
-        let index = self.tabs.len() - 1;
-        let mut opts = self.spawn_options(cx);
-        opts.command = Some(argv);
-        if let Err(e) = self.attach_terminal(index, opts, window, cx) {
-            let id = self.tabs[index].id;
-            self.close_tab(id, cx);
-            self.toast(
-                ToastKind::Error,
-                format!("Could not start the editor: {e}"),
-                cx,
-            );
-        } else {
-            self.tabs[index].title = title;
-        }
+        let spec = SpawnSpec {
+            cwd: self.new_tab_cwd(cx),
+            command: Some(argv),
+            title: Some(title),
+        };
+        self.spawn_tab(Some(spec), window, cx);
     }
 
     pub(crate) fn show_config_error(&mut self, cx: &mut Context<Self>) {
@@ -1642,11 +2167,19 @@ pub fn window_options(cx: &App) -> gpui::WindowOptions {
     // Approximate the cell size from the font size; the exact grid is fitted after first paint.
     let cell_w = cfg.font.size * 0.6;
     let cell_h = cfg.font.size * cfg.font.line_height;
-    let width = cfg.window.initial_size.cols as f32 * cell_w + 2.0 * cfg.window.padding.x;
-    let height = cfg.window.initial_size.rows as f32 * cell_h
+    let mut width = cfg.window.initial_size.cols as f32 * cell_w + 2.0 * cfg.window.padding.x;
+    let mut height = cfg.window.initial_size.rows as f32 * cell_h
         + 2.0 * cfg.window.padding.y
         + TITLE_BAR_HEIGHT
         + TAB_BAR_HEIGHT;
+    if cfg.window.remember_size && !cfg!(test) {
+        if let Some((w, h)) = crate::state::state_dir()
+            .as_deref()
+            .and_then(crate::state::load_window_size)
+        {
+            (width, height) = (w, h);
+        }
+    }
     let bounds = Bounds::centered(
         None,
         gpui::size(px(width.max(480.)), px(height.max(300.))),

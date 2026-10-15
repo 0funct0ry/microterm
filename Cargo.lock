@@ -3426,11 +3426,14 @@ name = "microterm"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "async-channel 2.5.0",
  "clap",
+ "libc",
  "mt_config",
  "mt_theme",
  "mt_ui",
  "predicates",
+ "serde_json",
 ]
 
 [[package]]
@@ -3528,6 +3531,9 @@ dependencies = [
 [[package]]
 name = "mt_mux"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "mt_mux_server"
@@ -3574,6 +3580,7 @@ dependencies = [
  "fontdb 0.24.0",
  "gpui",
  "mt_config",
+ "mt_mux",
  "mt_term",
  "mt_theme",
  "nucleo-matcher",

@@ -13,7 +13,7 @@ use crate::{
     assets::IconName,
     components::*,
     metrics::*,
-    mock::{Domain, Line, SpanStyle, Underline},
+    mock::{Line, SpanStyle, Underline},
     overlay_stack::OverlayKind,
     platform::Platform,
     settings,
@@ -26,6 +26,7 @@ impl Render for AppWindow {
         let t = *cx.global::<Theme>();
         let csd = matches!(window.window_decorations(), Decorations::Client { .. })
             && self.platform == Platform::Linux;
+        self.sync_window_title(window);
 
         let mut root = div()
             .id("root")
@@ -81,12 +82,48 @@ impl Render for AppWindow {
         if let Some(text) = &self.paste_confirm {
             root = root.child(self.paste_modal(&t, text, cx));
         }
+        if self.close_confirm.is_some() {
+            root = root.child(self.close_modal(&t, cx));
+        }
+        if let Some(prompt) = &self.prompt {
+            root = root.child(self.prompt_modal(&t, prompt, cx));
+        }
         if let Some(top) = self.overlays.top() {
             root = root.child(self.focus_node(top, cx));
         }
         root.on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
-            .on_action(cx.listener(|this, _: &SpawnTab, _, cx| this.on_action_spawn_tab(cx)))
-            .on_action(cx.listener(|this, _: &CloseTab, _, cx| this.on_action_close_tab(cx)))
+            .on_action(cx.listener(|this, _: &SpawnTab, w, cx| this.on_action_spawn_tab(w, cx)))
+            .on_action(cx.listener(|this, _: &CloseTab, w, cx| this.on_action_close_tab(w, cx)))
+            .on_action(
+                cx.listener(|this, a: &MoveTabRelative, w, cx| this.move_tab_relative(a.0, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &RenameTab, _, cx| this.begin_rename(cx)))
+            .on_action(cx.listener(|this, _: &CloseWindow, w, cx| this.request_close_window(w, cx)))
+            .on_action(cx.listener(|this, a: &SwitchWorkspace, _, cx| {
+                this.switch_workspace_named(a.0.clone(), false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CreateWorkspace, w, cx| {
+                this.begin_prompt(
+                    crate::app::PromptKind::CreateWorkspace,
+                    String::new(),
+                    w,
+                    cx,
+                )
+            }))
+            .on_action(
+                cx.listener(|this, _: &RenameWorkspace, w, cx| this.begin_rename_workspace(w, cx)),
+            )
+            .on_action(cx.listener(|this, a: &SpawnTabInDomain, w, cx| {
+                if a.0 == "local" {
+                    this.on_action_spawn_tab(w, cx)
+                } else {
+                    this.toast(
+                        ToastKind::Warning,
+                        format!("No domain named \"{}\"", a.0),
+                        cx,
+                    )
+                }
+            }))
             .on_action(cx.listener(|this, a: &ActivateTab, _, cx| this.activate_tab(a.0, cx)))
             .on_action(cx.listener(|this, a: &ActivateTabRelative, _, cx| {
                 this.on_action_tab_relative(a.0, cx)
@@ -94,13 +131,7 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, a: &SwitchWorkspaceRelative, _, cx| {
                 this.on_action_workspace_relative(a.0, cx)
             }))
-            .on_action(cx.listener(|_, _: &SpawnWindow, _, cx| {
-                let options = crate::app::window_options(cx);
-                cx.open_window(options, |window, cx| {
-                    cx.new(|cx| AppWindow::new(window, cx))
-                })
-                .ok();
-            }))
+            .on_action(cx.listener(|this, _: &SpawnWindow, _, cx| this.on_action_spawn_window(cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.on_stub("Copy", "M7", cx)))
             .on_action(cx.listener(|this, _: &Paste, w, cx| this.paste(w, cx)))
@@ -195,18 +226,14 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let kind = self.active_kind();
         let reconnecting = self.overlays.contains(OverlayKind::SshReconnect);
-        let (dot, domain) = match (reconnecting, kind.map(|k| k.domain())) {
-            (true, _) => (StatusKind::Reconnecting, "prod · reconnecting"),
-            (false, Some(Domain::Prod)) => (StatusKind::Connected, "prod"),
-            _ => (StatusKind::Connected, "local"),
+        let (dot, domain) = if reconnecting {
+            (StatusKind::Reconnecting, "prod · reconnecting")
+        } else {
+            (StatusKind::Connected, "local")
         };
-        let title = match self.live() {
-            Some(_) => self.tabs[self.active_tab].title.as_str(),
-            None => kind.map(|k| k.window_title()).unwrap_or("microterm"),
-        };
-        let workspace = self.workspaces[self.active_workspace].name.clone();
+        let title = self.active_title();
+        let workspace = self.active_workspace_name(cx);
         let linux = self.platform == Platform::Linux;
         let csd = matches!(window.window_decorations(), Decorations::Client { .. }) && linux;
         let mac_inset = if self.platform == Platform::Mac {
@@ -327,17 +354,35 @@ impl AppWindow {
         let mut bar = TabBar::new();
         for (i, tab) in self.tabs.iter().enumerate() {
             let id = tab.id;
+            let editing = self
+                .renaming
+                .as_ref()
+                .filter(|(t, _)| *t == id)
+                .map(|(_, text)| SharedString::from(text.clone()));
             bar = bar.tab(
                 Tab::new(("tab", id), tab.title.clone())
+                    .tab_id(id)
                     .active(i == self.active_tab)
-                    .dirty(tab.kind.dirty())
+                    .dirty(tab.dirty)
+                    .editing(editing)
+                    .draggable()
+                    .on_drop_tab({
+                        let entity = cx.entity();
+                        move |dragged, window, app| {
+                            entity.update(app, |this, cx| {
+                                this.move_tab_onto(dragged, id, window, cx)
+                            });
+                        }
+                    })
                     .on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| this.activate_tab(i, cx)),
                     )
-                    .on_close(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.close_tab(id, cx)),
+                    .on_close(cx.listener(move |this, _: &ClickEvent, w, cx| {
+                        this.request_close_tab(id, w, cx)
+                    }))
+                    .on_middle_click(
+                        cx.listener(move |this, _, w, cx| this.request_close_tab(id, w, cx)),
                     )
-                    .on_middle_click(cx.listener(move |this, _, _, cx| this.close_tab(id, cx)))
                     .on_right_click(cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
                         this.tab_menu = Some((e.position, id));
                         cx.notify();
@@ -347,7 +392,7 @@ impl AppWindow {
         bar.trailing(
             IconButton::new("new-tab", IconName::Plus)
                 .tooltip("New tab")
-                .on_click(cx.listener(|this, _, _, cx| this.on_action_spawn_tab(cx)))
+                .on_click(cx.listener(|this, _, w, cx| this.on_action_spawn_tab(w, cx)))
                 .on_right_click(
                     cx.listener(|this, _, w, cx| this.open_overlay(OverlayKind::Launcher, w, cx)),
                 ),
@@ -382,15 +427,19 @@ impl AppWindow {
             })
             .on_select({
                 let entity = cx.entity();
-                move |i, _, app| {
-                    entity.update(app, |this, cx| match i {
-                        0 => this.close_tab(tab_id, cx),
-                        1 => {
-                            this.tabs.retain(|t| t.id == tab_id);
-                            this.active_tab = 0;
-                            cx.notify();
+                move |i, window, app| {
+                    entity.update(app, |this, cx| {
+                        this.tab_menu = None;
+                        match i {
+                            0 => this.request_close_tab(tab_id, window, cx),
+                            1 => this.close_other_tabs(tab_id, window, cx),
+                            _ => {
+                                if let Some(index) = this.tabs.iter().position(|t| t.id == tab_id) {
+                                    this.activate_tab(index, cx);
+                                }
+                                this.begin_rename(cx);
+                            }
                         }
-                        _ => this.on_stub("Renaming tabs", "M5", cx),
                     });
                 }
             })
@@ -431,17 +480,7 @@ impl AppWindow {
                 .collect();
             let cursor = if copy_active && self.copy.row == row {
                 Some(self.copy.col)
-            } else if !copy_active
-                && focused_viewport
-                && row == last_row
-                && self
-                    .active_kind()
-                    .is_some_and(|k| k.lines().last().is_some())
-                && self
-                    .tabs
-                    .get(self.active_tab)
-                    .is_some_and(|tab| tab.kind != crate::mock::MockKind::Cargo)
-            {
+            } else if !copy_active && focused_viewport && row == last_row {
                 Some(line.cols())
             } else {
                 None
@@ -645,6 +684,89 @@ impl AppWindow {
                     t.term.fg.opacity(0.7),
                 ))
             })
+    }
+
+    fn close_modal(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let text = self.close_confirm_text();
+        Modal::new("close-modal")
+            .width(px(420.))
+            .top(px(TITLE_BAR_HEIGHT + PALETTE_TOP_OFFSET))
+            .on_dismiss(cx.listener_for_dismiss())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_4()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Close?"))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child(text),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("close-cancel", "Cancel").on_click(
+                                    cx.listener(|this, _, w, cx| this.dismiss_top(w, cx)),
+                                ),
+                            )
+                            .child(
+                                Button::new("close-confirm", "Close")
+                                    .style(ButtonStyle::Filled)
+                                    .on_click(
+                                        cx.listener(|this, _, w, cx| this.confirm_close(w, cx)),
+                                    ),
+                            ),
+                    ),
+            )
+    }
+
+    fn prompt_modal(
+        &self,
+        t: &Theme,
+        prompt: &crate::app::NamePrompt,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let title = match prompt.kind {
+            crate::app::PromptKind::CreateWorkspace => "Create workspace",
+            crate::app::PromptKind::RenameWorkspace(_) => "Rename workspace",
+        };
+        Modal::new("name-prompt")
+            .width(px(380.))
+            .top(px(TITLE_BAR_HEIGHT + PALETTE_TOP_OFFSET))
+            .on_dismiss(cx.listener_for_dismiss())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_4()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .h(px(30.))
+                            .px_2()
+                            .rounded(px(RADIUS_CONTROL))
+                            .border_1()
+                            .border_color(t.border)
+                            .bg(t.background)
+                            .child(prompt.text.clone())
+                            .child(div().w(px(1.)).h(px(16.)).ml(px(1.)).bg(t.accent)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child("Enter to confirm, Esc to cancel."),
+                    ),
+            )
     }
 
     fn paste_modal(&self, t: &Theme, text: &str, cx: &mut Context<Self>) -> impl IntoElement {

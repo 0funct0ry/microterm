@@ -48,6 +48,18 @@
   `microterm ls-fonts [--text STR]` prints the font chosen for each character and why. Known gaps:
   the terminal engine has no grapheme clustering, so ZWJ sequences and skin tones keep one cell
   pair per scalar.
+- **M5 — Tabs and workspaces.** Every tab is a real shell. New `mt_mux` crate (workspace →
+  window → tab → pane tree, domains, monotonic ids, `MuxEvent`s). Tab actions: `SpawnTab`,
+  `CloseTab` (with `confirm_close`), `ActivateTab`, `ActivateTabRelative`, `MoveTabRelative`,
+  `RenameTab` (inline), `SpawnWindow`, `CloseWindow`, drag-to-reorder and middle-click close.
+  Tab titles follow `tab_bar.title_format`; a dot marks tabs running a non-shell program; new
+  tabs inherit the working directory (`new_tab_cwd`) from the OS process table. tmux-style
+  workspaces: one active per process, switcher with window/tab counts, `CreateWorkspace`,
+  `RenameWorkspace`, `SwitchWorkspace`, declared `[[workspaces]]`, `startup_workspace` and
+  `microterm --workspace NAME`. Launching `microterm` again opens a window in the running
+  instance over a private Unix socket. `window.remember_size` is honoured.
+  Known gap: OSC 7 cwd reports are not read (the engine exposes no hook); the cwd comes from
+  process inspection instead.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

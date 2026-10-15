@@ -13,14 +13,46 @@ use crate::{
 
 type MouseHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 
+/// Drag payload while a tab is being reordered.
+#[derive(Clone)]
+pub struct DraggedTab {
+    pub id: u64,
+    pub title: SharedString,
+}
+
+/// The ghost shown under the pointer while dragging a tab.
+struct TabGhost(SharedString);
+
+impl Render for TabGhost {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let t = theme(cx);
+        gpui::div()
+            .px_3()
+            .h(px(TAB_BAR_HEIGHT))
+            .flex()
+            .items_center()
+            .bg(t.background)
+            .border_1()
+            .border_color(t.border)
+            .text_size(px(13.))
+            .text_color(t.text)
+            .child(self.0.clone())
+    }
+}
+
 /// One Zed-style tab. The active tab uses `background` with no bottom border; inactive tabs sit
 /// on `surface` with muted text. The close button shows on hover or on the active tab.
 #[derive(IntoElement)]
 pub struct Tab {
     id: ElementId,
+    tab_id: u64,
     title: SharedString,
     active: bool,
     dirty: bool,
+    /// Inline rename: shows this text with a caret instead of the title.
+    editing: Option<SharedString>,
+    drag: bool,
+    on_drop: Option<Rc<dyn Fn(u64, &mut Window, &mut App)>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_close: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_middle_click: Option<MouseHandler>,
@@ -31,14 +63,24 @@ impl Tab {
     pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Self {
         Self {
             id: id.into(),
+            tab_id: 0,
             title: title.into(),
             active: false,
             dirty: false,
+            editing: None,
+            drag: false,
+            on_drop: None,
             on_click: None,
             on_close: None,
             on_middle_click: None,
             on_right_click: None,
         }
+    }
+
+    /// The id carried in the drag payload (the mux tab id).
+    pub fn tab_id(mut self, id: u64) -> Self {
+        self.tab_id = id;
+        self
     }
 
     pub fn active(mut self, active: bool) -> Self {
@@ -49,6 +91,24 @@ impl Tab {
     /// Shows the dot for "a foreground process other than the shell is running".
     pub fn dirty(mut self, dirty: bool) -> Self {
         self.dirty = dirty;
+        self
+    }
+
+    /// Shows an inline text editor (rename) in place of the title.
+    pub fn editing(mut self, text: Option<SharedString>) -> Self {
+        self.editing = text;
+        self
+    }
+
+    /// Lets the tab be dragged to reorder.
+    pub fn draggable(mut self) -> Self {
+        self.drag = true;
+        self
+    }
+
+    /// Called with the dragged tab's id when another tab is dropped on this one.
+    pub fn on_drop_tab(mut self, handler: impl Fn(u64, &mut Window, &mut App) + 'static) -> Self {
+        self.on_drop = Some(Rc::new(handler));
         self
     }
 
@@ -93,6 +153,13 @@ impl RenderOnce for Tab {
         let close = self.on_close;
         let middle = self.on_middle_click;
         let right = self.on_right_click;
+        let drag_payload = DraggedTab {
+            id: self.tab_id,
+            title: self.title.clone(),
+        };
+        let drop = self.on_drop;
+        let drag_over = t.element_hover;
+        let editing = self.editing.clone();
         gpui::div()
             .id(self.id)
             .group(group.clone())
@@ -119,13 +186,32 @@ impl RenderOnce for Tab {
             .when(self.dirty, |el| {
                 el.child(StatusDot::new(StatusKind::Accent))
             })
-            .child(
-                gpui::div()
+            .child(match editing {
+                Some(text) => gpui::div()
+                    .flex()
+                    .items_center()
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_color(t.text)
+                    .child(text)
+                    .child(gpui::div().w(px(1.)).h(px(14.)).ml(px(1.)).bg(t.accent)),
+                None => gpui::div()
                     .flex_1()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .child(self.title),
-            )
+            })
+            .when(self.drag, |el| {
+                el.on_drag(drag_payload.clone(), |dragged, _, _, cx| {
+                    let title = dragged.title.clone();
+                    cx.new(|_| TabGhost(title))
+                })
+                .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(drag_over))
+            })
+            .when_some(drop, |el, handler| {
+                el.on_drop(move |dragged: &DraggedTab, w, c| handler(dragged.id, w, c))
+            })
             .when_some(close, |el, close| {
                 let button = IconButton::new("tab-close", IconName::X)
                     .on_click(move |e, w, c| close(e, w, c));
