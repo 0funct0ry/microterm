@@ -1,8 +1,13 @@
-//! Hard-coded One Dark / One Light tokens (SPEC §4.1). M3 replaces this with the theme crate.
+//! The active theme as GPUI colours (SPEC §4.1, §8.4). Themes come from `mt_theme`; this module
+//! only converts them. The theme is a GPUI global so every view repaints from it.
 
-use gpui::{rgb, Global, Hsla};
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
-/// ANSI palette used by the mock terminal grid.
+use gpui::{Global, Hsla};
+use mt_theme::Rgba as ThemeRgba;
+
+/// Terminal colours of a theme.
 #[derive(Clone, Copy, Debug)]
 pub struct TermPalette {
     pub fg: Hsla,
@@ -15,10 +20,15 @@ pub struct TermPalette {
     pub dim: Hsla,
     /// Full 16-colour ANSI palette (0-7 normal, 8-15 bright) for the live terminal.
     pub ansi: [Hsla; 16],
+    pub cursor: Hsla,
+    /// Colour of the glyph under a block cursor.
+    pub cursor_text: Hsla,
+    pub selection_bg: Hsla,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
+    /// Interned, so `Theme` stays `Copy` while names come from user files.
     pub name: &'static str,
     pub is_dark: bool,
     pub background: Hsla,
@@ -40,116 +50,81 @@ pub struct Theme {
 
 impl Global for Theme {}
 
-fn c(hex: u32) -> Hsla {
-    rgb(hex).into()
+fn intern(name: &str) -> &'static str {
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut set = NAMES.get_or_init(Mutex::default).lock().unwrap();
+    if let Some(existing) = set.get(name) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}
+
+fn c(color: ThemeRgba) -> Hsla {
+    gpui::Rgba {
+        r: f32::from(color.r) / 255.0,
+        g: f32::from(color.g) / 255.0,
+        b: f32::from(color.b) / 255.0,
+        a: color.alpha(),
+    }
+    .into()
+}
+
+/// The bundled themes, parsed once.
+fn bundled() -> &'static mt_theme::Registry {
+    static BUNDLED: OnceLock<mt_theme::Registry> = OnceLock::new();
+    BUNDLED.get_or_init(mt_theme::Registry::bundled)
 }
 
 impl Theme {
-    pub fn one_dark() -> Self {
+    pub fn from_mt(t: &mt_theme::Theme) -> Self {
+        let ui = &t.ui;
+        let ansi = t.ansi.map(c);
         Self {
-            name: "One Dark",
-            is_dark: true,
-            background: c(0x282c33),
-            surface: c(0x2f343e),
-            elevated_surface: c(0x2f343e),
-            border: c(0x464b57),
-            border_variant: c(0x363c46),
-            text: c(0xdce0e5),
-            text_muted: c(0xa9afbc),
-            text_placeholder: c(0x878a98),
-            element_hover: c(0x363c46),
-            element_selected: c(0x454a56),
-            accent: c(0x74ade8),
-            success: c(0xa1c181),
-            warning: c(0xdec184),
-            error: c(0xd07277),
+            name: intern(&t.name),
+            is_dark: t.is_dark(),
+            background: c(ui.background),
+            surface: c(ui.surface),
+            elevated_surface: c(ui.elevated_surface),
+            border: c(ui.border),
+            border_variant: c(ui.border_variant),
+            text: c(ui.text),
+            text_muted: c(ui.text_muted),
+            text_placeholder: c(ui.text_placeholder),
+            element_hover: c(ui.element_hover),
+            element_selected: c(ui.element_selected),
+            accent: c(ui.accent),
+            success: c(ui.success),
+            warning: c(ui.warning),
+            error: c(ui.error),
             term: TermPalette {
-                fg: c(0xdce0e5),
-                red: c(0xd07277),
-                green: c(0xa1c181),
-                yellow: c(0xdec184),
-                blue: c(0x74ade8),
-                magenta: c(0xb477cf),
-                cyan: c(0x6eb4bf),
-                dim: c(0x878a98),
-                ansi: [
-                    c(0x282c33),
-                    c(0xd07277),
-                    c(0xa1c181),
-                    c(0xdec184),
-                    c(0x74ade8),
-                    c(0xb477cf),
-                    c(0x6eb4bf),
-                    c(0xdce0e5),
-                    c(0x555a66),
-                    c(0xe0878c),
-                    c(0xb4d19a),
-                    c(0xeacf9a),
-                    c(0x8fc0f2),
-                    c(0xc994df),
-                    c(0x8cc6d0),
-                    c(0xffffff),
-                ],
+                fg: c(t.foreground),
+                red: ansi[1],
+                green: ansi[2],
+                yellow: ansi[3],
+                blue: ansi[4],
+                magenta: ansi[5],
+                cyan: ansi[6],
+                dim: c(ui.text_placeholder),
+                ansi,
+                cursor: c(t.cursor),
+                cursor_text: c(t.cursor_text),
+                selection_bg: c(t.selection_bg),
             },
         }
+    }
+
+    fn bundled_named(name: &str) -> Self {
+        Self::from_mt(bundled().get(name).expect("default themes are bundled"))
+    }
+
+    pub fn one_dark() -> Self {
+        Self::bundled_named(mt_theme::DEFAULT_DARK)
     }
 
     pub fn one_light() -> Self {
-        Self {
-            name: "One Light",
-            is_dark: false,
-            background: c(0xfafafa),
-            surface: c(0xebebec),
-            elevated_surface: c(0xebebec),
-            border: c(0xc9c9ca),
-            border_variant: c(0xdfdfe0),
-            text: c(0x242529),
-            text_muted: c(0x58585a),
-            text_placeholder: c(0x7e8086),
-            element_hover: c(0xdfdfe0),
-            element_selected: c(0xd0d0d2),
-            accent: c(0x5c78e2),
-            success: c(0x669f59),
-            warning: c(0xa48819),
-            error: c(0xd36151),
-            term: TermPalette {
-                fg: c(0x242529),
-                red: c(0xd36151),
-                green: c(0x669f59),
-                yellow: c(0xa48819),
-                blue: c(0x5c78e2),
-                magenta: c(0x994cc3),
-                cyan: c(0x3b82b7),
-                dim: c(0x7e8086),
-                ansi: [
-                    c(0x242529),
-                    c(0xd36151),
-                    c(0x669f59),
-                    c(0xa48819),
-                    c(0x5c78e2),
-                    c(0x994cc3),
-                    c(0x3b82b7),
-                    c(0xdcdcdc),
-                    c(0x58585a),
-                    c(0xe0786a),
-                    c(0x7db470),
-                    c(0xb89c2c),
-                    c(0x7a90e8),
-                    c(0xad6bd3),
-                    c(0x56a0cf),
-                    c(0xfafafa),
-                ],
-            },
-        }
-    }
-
-    /// Every theme the M1 selector lists.
-    pub fn all() -> [Theme; 2] {
-        [Self::one_dark(), Self::one_light()]
-    }
-
-    pub fn by_name(name: &str) -> Option<Theme> {
-        Self::all().into_iter().find(|t| t.name == name)
+        Self::bundled_named(mt_theme::DEFAULT_LIGHT)
     }
 }
 
@@ -158,16 +133,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lists_two_themes_with_distinct_modes() {
-        let all = Theme::all();
-        assert_eq!(all.len(), 2);
-        assert!(all[0].is_dark && !all[1].is_dark);
-        assert_ne!(all[0].background, all[1].background);
+    fn defaults_are_distinct_modes() {
+        let (d, l) = (Theme::one_dark(), Theme::one_light());
+        assert!(d.is_dark && !l.is_dark);
+        assert_ne!(d.background, l.background);
+        assert_eq!(d.name, "One Dark");
     }
 
     #[test]
-    fn lookup_by_name() {
-        assert!(Theme::by_name("One Light").is_some());
-        assert!(Theme::by_name("Nope").is_none());
+    fn names_are_interned() {
+        let a = Theme::one_dark().name.as_ptr();
+        let b = Theme::one_dark().name.as_ptr();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn one_dark_matches_spec_tokens() {
+        let t = Theme::one_dark();
+        assert_eq!(t.background, c(ThemeRgba::rgb(0x28, 0x2c, 0x33)));
+        assert_eq!(t.accent, c(ThemeRgba::rgb(0x74, 0xad, 0xe8)));
+        assert_eq!(t.surface, c(ThemeRgba::rgb(0x2f, 0x34, 0x3e)));
+        assert_eq!(t.border, c(ThemeRgba::rgb(0x46, 0x4b, 0x57)));
+        assert_eq!(t.element_selected, c(ThemeRgba::rgb(0x45, 0x4a, 0x56)));
+        assert_eq!(t.term.ansi[1], c(ThemeRgba::rgb(0xd0, 0x72, 0x77)));
+    }
+
+    #[test]
+    fn every_bundled_theme_converts() {
+        for t in bundled().all() {
+            let th = Theme::from_mt(t);
+            assert_eq!(th.is_dark, t.is_dark());
+            assert_eq!(th.term.ansi.len(), 16);
+        }
     }
 }

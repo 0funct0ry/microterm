@@ -1,0 +1,28 @@
+name = "One Light"
+appearance = "light"
+author = "Atom One Dark/Light syntax themes (GitHub, Inc.)"
+license = "MIT"
+
+[colors]
+foreground = "#242529"
+background = "#fafafa"
+cursor = "#5c78e2"
+cursor_text = "#fafafa"
+selection_bg = "#5c78e240"
+selection_fg = ""
+ansi    = ["#242529", "#d36151", "#669f59", "#a48819", "#5c78e2", "#994cc3", "#3b82b7", "#dcdcdc"]
+brights = ["#58585a", "#e0786a", "#7db470", "#b89c2c", "#7a90e8", "#ad6bd3", "#56a0cf", "#fafafa"]
+
+# SPEC §4.1 tokens, hand-tuned instead of derived.
+[ui]
+surface = "#ebebec"
+border = "#c9c9ca"
+border_variant = "#dfdfe0"
+text_muted = "#58585a"
+text_placeholder = "#7e8086"
+element_hover = "#dfdfe0"
+element_selected = "#d0d0d2"
+accent = "#5c78e2"
+success = "#669f59"
+warning = "#a48819"
+error = "#d36151"

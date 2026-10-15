@@ -1,0 +1,14 @@
+name = "Dawnfox"
+appearance = "light"
+author = "EdenEast (nightfox.nvim)"
+license = "MIT"
+
+[colors]
+foreground = "#575279"
+background = "#faf4ed"
+cursor = "#575279"
+cursor_text = "#faf4ed"
+selection_bg = "#28698340"
+selection_fg = ""
+ansi    = ["#575279", "#b4637a", "#618774", "#ea9d34", "#286983", "#907aa9", "#56949f", "#e5e9f0"]
+brights = ["#5f5695", "#c26d85", "#629f81", "#eea846", "#2d81a3", "#9a80b4", "#5ca7b4", "#e6ebf3"]

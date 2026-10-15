@@ -7,7 +7,8 @@ use alacritty_terminal::term::{Config, Term, TermDamage};
 use alacritty_terminal::vte::ansi::Processor;
 
 use crate::events::{Listener, Osc52Policy, Palette, Shared, TermEvent};
-use crate::snapshot::{self, Damage, RenderSnapshot};
+use crate::snapshot::{self, CursorShape, Damage, RenderSnapshot};
+use alacritty_terminal::vte::ansi::{CursorShape as EngineShape, CursorStyle};
 
 pub(crate) struct Size {
     pub cols: usize,
@@ -49,11 +50,41 @@ impl ScrollCmd {
     }
 }
 
-pub(crate) fn term_config(scrollback: usize, policy: Osc52Policy) -> Config {
+/// The cursor a terminal shows until the program sets one with DECSCUSR (`cursor.*` config).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CursorDefault {
+    pub shape: CursorShape,
+    pub blinking: bool,
+}
+
+impl Default for CursorDefault {
+    fn default() -> Self {
+        Self {
+            shape: CursorShape::Block,
+            blinking: false,
+        }
+    }
+}
+
+impl CursorDefault {
+    fn engine(self) -> CursorStyle {
+        CursorStyle {
+            shape: match self.shape {
+                CursorShape::Block => EngineShape::Block,
+                CursorShape::Underline => EngineShape::Underline,
+                CursorShape::Beam => EngineShape::Beam,
+            },
+            blinking: self.blinking,
+        }
+    }
+}
+
+pub(crate) fn term_config(scrollback: usize, policy: Osc52Policy, cursor: CursorDefault) -> Config {
     Config {
         scrolling_history: scrollback,
         kitty_keyboard: true,
         osc52: policy.engine(),
+        default_cursor_style: cursor.engine(),
         ..Config::default()
     }
 }
@@ -80,6 +111,10 @@ pub struct Emulator {
 
 impl Emulator {
     pub fn new(cols: usize, rows: usize, scrollback: usize) -> Self {
+        Self::with_cursor(cols, rows, scrollback, CursorDefault::default())
+    }
+
+    pub fn with_cursor(cols: usize, rows: usize, scrollback: usize, cursor: CursorDefault) -> Self {
         let shared = Shared::new(
             Box::new(|| {}),
             Palette::default(),
@@ -92,7 +127,7 @@ impl Emulator {
             Osc52Policy::Write,
         );
         let term = Term::new(
-            term_config(scrollback, Osc52Policy::Write),
+            term_config(scrollback, Osc52Policy::Write, cursor),
             &Size { cols, rows },
             Listener(shared.clone()),
         );
@@ -333,6 +368,27 @@ mod tests {
         assert!(c.blinking);
         e.advance(b"\x1b[2 q");
         assert_eq!(e.snapshot().cursor.shape, CursorShape::Block);
+    }
+
+    #[test]
+    fn configured_default_cursor_applies_until_decscusr_overrides_it() {
+        let mut e = Emulator::with_cursor(
+            10,
+            3,
+            100,
+            CursorDefault {
+                shape: CursorShape::Beam,
+                blinking: true,
+            },
+        );
+        let c = e.snapshot().cursor;
+        assert_eq!((c.shape, c.blinking), (CursorShape::Beam, true));
+        e.advance(b"\x1b[2 q"); // steady block
+        let c = e.snapshot().cursor;
+        assert_eq!((c.shape, c.blinking), (CursorShape::Block, false));
+        e.advance(b"\x1b[0 q"); // back to the configured default
+        let c = e.snapshot().cursor;
+        assert_eq!((c.shape, c.blinking), (CursorShape::Beam, true));
     }
 
     #[test]

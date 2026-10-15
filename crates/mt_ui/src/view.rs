@@ -16,6 +16,7 @@ use crate::{
     mock::{Domain, Line, SpanStyle, Underline},
     overlay_stack::OverlayKind,
     platform::Platform,
+    settings,
     terminal_view::{paint_terminal, TerminalPaint},
     theme::Theme,
 };
@@ -33,7 +34,7 @@ impl Render for AppWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(t.background)
+            .bg(t.background.opacity(self.cfg.window.opacity))
             .text_color(t.text)
             .font_family(UI_FONT)
             .text_size(px(UI_TEXT_SIZE))
@@ -42,11 +43,11 @@ impl Render for AppWindow {
 
         if let Some(message) = self.config_error.clone() {
             root = root.child(
-                Banner::new("config-error", ToastKind::Error, message)
+                Banner::new("config-error", self.config_banner_kind, message)
                     .action(
                         "Open config",
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.on_stub("Opening the config in your editor", "M3", cx)
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_config(window, cx)
                         }),
                     )
                     .on_dismiss(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -56,9 +57,16 @@ impl Render for AppWindow {
             );
         }
 
+        let tab_bar_hidden = self.cfg.tab_bar.hide_if_single && self.tabs.len() <= 1;
+        let tab_bar_bottom = self.cfg.tab_bar.position == mt_config::TabBarPosition::Bottom;
+        if !tab_bar_bottom && !tab_bar_hidden {
+            root = root.child(self.tab_bar(cx));
+        }
+        root = root.child(self.viewport(&t, window, cx));
+        if tab_bar_bottom && !tab_bar_hidden {
+            root = root.child(self.tab_bar(cx));
+        }
         root = root
-            .child(self.tab_bar(cx))
-            .child(self.viewport(&t, window, cx))
             .child(self.toast_stack(cx))
             .when_some(self.hud, |el, (cols, rows)| {
                 el.child(resize_hud(&t, cols, rows))
@@ -129,13 +137,9 @@ impl Render for AppWindow {
                 this.on_stub("Font size changes", "M4", cx)
             }))
             .on_action(
-                cx.listener(|this, _: &ReloadConfig, _, cx| {
-                    this.on_stub("Config reload", "M3", cx)
-                }),
+                cx.listener(|this, _: &ReloadConfig, window, cx| this.reload_config(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &OpenConfig, _, cx| {
-                this.on_stub("Opening the config", "M3", cx)
-            }))
+            .on_action(cx.listener(|this, _: &OpenConfig, window, cx| this.open_config(window, cx)))
             .on_action(cx.listener(|this, _: &ShowCommandPalette, w, cx| {
                 this.toggle(OverlayKind::CommandPalette, w, cx)
             }))
@@ -356,11 +360,10 @@ impl AppWindow {
         tab_id: u64,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let platform = self.platform;
         let close_chip = ACTIONS
             .iter()
             .find(|a| a.name == "CloseTab")
-            .and_then(|a| a.chip(platform))
+            .and_then(|a| cx.global::<settings::Settings>().chip(a))
             .unwrap_or_default();
         ContextMenu::new("tab-menu", position)
             .items(vec![
@@ -444,7 +447,7 @@ impl AppWindow {
                 None
             };
             div()
-                .h(px(LINE_HEIGHT))
+                .h(px(cell.height))
                 .whitespace_nowrap()
                 .child(styled_line(line, t, &line_hits, cursor))
         });
@@ -454,7 +457,7 @@ impl AppWindow {
             .relative()
             .flex_1()
             .overflow_hidden()
-            .bg(t.background)
+            .bg(t.background.opacity(self.cfg.window.opacity))
             .track_focus(&self.viewport_focus)
             .on_mouse_down(
                 MouseButton::Left,
@@ -477,15 +480,16 @@ impl AppWindow {
                 focused: self.viewport_focus.is_focused(window) && window.is_window_active(),
                 cursor_on: self.cursor_phase,
                 cache,
-                font_generation: 0,
+                font_generation: self.font_generation,
+                font: self.font.clone(),
             };
             let entity = cx.entity();
             let armed = self.hud_armed.clone();
             view = view.child(
                 div()
                     .size_full()
-                    .px(px(VIEWPORT_PADDING_X))
-                    .py(px(VIEWPORT_PADDING_Y))
+                    .px(px(self.cfg.window.padding.x))
+                    .py(px(self.cfg.window.padding.y))
                     .child(
                         canvas(
                             |bounds, _, _| bounds,
@@ -531,11 +535,11 @@ impl AppWindow {
         } else {
             view = view.child(
                 div()
-                    .px(px(VIEWPORT_PADDING_X))
-                    .py(px(VIEWPORT_PADDING_Y))
-                    .font_family(TERM_FONT)
-                    .text_size(px(TERM_TEXT_SIZE))
-                    .line_height(px(LINE_HEIGHT))
+                    .px(px(self.cfg.window.padding.x))
+                    .py(px(self.cfg.window.padding.y))
+                    .font_family(self.font.family.clone())
+                    .text_size(px(cell.font_size))
+                    .line_height(px(cell.height))
                     .text_color(t.term.fg)
                     .children(lines),
             );
@@ -558,7 +562,12 @@ impl AppWindow {
             view = view.child(self.quick_select_chips(t));
         }
         view = view.child(self.mode_strip(t, cx));
-        if self.scrollbar_visible {
+        let show_scrollbar = match self.cfg.scrollbar.mode {
+            mt_config::ScrollbarMode::Always => true,
+            mt_config::ScrollbarMode::Never => false,
+            mt_config::ScrollbarMode::Auto => self.scrollbar_visible,
+        };
+        if show_scrollbar {
             view = view.child(self.scrollbar(t));
         }
         if self.overlays.contains(OverlayKind::SshReconnect) {
@@ -605,11 +614,12 @@ impl AppWindow {
         copy_active: bool,
     ) -> impl IntoElement {
         let c = self.cell;
+        let (pad_x, pad_y) = (self.cfg.window.padding.x, self.cfg.window.padding.y);
         let mark = move |row: usize, col: usize, len: usize, color: Hsla| {
             div()
                 .absolute()
-                .left(px(VIEWPORT_PADDING_X + col as f32 * c.width))
-                .top(px(VIEWPORT_PADDING_Y + row as f32 * c.height))
+                .left(px(pad_x + col as f32 * c.width))
+                .top(px(pad_y + row as f32 * c.height))
                 .w(px(len as f32 * c.width))
                 .h(px(c.height))
                 .bg(color)
@@ -741,9 +751,9 @@ impl AppWindow {
             });
         div()
             .absolute()
-            .top(px(VIEWPORT_PADDING_Y))
-            .left(px(VIEWPORT_PADDING_X))
-            .font_family(TERM_FONT)
+            .top(px(self.cfg.window.padding.y))
+            .left(px(self.cfg.window.padding.x))
+            .font_family(self.font.family.clone())
             .children(chips)
     }
 

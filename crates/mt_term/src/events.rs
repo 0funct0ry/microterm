@@ -146,7 +146,7 @@ pub(crate) struct Shared {
     pty: OnceLock<EventLoopSender>,
     pub(crate) palette: Mutex<Palette>,
     pub(crate) size: Mutex<WindowSize>,
-    policy: Osc52Policy,
+    policy: Mutex<Osc52Policy>,
 }
 
 impl Shared {
@@ -164,8 +164,12 @@ impl Shared {
             pty: OnceLock::new(),
             palette: Mutex::new(palette),
             size: Mutex::new(size),
-            policy,
+            policy: Mutex::new(policy),
         })
+    }
+
+    pub(crate) fn set_policy(&self, policy: Osc52Policy) {
+        *self.policy.lock().unwrap() = policy;
     }
 
     pub(crate) fn set_pty(&self, sender: EventLoopSender) {
@@ -216,12 +220,14 @@ impl EventListener for Listener {
             Event::Bell => s.push(TermEvent::Bell),
             Event::CursorBlinkingChange => s.push(TermEvent::CursorBlinkingChange),
             Event::ClipboardStore(t, text) => {
-                if s.policy != Osc52Policy::Disabled && text.len() <= OSC52_MAX_BYTES {
+                let policy = *s.policy.lock().unwrap();
+                if policy != Osc52Policy::Disabled && text.len() <= OSC52_MAX_BYTES {
                     s.push(TermEvent::ClipboardStore(kind(t), text));
                 }
             }
             Event::ClipboardLoad(t, f) => {
-                if s.policy == Osc52Policy::ReadWrite {
+                let policy = *s.policy.lock().unwrap();
+                if policy == Osc52Policy::ReadWrite {
                     s.push(TermEvent::ClipboardLoad(kind(t), f));
                 }
             }

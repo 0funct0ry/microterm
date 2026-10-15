@@ -1,0 +1,14 @@
+name = "Rosé Pine Dawn"
+appearance = "light"
+author = "Rosé Pine (Rosé Pine contributors)"
+license = "MIT"
+
+[colors]
+foreground = "#575279"
+background = "#faf4ed"
+cursor = "#575279"
+cursor_text = "#faf4ed"
+selection_bg = "#56949f40"
+selection_fg = ""
+ansi    = ["#f2e9e1", "#b4637a", "#286983", "#ea9d34", "#56949f", "#907aa9", "#d7827e", "#575279"]
+brights = ["#9893a5", "#b4637a", "#286983", "#ea9d34", "#56949f", "#907aa9", "#d7827e", "#575279"]

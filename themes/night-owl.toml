@@ -1,0 +1,14 @@
+name = "Night Owl"
+appearance = "dark"
+author = "Sarah Drasner (Night Owl)"
+license = "MIT"
+
+[colors]
+foreground = "#d6deeb"
+background = "#011627"
+cursor = "#80a4c2"
+cursor_text = "#011627"
+selection_bg = "#82aaff40"
+selection_fg = ""
+ansi    = ["#011627", "#ef5350", "#22da6e", "#addb67", "#82aaff", "#c792ea", "#21c7a8", "#ffffff"]
+brights = ["#575656", "#ef5350", "#22da6e", "#ffeb95", "#82aaff", "#c792ea", "#7fdbca", "#ffffff"]

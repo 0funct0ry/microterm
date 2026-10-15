@@ -24,6 +24,44 @@ pub struct CellMetrics {
     pub font_size: f32,
 }
 
+/// The terminal font from the config: family and the regular/bold weights.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TermFont {
+    pub family: SharedString,
+    pub weight: f32,
+    pub bold_weight: f32,
+}
+
+impl Default for TermFont {
+    fn default() -> Self {
+        Self {
+            family: TERM_FONT.into(),
+            weight: 400.0,
+            bold_weight: 700.0,
+        }
+    }
+}
+
+impl TermFont {
+    pub fn from_config(f: &mt_config::Font) -> Self {
+        Self {
+            family: f.family.clone().into(),
+            weight: f.weight.numeric().map_or(400.0, f32::from),
+            bold_weight: f.bold_weight.numeric().map_or(700.0, f32::from),
+        }
+    }
+
+    /// The GPUI font for a style run.
+    pub fn font(&self, bold: bool, italic: bool) -> gpui::Font {
+        let mut f = font(self.family.clone());
+        f.weight = FontWeight(if bold { self.bold_weight } else { self.weight });
+        if italic {
+            f.style = FontStyle::Italic;
+        }
+        f
+    }
+}
+
 impl Default for CellMetrics {
     fn default() -> Self {
         CellMetrics {
@@ -37,10 +75,10 @@ impl Default for CellMetrics {
 }
 
 impl CellMetrics {
-    /// Measures the bundled terminal font; falls back to constants if it is unavailable.
-    pub fn measure(window: &Window, font_size: f32) -> Self {
+    /// Measures the terminal font; falls back to the defaults if it is unavailable.
+    pub fn measure(window: &Window, family: &TermFont, font_size: f32, line_height: f32) -> Self {
         let ts = window.text_system();
-        let id = ts.resolve_font(&font(TERM_FONT));
+        let id = ts.resolve_font(&family.font(false, false));
         let scale = window.scale_factor().max(1.0);
         let snap = |v: f32| (v * scale).round() / scale;
         let fs = px(font_size);
@@ -48,7 +86,7 @@ impl CellMetrics {
             return Self::default();
         };
         let width = snap(f32::from(adv.width)).max(1.0);
-        let height = snap(font_size * TERM_LINE_HEIGHT).max(1.0);
+        let height = snap(font_size * line_height).max(1.0);
         CellMetrics {
             width,
             height,
@@ -101,8 +139,9 @@ pub struct TerminalPaint {
     /// Blink phase: false hides a blinking cursor.
     pub cursor_on: bool,
     pub cache: Rc<RefCell<LineCache>>,
-    /// Bumped when fonts change (M4) so cached lines are discarded.
+    /// Bumped when the font changes so cached lines are discarded.
     pub font_generation: u64,
+    pub font: TermFont,
 }
 
 fn rgb_hsla(r: u8, g: u8, b: u8) -> Hsla {
@@ -158,7 +197,14 @@ fn theme_key(t: &Theme, font_generation: u64) -> u64 {
     h
 }
 
-fn shape_row(window: &Window, row: &[Cell], t: &Theme, m: &CellMetrics, cols: usize) -> ShapedLine {
+fn shape_row(
+    window: &Window,
+    row: &[Cell],
+    t: &Theme,
+    m: &CellMetrics,
+    font: &TermFont,
+    cols: usize,
+) -> ShapedLine {
     let mut text = String::with_capacity(cols);
     let mut runs: Vec<TextRun> = Vec::new();
     let mut prev: Option<(Hsla, bool, bool)> = None;
@@ -187,16 +233,9 @@ fn shape_row(window: &Window, row: &[Cell], t: &Theme, m: &CellMetrics, cols: us
             continue;
         }
         prev = Some(style);
-        let mut f = font(TERM_FONT);
-        if style.1 {
-            f.weight = FontWeight::BOLD;
-        }
-        if style.2 {
-            f.style = FontStyle::Italic;
-        }
         runs.push(TextRun {
             len,
-            font: f,
+            font: font.font(style.1, style.2),
             color: fg,
             background_color: None,
             underline: None,
@@ -320,7 +359,7 @@ pub fn paint_terminal(
             .cache
             .borrow_mut()
             .get_or_shape((snap.row_hashes[r], key), capacity, || {
-                shape_row(window, row, t, m, snap.cols)
+                shape_row(window, row, t, m, &p.font, snap.cols)
             });
         let _ = line.paint(point(px(ox), px(y)), px(m.height), window, cx);
 
@@ -424,7 +463,7 @@ fn paint_cursor(window: &mut Window, cx: &mut gpui::App, p: &TerminalPaint, ox: 
         m.width * cells,
         m.height,
     );
-    let color = t.term.fg;
+    let color = t.term.cursor;
     let thin = (m.height / 12.0).max(1.0);
     if !p.focused {
         quad(window, x, y, w, thin, color);
@@ -446,13 +485,10 @@ fn paint_cursor(window: &mut Window, cx: &mut gpui::App, p: &TerminalPaint, ox: 
                 if let Some(z) = &cell.zerowidth {
                     text.extend(z.iter());
                 }
-                let mut f = font(TERM_FONT);
-                if cell.flags.has(CellFlags::BOLD) {
-                    f.weight = FontWeight::BOLD;
-                }
-                if cell.flags.has(CellFlags::ITALIC) {
-                    f.style = FontStyle::Italic;
-                }
+                let f = p.font.font(
+                    cell.flags.has(CellFlags::BOLD),
+                    cell.flags.has(CellFlags::ITALIC),
+                );
                 let len = text.len();
                 let line = window.text_system().shape_line(
                     SharedString::from(text),
@@ -460,7 +496,7 @@ fn paint_cursor(window: &mut Window, cx: &mut gpui::App, p: &TerminalPaint, ox: 
                     &[TextRun {
                         len,
                         font: f,
-                        color: t.background,
+                        color: t.term.cursor_text,
                         background_color: None,
                         underline: None,
                         strikethrough: None,

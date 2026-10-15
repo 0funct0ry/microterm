@@ -1,0 +1,14 @@
+name = "Ayu Mirage"
+appearance = "dark"
+author = "Ayu theme (Ike Ku)"
+license = "MIT"
+
+[colors]
+foreground = "#cccac2"
+background = "#1f2430"
+cursor = "#ffcc66"
+cursor_text = "#1f2430"
+selection_bg = "#6dcbfa40"
+selection_fg = ""
+ansi    = ["#1f2430", "#ed8274", "#a6cc70", "#fad07b", "#6dcbfa", "#cfbafa", "#90e1c6", "#c7c7c7"]
+brights = ["#707a8c", "#f28779", "#bae67e", "#ffd580", "#73d0ff", "#d4bfff", "#95e6cb", "#ffffff"]

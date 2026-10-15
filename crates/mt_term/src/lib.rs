@@ -15,7 +15,7 @@ mod shell;
 mod snapshot;
 mod terminal;
 
-pub use emulator::{Emulator, ScrollCmd};
+pub use emulator::{CursorDefault, Emulator, ScrollCmd};
 pub use events::{ClipboardKind, Osc52Policy, Palette, TermEvent, OSC52_MAX_BYTES};
 pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,

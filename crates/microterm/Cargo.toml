@@ -15,6 +15,8 @@ runtime-shaders = ["mt_ui/runtime-shaders"]
 [dependencies]
 clap.workspace = true
 mt_ui = { path = "../mt_ui" }
+mt_config = { path = "../mt_config" }
+mt_theme = { path = "../mt_theme" }
 
 [dev-dependencies]
 assert_cmd.workspace = true

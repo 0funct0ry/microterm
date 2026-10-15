@@ -15,8 +15,11 @@ runtime-shaders = ["gpui/runtime_shaders"]
 gpui.workspace = true
 nucleo-matcher.workspace = true
 mt_term = { path = "../mt_term" }
+mt_config = { path = "../mt_config" }
+mt_theme = { path = "../mt_theme" }
 async-channel = "2"
 anyhow = "1"
 
 [dev-dependencies]
+toml.workspace = true
 gpui = { workspace = true, features = ["test-support"] }

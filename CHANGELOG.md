@@ -19,6 +19,24 @@
   multi-line paste confirmation, and OSC 0/2 titles. `make bench` records a 100 MB throughput
   baseline in `bench/results/`. Linux prints the missing Vulkan package for your distro.
   Known gaps: SGR 21 and overline come from the engine, not drawn as specified.
+- **M3 — Configuration, hot reload and themes.** `mt_config` implements the full v1 TOML schema
+  (SPEC §8.3) with defaults, `--config` / `$MICROTERM_CONFIG` / XDG path resolution, precise
+  `line:column` errors, unknown-key warnings with "did you mean" suggestions, semantic checks,
+  keybinding parsing (`cmd+shift+p`, `{ ActivateTab = 3 }`, `Disable`) and a diff that classifies
+  every change (repaint / re-layout / keymap / patterns / new panes / restart). The file, its
+  parent directory and the themes directory are watched with a 150 ms debounce; a valid change is
+  applied atomically, an invalid one keeps the last valid config and shows the error banner
+  (Open config / Dismiss). `ReloadConfig` and `OpenConfig` (`$VISUAL`/`$EDITOR` in a new tab,
+  else the system opener) work. `mt_theme` derives UI tokens in OKLCH and bundles 53 themes with
+  recorded licences (`themes/LICENSES.md`; Zenburn is dropped because it is GPL); user themes load
+  from `<config_dir>/themes`, and `theme = { dark, light }` follows the OS appearance. The theme
+  selector lists every theme with live preview and Esc reverts. New CLI: `microterm config
+  path|check|edit|show-defaults` and `microterm themes list|show`; `make themes` validates the
+  bundled set (licence, 16 colours, ≥ 4.5:1 contrast). Applied keys: theme, font family / size /
+  line height / weights, padding, opacity and blur, cursor style / blink, scrollback, shell, env,
+  `term`, `tab_bar.position` / `hide_if_single`, scrollbar mode, bell mode, paste confirmation,
+  `clipboard.osc52`, scroll multiplier and `[[keys]]`. Other schema keys are accepted and
+  validated now and take effect in the milestone that implements them.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

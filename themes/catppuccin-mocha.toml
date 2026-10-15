@@ -1,0 +1,14 @@
+name = "Catppuccin Mocha"
+appearance = "dark"
+author = "Catppuccin (Catppuccin Org)"
+license = "MIT"
+
+[colors]
+foreground = "#cdd6f4"
+background = "#1e1e2e"
+cursor = "#f5e0dc"
+cursor_text = "#1e1e2e"
+selection_bg = "#89b4fa40"
+selection_fg = ""
+ansi    = ["#45475a", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de"]
+brights = ["#585b70", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#a6adc8"]

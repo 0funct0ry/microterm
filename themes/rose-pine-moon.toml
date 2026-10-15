@@ -1,0 +1,14 @@
+name = "Rosé Pine Moon"
+appearance = "dark"
+author = "Rosé Pine (Rosé Pine contributors)"
+license = "MIT"
+
+[colors]
+foreground = "#e0def4"
+background = "#232136"
+cursor = "#e0def4"
+cursor_text = "#232136"
+selection_bg = "#9ccfd840"
+selection_fg = ""
+ansi    = ["#393552", "#eb6f92", "#3e8fb0", "#f6c177", "#9ccfd8", "#c4a7e7", "#ea9a97", "#e0def4"]
+brights = ["#6e6a86", "#eb6f92", "#31748f", "#f6c177", "#9ccfd8", "#c4a7e7", "#ebbcba", "#e0def4"]

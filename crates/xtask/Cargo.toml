@@ -6,3 +6,4 @@ license.workspace = true
 publish = false
 
 [dependencies]
+mt_theme = { path = "../mt_theme" }

@@ -3,6 +3,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
@@ -21,7 +22,8 @@ use crate::{
     picker_state::{PickerInput, PickerOutcome, PickerState},
     platform::Platform,
     session::{self, TerminalSession},
-    terminal_view::CellMetrics,
+    settings::{self, Banner, Settings},
+    terminal_view::{CellMetrics, TermFont},
     theme::Theme,
 };
 
@@ -137,8 +139,11 @@ pub struct AppWindow {
     bell_epoch: u64,
     /// Text waiting on the multi-line paste confirmation.
     pub(crate) paste_confirm: Option<String>,
-    /// `paste.confirm_multiline` (config arrives in M3).
-    pub(crate) confirm_multiline: bool,
+    /// The config this window renders with; replaced on every reload.
+    pub(crate) cfg: Arc<mt_config::Config>,
+    pub(crate) font: TermFont,
+    pub(crate) font_generation: u64,
+    pub(crate) config_banner_kind: ToastKind,
     /// False until the first paint has sized the PTY, so start-up shows no resize HUD.
     pub(crate) hud_armed: Rc<Cell<bool>>,
     blink_started: bool,
@@ -166,7 +171,20 @@ impl AppWindow {
                 session: None,
             });
         }
-        let cell = CellMetrics::measure(window, crate::metrics::TERM_TEXT_SIZE);
+        if !cx.has_global::<Settings>() {
+            cx.set_global(Settings::defaults());
+        }
+        let (cfg, banner, font_generation) = {
+            let s = cx.global::<Settings>();
+            (s.config.clone(), s.banner.clone(), s.font_generation)
+        };
+        if !cx.has_global::<Theme>() {
+            let theme = cx.global::<Settings>().theme(true);
+            cx.set_global(theme);
+        }
+        let font = TermFont::from_config(&cfg.font);
+        let cell = CellMetrics::measure(window, &font, cfg.font.size, cfg.font.line_height);
+        let appearance = window.observe_window_appearance(|_, cx| settings::apply_theme(cx));
         let mut this = Self {
             viewport_focus,
             overlay_focus,
@@ -212,15 +230,23 @@ impl AppWindow {
             bell_flash: false,
             bell_epoch: 0,
             paste_confirm: None,
-            confirm_multiline: true,
+            cfg,
+            font,
+            font_generation,
+            config_banner_kind: ToastKind::Error,
             hud_armed: Rc::new(Cell::new(false)),
             blink_started: false,
             theme_restore: None,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, appearance],
         };
+        if let Some(b) = banner {
+            this.config_banner_kind = b.kind;
+            this.config_error = Some(b.text.into());
+        }
         // Unit tests build windows by the dozen; they opt in to a shell explicitly.
         if !cfg!(test) {
-            if let Err(e) = this.attach_terminal(0, mt_term::SpawnOptions::default(), window, cx) {
+            let opts = this.spawn_options(cx);
+            if let Err(e) = this.attach_terminal(0, opts, window, cx) {
                 this.toast(
                     ToastKind::Error,
                     format!("Could not start the shell: {e}"),
@@ -270,8 +296,11 @@ impl AppWindow {
         if !self.blink_started {
             self.blink_started = true;
             cx.spawn_in(window, async move |this, cx| loop {
+                let interval = this
+                    .read_with(cx, |this, _| this.cfg.cursor.blink_interval_ms)
+                    .unwrap_or(530);
                 cx.background_executor()
-                    .timer(Duration::from_millis(530))
+                    .timer(Duration::from_millis(u64::from(interval.max(50))))
                     .await;
                 if this.update(cx, |this, cx| this.blink(cx)).is_err() {
                     break;
@@ -362,6 +391,14 @@ impl AppWindow {
     }
 
     fn flash_bell(&mut self, cx: &mut Context<Self>) {
+        match self.cfg.bell.mode {
+            mt_config::BellMode::None => return,
+            mt_config::BellMode::Audible => {
+                audible_bell();
+                return;
+            }
+            mt_config::BellMode::Visual => {}
+        }
         self.bell_flash = true;
         self.bell_epoch += 1;
         let epoch = self.bell_epoch;
@@ -419,12 +456,13 @@ impl AppWindow {
 
     pub(crate) fn on_scroll_wheel(&mut self, ev: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let cell_height = self.cell.height;
+        let multiplier = self.cfg.mouse.scroll_multiplier;
         let Some(session) = self.live_mut() else {
             self.on_scroll(cx);
             return;
         };
         let lines = match ev.delta {
-            ScrollDelta::Lines(p) => p.y * session::SCROLL_MULTIPLIER,
+            ScrollDelta::Lines(p) => p.y * multiplier,
             ScrollDelta::Pixels(p) => f32::from(p.y) / cell_height,
         };
         session.scroll_remainder += lines;
@@ -488,7 +526,7 @@ impl AppWindow {
         if text.is_empty() {
             return;
         }
-        let confirm = self.confirm_multiline;
+        let confirm = self.cfg.paste.confirm_multiline;
         let Some(session) = self.live() else {
             self.toast(ToastKind::Info, "Paste needs a live terminal tab", cx);
             return;
@@ -662,6 +700,7 @@ impl AppWindow {
                 if revert_theme {
                     if let Some(theme) = self.theme_restore.take() {
                         cx.set_global(theme);
+                        self.sync_palette(cx);
                     }
                 }
                 self.theme_restore = None;
@@ -682,7 +721,6 @@ impl AppWindow {
     // ---------------------------------------------------------------- pickers
 
     fn build_picker(&mut self, kind: OverlayKind, cx: &mut Context<Self>) -> PickerData {
-        let platform = self.platform;
         match kind {
             OverlayKind::CommandPalette => {
                 let items = ACTIONS
@@ -691,7 +729,7 @@ impl AppWindow {
                     .map(|(i, def)| {
                         let mut e = Entry::new(Target::Action(i));
                         e.detail = Some(def.description.to_string());
-                        e.chip = def.chip(platform);
+                        e.chip = cx.global::<Settings>().chip(def);
                         (def.label.to_string(), e)
                     })
                     .collect();
@@ -815,7 +853,9 @@ impl AppWindow {
             OverlayKind::ThemeSelector => {
                 let current = *cx.global::<Theme>();
                 self.theme_restore = Some(current);
-                let items: Vec<(String, Entry)> = Theme::all()
+                let registry = cx.global::<Settings>().registry.clone();
+                let items: Vec<(String, Entry)> = registry
+                    .all()
                     .iter()
                     .enumerate()
                     .map(|(i, t)| {
@@ -825,12 +865,12 @@ impl AppWindow {
                         } else {
                             IconName::Palette
                         });
-                        e.detail = Some(if t.is_dark { "dark" } else { "light" }.to_string());
-                        (t.name.to_string(), e)
+                        e.detail = Some(if t.is_dark() { "dark" } else { "light" }.to_string());
+                        (t.name.clone(), e)
                     })
                     .collect();
                 let mut state = PickerState::new(items);
-                if let Some(i) = Theme::all().iter().position(|t| t.name == current.name) {
+                if let Some(i) = registry.all().iter().position(|t| t.name == current.name) {
                     state.select(i);
                 }
                 PickerData {
@@ -850,7 +890,11 @@ impl AppWindow {
             ..
         }) = picker.state.selected_item()
         {
-            cx.set_global(Theme::all()[*i]);
+            let registry = cx.global::<Settings>().registry.clone();
+            if let Some(t) = registry.all().get(*i) {
+                cx.set_global(Theme::from_mt(t));
+                self.sync_palette(cx);
+            }
         }
     }
 
@@ -918,9 +962,13 @@ impl AppWindow {
                 self.switch_workspace(self.workspaces.len() - 1, cx);
             }
             Target::Theme(i) => {
-                let theme = Theme::all()[i];
-                cx.set_global(theme);
-                self.toast(ToastKind::Success, format!("Theme: {}", theme.name), cx);
+                let registry = cx.global::<Settings>().registry.clone();
+                if let Some(t) = registry.all().get(i) {
+                    let theme = Theme::from_mt(t);
+                    cx.set_global(theme);
+                    self.sync_palette(cx);
+                    self.toast(ToastKind::Success, format!("Theme: {}", theme.name), cx);
+                }
             }
         }
     }
@@ -1013,9 +1061,14 @@ impl AppWindow {
             return;
         }
         let size = window.viewport_size();
+        let tab_bar = if self.cfg.tab_bar.hide_if_single && self.tabs.len() <= 1 {
+            0.0
+        } else {
+            TAB_BAR_HEIGHT
+        };
         let (cols, rows) = self.cell.grid_for(
-            f32::from(size.width) - 2.0 * VIEWPORT_PADDING_X,
-            f32::from(size.height) - TITLE_BAR_HEIGHT - TAB_BAR_HEIGHT - 2.0 * VIEWPORT_PADDING_Y,
+            f32::from(size.width) - 2.0 * self.cfg.window.padding.x,
+            f32::from(size.height) - TITLE_BAR_HEIGHT - tab_bar - 2.0 * self.cfg.window.padding.y,
         );
         self.show_hud(cols as usize, rows as usize, cx);
     }
@@ -1291,7 +1344,156 @@ impl AppWindow {
         self.toggle_overlay(kind, window, cx);
     }
 
+    // ---------------------------------------------------------------- configuration
+
+    /// Spawn options from the active config: shell, env, `$TERM`, scrollback, OSC 52 policy,
+    /// default cursor and the theme palette. These apply to new panes only (SPEC §8.2).
+    pub(crate) fn spawn_options(&self, cx: &App) -> mt_term::SpawnOptions {
+        let cfg = &cx.global::<Settings>().config;
+        let cwd = match cfg.new_tab_cwd.as_str() {
+            "inherit" => None,
+            "home" => std::env::var_os("HOME").map(std::path::PathBuf::from),
+            path => Some(expand_tilde(path)),
+        };
+        mt_term::SpawnOptions {
+            shell: cfg.shell.clone(),
+            cwd,
+            env: cfg
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            term: cfg.term.clone(),
+            scrollback: cfg.scrollback_lines as usize,
+            osc52: osc52_policy(cfg.clipboard.osc52),
+            cursor: cursor_default(&cfg.cursor),
+            palette: palette_of(cx.global::<Theme>()),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn set_config_banner(&mut self, banner: Option<Banner>, cx: &mut Context<Self>) {
+        match banner {
+            Some(b) => {
+                self.config_banner_kind = b.kind;
+                self.config_error = Some(b.text.into());
+            }
+            None => self.config_error = None,
+        }
+        cx.notify();
+    }
+
+    /// Re-reads the theme palette into every live terminal (OSC 4/10/11 answers).
+    pub(crate) fn sync_palette(&self, cx: &App) {
+        let palette = palette_of(cx.global::<Theme>());
+        for tab in &self.tabs {
+            if let Some(s) = &tab.session {
+                s.term.set_palette(palette.clone());
+            }
+        }
+    }
+
+    /// Applies a reloaded config to this window (called after the global swap).
+    pub(crate) fn apply_config(
+        &mut self,
+        diff: &mt_config::ConfigDiff,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (cfg, generation) = {
+            let s = cx.global::<Settings>();
+            (s.config.clone(), s.font_generation)
+        };
+        self.cfg = cfg.clone();
+        self.font = TermFont::from_config(&cfg.font);
+        self.font_generation = generation;
+        if diff.has(mt_config::Effect::Relayout) {
+            self.cell =
+                CellMetrics::measure(window, &self.font, cfg.font.size, cfg.font.line_height);
+            // Paint pushes the new grid size to each PTY; that is not a user resize.
+            self.hud_armed.set(false);
+            for tab in &self.tabs {
+                if let Some(s) = &tab.session {
+                    s.size.set((0, 0));
+                }
+            }
+        }
+        let background = background_appearance(&cfg.window);
+        window.set_background_appearance(background);
+        let cursor = cursor_default(&cfg.cursor);
+        let osc52 = osc52_policy(cfg.clipboard.osc52);
+        for tab in &self.tabs {
+            if let Some(s) = &tab.session {
+                s.term.set_runtime(osc52, cursor);
+            }
+        }
+        self.cursor_phase = true;
+        cx.notify();
+    }
+
+    /// `ReloadConfig`: runs the same pipeline as the file watcher, then reports.
+    pub(crate) fn reload_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The reload updates every window, this one included, so it must run after this
+        // update has finished.
+        let entity = cx.entity();
+        window.defer(cx, move |_, cx| {
+            let outcome = settings::reload(cx);
+            entity.update(cx, |this, cx| match outcome {
+                settings::ReloadOutcome::Rejected => {}
+                settings::ReloadOutcome::Unchanged => {
+                    this.toast(ToastKind::Info, "Config reloaded (no changes)", cx)
+                }
+                settings::ReloadOutcome::Applied(changed) => this.toast(
+                    ToastKind::Success,
+                    format!("Config reloaded: {}", changed.join(", ")),
+                    cx,
+                ),
+            });
+        });
+    }
+
+    /// `OpenConfig`: `$VISUAL`/`$EDITOR` in a new tab, else the system opener.
+    pub(crate) fn open_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = cx.global::<Settings>().path.clone();
+        if let Err(e) = mt_config::editor::ensure_config_file(&path) {
+            self.toast(
+                ToastKind::Error,
+                format!("Cannot create {}: {e}", path.display()),
+                cx,
+            );
+            return;
+        }
+        let Some(argv) = mt_config::editor::editor_argv_from_env(&path) else {
+            cx.open_with_system(&path);
+            self.toast(
+                ToastKind::Info,
+                "Opened the config with the system opener",
+                cx,
+            );
+            return;
+        };
+        let title = std::path::Path::new(&argv[0])
+            .file_name()
+            .map_or_else(|| "editor".into(), |n| n.to_string_lossy().into_owned());
+        self.add_tab(MockKind::Zsh, &title, cx);
+        let index = self.tabs.len() - 1;
+        let mut opts = self.spawn_options(cx);
+        opts.command = Some(argv);
+        if let Err(e) = self.attach_terminal(index, opts, window, cx) {
+            let id = self.tabs[index].id;
+            self.close_tab(id, cx);
+            self.toast(
+                ToastKind::Error,
+                format!("Could not start the editor: {e}"),
+                cx,
+            );
+        } else {
+            self.tabs[index].title = title;
+        }
+    }
+
     pub(crate) fn show_config_error(&mut self, cx: &mut Context<Self>) {
+        self.config_banner_kind = ToastKind::Error;
         self.config_error = Some(
             "microterm.toml:12:9 — unknown key `fontt` (did you mean `font`?). Keeping the previous config.".into(),
         );
@@ -1299,7 +1501,6 @@ impl AppWindow {
     }
 }
 
-/// Printable text of a key press, ignoring shortcuts.
 /// Colours the terminal needs to answer OSC 4/10/11/12 queries.
 fn palette_of(t: &Theme) -> mt_term::Palette {
     let rgb = |c: gpui::Hsla| {
@@ -1313,11 +1514,65 @@ fn palette_of(t: &Theme) -> mt_term::Palette {
     mt_term::Palette {
         fg: rgb(t.term.fg),
         bg: rgb(t.background),
-        cursor: rgb(t.term.fg),
+        cursor: rgb(t.term.cursor),
         ansi: t.term.ansi.map(rgb),
     }
 }
 
+fn osc52_policy(p: mt_config::Osc52) -> mt_term::Osc52Policy {
+    match p {
+        mt_config::Osc52::Write => mt_term::Osc52Policy::Write,
+        mt_config::Osc52::ReadWrite => mt_term::Osc52Policy::ReadWrite,
+        mt_config::Osc52::Disabled => mt_term::Osc52Policy::Disabled,
+    }
+}
+
+fn cursor_default(c: &mt_config::Cursor) -> mt_term::CursorDefault {
+    mt_term::CursorDefault {
+        shape: match c.style {
+            mt_config::CursorStyle::Block => mt_term::CursorShape::Block,
+            mt_config::CursorStyle::Beam => mt_term::CursorShape::Beam,
+            mt_config::CursorStyle::Underline => mt_term::CursorShape::Underline,
+        },
+        blinking: c.blink,
+    }
+}
+
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => std::path::PathBuf::from(home).join(rest),
+        _ if path == "~" => std::env::var_os("HOME").map_or_else(|| path.into(), Into::into),
+        _ => path.into(),
+    }
+}
+
+/// Window transparency from `window.opacity` / `window.blur` (blur is macOS only).
+pub(crate) fn background_appearance(w: &mt_config::Window) -> gpui::WindowBackgroundAppearance {
+    if w.opacity >= 1.0 {
+        gpui::WindowBackgroundAppearance::Opaque
+    } else if w.blur && cfg!(target_os = "macos") {
+        gpui::WindowBackgroundAppearance::Blurred
+    } else {
+        gpui::WindowBackgroundAppearance::Transparent
+    }
+}
+
+/// Best-effort system bell for `bell.mode = "audible"`: GPUI has no bell API.
+fn audible_bell() {
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("afplay", &["/System/Library/Sounds/Tink.aiff"])
+    } else {
+        ("canberra-gtk-play", &["-i", "bell"])
+    };
+    let _ = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// Printable text of a key press, ignoring shortcuts.
 pub(crate) fn typed_text(ev: &KeyDownEvent, platform: Platform) -> Option<&str> {
     let m = &ev.keystroke.modifiers;
     if m.control || m.platform || m.function || (m.alt && platform == Platform::Linux) {
@@ -1346,19 +1601,42 @@ fn plural(n: usize) -> &'static str {
 }
 
 pub fn window_options(cx: &App) -> gpui::WindowOptions {
-    let bounds = Bounds::centered(None, gpui::size(px(1000.), px(640.)), cx);
+    let cfg = cx.try_global::<Settings>().map_or_else(
+        || Arc::new(mt_config::Config::default()),
+        |s| s.config.clone(),
+    );
+    // Approximate the cell size from the font size; the exact grid is fitted after first paint.
+    let cell_w = cfg.font.size * 0.6;
+    let cell_h = cfg.font.size * cfg.font.line_height;
+    let width = cfg.window.initial_size.cols as f32 * cell_w + 2.0 * cfg.window.padding.x;
+    let height = cfg.window.initial_size.rows as f32 * cell_h
+        + 2.0 * cfg.window.padding.y
+        + TITLE_BAR_HEIGHT
+        + TAB_BAR_HEIGHT;
+    let bounds = Bounds::centered(
+        None,
+        gpui::size(px(width.max(480.)), px(height.max(300.))),
+        cx,
+    );
     let mac = Platform::current() == Platform::Mac;
+    let decorations = match cfg.window.decorations {
+        mt_config::Decorations::Server => gpui::WindowDecorations::Server,
+        _ => gpui::WindowDecorations::Client,
+    };
     gpui::WindowOptions {
         window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
-        titlebar: Some(gpui::TitlebarOptions {
-            title: Some("microterm".into()),
-            appears_transparent: true,
-            traffic_light_position: mac
-                .then(|| gpui::point(px(TRAFFIC_LIGHT_INSET), px(TRAFFIC_LIGHT_INSET))),
+        titlebar: (cfg.window.decorations != mt_config::Decorations::None).then(|| {
+            gpui::TitlebarOptions {
+                title: Some("microterm".into()),
+                appears_transparent: true,
+                traffic_light_position: mac
+                    .then(|| gpui::point(px(TRAFFIC_LIGHT_INSET), px(TRAFFIC_LIGHT_INSET))),
+            }
         }),
         window_min_size: Some(gpui::size(px(480.), px(300.))),
+        window_background: background_appearance(&cfg.window),
         app_id: Some("microterm".into()),
-        window_decorations: Some(gpui::WindowDecorations::Client),
+        window_decorations: Some(decorations),
         ..Default::default()
     }
 }

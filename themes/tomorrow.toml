@@ -1,0 +1,14 @@
+name = "Tomorrow"
+appearance = "light"
+author = "Chris Kempson (Tomorrow Theme)"
+license = "MIT"
+
+[colors]
+foreground = "#4d4d4c"
+background = "#ffffff"
+cursor = "#4d4d4c"
+cursor_text = "#ffffff"
+selection_bg = "#4271ae40"
+selection_fg = ""
+ansi    = ["#4d4d4c", "#c82829", "#718c00", "#eab700", "#4271ae", "#8959a8", "#3e999f", "#d6d6d6"]
+brights = ["#8e908c", "#c82829", "#718c00", "#eab700", "#4271ae", "#8959a8", "#3e999f", "#ffffff"]

@@ -37,7 +37,7 @@ check-facade:
 		echo 'error: only crates/mt_term may use alacritty_terminal'; exit 1; fi
 
 themes:
-	@echo "themes: not implemented yet (M3)"
+	$(CARGO) run -q -p xtask -- check-themes
 
 # Headless 100 MB throughput baseline -> bench/results/<date>.json. vtebench must run inside a
 # microterm tab: `bench/vtebench.sh` (see bench/README.md).

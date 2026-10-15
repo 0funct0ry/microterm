@@ -2,7 +2,13 @@
 //! with the full registry; the palette, keymap and key chips all read from `ACTIONS` so they
 //! cannot drift apart.
 
+use std::collections::{HashMap, HashSet};
+
 use gpui::{actions, Action, App, KeyBinding, KeyBindingContextPredicate};
+use mt_config::{
+    keys::{KeyBindingSpec, Scope},
+    ActionArg,
+};
 
 use crate::{keychips::format_keystroke, platform::Platform};
 
@@ -370,8 +376,134 @@ impl ActionDef {
     }
 }
 
-/// Every binding to install: the registry plus `⌘1..⌘9` / `Alt+1..Alt+9` and overlay keys.
-pub fn key_bindings(platform: Platform, cx: &App) -> Vec<KeyBinding> {
+/// Config name of an action reference: `SpawnTab` or `ActivateTabRelative(1)`.
+pub fn action_key(name: &str, arg: &Option<ActionArg>) -> String {
+    match arg {
+        None => name.to_string(),
+        Some(ActionArg::Int(n)) => format!("{name}({n})"),
+        Some(ActionArg::Str(s)) => format!("{name}({s})"),
+        Some(ActionArg::Bool(b)) => format!("{name}({b})"),
+        Some(ActionArg::Table(t)) => format!("{name}({t})"),
+    }
+}
+
+/// Builds the action a config entry names. `ActivateTab` counts from 1 in the config.
+pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Action>, String> {
+    match (name, arg) {
+        ("ActivateTab", Some(ActionArg::Int(n))) if (1..=9999).contains(n) => {
+            Ok(Box::new(ActivateTab(*n as usize - 1)))
+        }
+        ("ActivateTab", _) => Err("ActivateTab takes a tab number from 1".into()),
+        ("ActivateTabRelative", Some(ActionArg::Int(n))) => {
+            Ok(Box::new(ActivateTabRelative(*n as isize)))
+        }
+        ("SwitchWorkspaceRelative", Some(ActionArg::Int(n))) => {
+            Ok(Box::new(SwitchWorkspaceRelative(*n as isize)))
+        }
+        ("ScrollByPage", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollByPage(*n as isize))),
+        ("ScrollByLine", Some(ActionArg::Int(n))) => Ok(Box::new(ScrollByLine(*n as isize))),
+        (_, None) => ACTIONS
+            .iter()
+            .find(|d| d.name == name && !name.contains('('))
+            .map(|d| (d.build)())
+            .ok_or_else(|| format!("unknown action \"{name}\"")),
+        (_, Some(_)) => Err(format!(
+            "unknown action \"{name}\" or it takes no such argument"
+        )),
+    }
+}
+
+/// `(gpui keystroke, action)` pairs plus key chips, from the defaults and the user's bindings.
+struct KeymapPlan {
+    binds: Vec<(String, Box<dyn Action>, &'static str)>,
+    chips: HashMap<&'static str, String>,
+    warnings: Vec<String>,
+}
+
+fn same_stroke(a: &str, b: &str) -> bool {
+    match (gpui::Keystroke::parse(a), gpui::Keystroke::parse(b)) {
+        (Ok(x), Ok(y)) => x.modifiers == y.modifiers && x.key == y.key,
+        _ => a == b,
+    }
+}
+
+fn plan_keymap(platform: Platform, user: &[KeyBindingSpec]) -> KeymapPlan {
+    let mut plan = KeymapPlan {
+        binds: Vec::new(),
+        chips: HashMap::new(),
+        warnings: Vec::new(),
+    };
+    let disabled: Vec<String> = user
+        .iter()
+        .filter(|s| s.scope == Scope::Terminal && s.action.is_none())
+        .map(|s| s.keystroke.to_string())
+        .collect();
+    let is_disabled = |ks: &str| disabled.iter().any(|d| same_stroke(d, ks));
+
+    for def in ACTIONS {
+        for ks in def.bindings(platform) {
+            if is_disabled(ks) {
+                continue;
+            }
+            plan.binds
+                .push((ks.to_string(), (def.build)(), CONTEXT_ROOT));
+            plan.chips
+                .entry(def.name)
+                .or_insert_with(|| format_keystroke(ks, platform));
+        }
+    }
+    let tab_mod = match platform {
+        Platform::Mac => "cmd",
+        Platform::Linux => "alt",
+    };
+    for n in 1..=9usize {
+        let ks = format!("{tab_mod}-{n}");
+        if !is_disabled(&ks) {
+            plan.binds
+                .push((ks, Box::new(ActivateTab(n - 1)), CONTEXT_ROOT));
+        }
+    }
+
+    // User bindings come last, so they win over defaults on the same keystroke.
+    let mut user_chips: HashSet<&'static str> = HashSet::new();
+    for spec in user.iter().filter(|s| s.scope == Scope::Terminal) {
+        let Some(action) = &spec.action else { continue };
+        let ks = spec.keystroke.to_string();
+        match resolve_action(&action.name, &action.arg) {
+            Ok(a) => {
+                plan.binds.push((ks.clone(), a, CONTEXT_ROOT));
+                let key = action_key(&action.name, &action.arg);
+                if let Some(def) = ACTIONS.iter().find(|d| d.name == key) {
+                    // The user's first binding replaces the default chip.
+                    if user_chips.insert(def.name) {
+                        plan.chips.insert(def.name, format_keystroke(&ks, platform));
+                    }
+                }
+            }
+            Err(e) => plan
+                .warnings
+                .push(format!("key \"{}\": {e}; binding skipped", spec.keystroke)),
+        }
+    }
+    plan
+}
+
+/// Chips and warnings for a set of user bindings, without touching GPUI.
+pub fn keymap_chips(
+    platform: Platform,
+    user: &[KeyBindingSpec],
+) -> (HashMap<&'static str, String>, Vec<String>) {
+    let plan = plan_keymap(platform, user);
+    (plan.chips, plan.warnings)
+}
+
+/// Every binding to install: the registry, `⌘1..⌘9` / `Alt+1..Alt+9`, the user's `[[keys]]`
+/// and the overlay keys.
+pub fn build_keymap(
+    platform: Platform,
+    cx: &App,
+    user: &[KeyBindingSpec],
+) -> (Vec<KeyBinding>, Vec<String>) {
     let mapper = cx.keyboard_mapper().clone();
     let bind = |keystroke: &str, action: Box<dyn Action>, context: &str| {
         let predicate = KeyBindingContextPredicate::parse(context)
@@ -385,41 +517,40 @@ pub fn key_bindings(platform: Platform, cx: &App) -> Vec<KeyBinding> {
             None,
             mapper.as_ref(),
         )
-        .unwrap_or_else(|e| panic!("bad built-in keystroke {keystroke:?}: {e}"))
     };
+    let plan = plan_keymap(platform, user);
+    let mut warnings = plan.warnings;
     let mut out = Vec::new();
-    for def in ACTIONS {
-        for keystroke in def.bindings(platform) {
-            out.push(bind(keystroke, (def.build)(), CONTEXT_ROOT));
+    for (ks, action, ctx) in plan.binds {
+        match bind(&ks, action, ctx) {
+            Ok(b) => out.push(b),
+            Err(e) => warnings.push(format!("key \"{ks}\": {e}; binding skipped")),
         }
     }
-    let tab_mod = match platform {
-        Platform::Mac => "cmd",
-        Platform::Linux => "alt",
+    let fixed = |ks: &str, a: Box<dyn Action>, ctx: &str| {
+        bind(ks, a, ctx).unwrap_or_else(|e| panic!("bad built-in keystroke {ks:?}: {e}"))
     };
-    for n in 1..=9usize {
-        out.push(bind(
-            &format!("{tab_mod}-{n}"),
-            Box::new(ActivateTab(n - 1)),
-            CONTEXT_ROOT,
-        ));
-    }
-    out.push(bind("escape", Box::new(DismissOverlay), CONTEXT_OVERLAY));
-    out.push(bind("up", Box::new(PickerUp), CONTEXT_PICKER));
-    out.push(bind("down", Box::new(PickerDown), CONTEXT_PICKER));
-    out.push(bind("ctrl-p", Box::new(PickerUp), CONTEXT_PICKER));
-    out.push(bind("ctrl-n", Box::new(PickerDown), CONTEXT_PICKER));
-    out.push(bind("enter", Box::new(PickerConfirm), CONTEXT_PICKER));
+    out.push(fixed("escape", Box::new(DismissOverlay), CONTEXT_OVERLAY));
+    out.push(fixed("up", Box::new(PickerUp), CONTEXT_PICKER));
+    out.push(fixed("down", Box::new(PickerDown), CONTEXT_PICKER));
+    out.push(fixed("ctrl-p", Box::new(PickerUp), CONTEXT_PICKER));
+    out.push(fixed("ctrl-n", Box::new(PickerDown), CONTEXT_PICKER));
+    out.push(fixed("enter", Box::new(PickerConfirm), CONTEXT_PICKER));
     let new_window = match platform {
         Platform::Mac => "cmd-enter",
         Platform::Linux => "ctrl-enter",
     };
-    out.push(bind(
+    out.push(fixed(
         new_window,
         Box::new(PickerConfirmInNewWindow),
         CONTEXT_PICKER,
     ));
-    out
+    (out, warnings)
+}
+
+/// The default bindings only (tests and first start-up before the config is read).
+pub fn key_bindings(platform: Platform, cx: &App) -> Vec<KeyBinding> {
+    build_keymap(platform, cx, &[]).0
 }
 
 #[cfg(test)]
@@ -479,6 +610,76 @@ mod tests {
     fn debug_actions_have_no_default_binding() {
         for def in ACTIONS.iter().filter(|a| a.debug) {
             assert!(def.mac.is_empty() && def.linux.is_empty());
+        }
+    }
+
+    fn specs(src: &str) -> Vec<KeyBindingSpec> {
+        let cfg: mt_config::Config = toml::from_str(src).unwrap();
+        mt_config::keys::bindings(&cfg).unwrap()
+    }
+
+    #[test]
+    fn user_binding_replaces_chip_and_disable_removes_default() {
+        let user = specs(
+            r#"
+            [[keys]]
+            key = "cmd+shift+r"
+            action = "Disable"
+            [[keys]]
+            key = "ctrl+alt+r"
+            action = "ReloadConfig"
+            [[keys]]
+            key = "cmd+t"
+            action = "Disable"
+            "#,
+        );
+        let (chips, warnings) = keymap_chips(Platform::Mac, &user);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(chips["ReloadConfig"], "⌃⌥R");
+        assert!(
+            !chips.contains_key("SpawnTab"),
+            "disabled default has no chip"
+        );
+        assert_eq!(chips["CloseTab"], "⌘W");
+    }
+
+    #[test]
+    fn unknown_actions_warn_and_are_skipped() {
+        let user = specs(
+            r#"
+            [[keys]]
+            key = "ctrl+alt+x"
+            action = "Frobnicate"
+            [[keys]]
+            key = "ctrl+alt+y"
+            action = { ActivateTab = 0 }
+            "#,
+        );
+        let (_, warnings) = keymap_chips(Platform::Linux, &user);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("Frobnicate"));
+        assert!(warnings[1].contains("ActivateTab"));
+    }
+
+    #[test]
+    fn parametrised_actions_resolve() {
+        assert!(resolve_action("ActivateTab", &Some(ActionArg::Int(3))).is_ok());
+        assert!(resolve_action("ScrollByLine", &Some(ActionArg::Int(-1))).is_ok());
+        assert!(resolve_action("SpawnTab", &None).is_ok());
+        assert!(resolve_action("SpawnTab", &Some(ActionArg::Int(1))).is_err());
+        assert!(resolve_action("ActivateTab", &None).is_err());
+        assert_eq!(
+            action_key("ActivateTabRelative", &Some(ActionArg::Int(1))),
+            "ActivateTabRelative(1)"
+        );
+    }
+
+    #[test]
+    fn defaults_have_a_chip_for_every_bound_action() {
+        let (chips, warnings) = keymap_chips(Platform::Linux, &[]);
+        assert!(warnings.is_empty());
+        for def in ACTIONS.iter().filter(|d| !d.linux.is_empty()) {
+            assert!(chips.contains_key(def.name), "{}", def.name);
         }
     }
 }

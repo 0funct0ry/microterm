@@ -18,6 +18,14 @@ export default defineConfig({
             { label: 'Quick start', slug: 'docs/quick-start' },
           ],
         },
+        {
+          label: 'Customising',
+          items: [
+            { label: 'Config file', slug: 'docs/config-file' },
+            { label: 'Hot reload', slug: 'docs/hot-reload' },
+            { label: 'Themes', slug: 'docs/themes' },
+          ],
+        },
       ],
     }),
   ],

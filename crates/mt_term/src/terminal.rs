@@ -12,7 +12,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::tty::{self, Shell};
 
-use crate::emulator::{take_damage, term_config, ScrollCmd, Size};
+use crate::emulator::{take_damage, term_config, CursorDefault, ScrollCmd, Size};
 use crate::events::{Listener, Osc52Policy, Palette, Shared, TermEvent};
 use crate::input::{encode_key, encode_paste, InputMode, KeyInput};
 use crate::shell::resolve_shell;
@@ -21,6 +21,8 @@ use crate::snapshot::{self, Modes, RenderSnapshot};
 pub struct SpawnOptions {
     /// `shell` config value; empty means `$SHELL`, then the passwd entry, then `/bin/sh`.
     pub shell: String,
+    /// Run this program and arguments instead of the shell (editor tabs, launch profiles).
+    pub command: Option<Vec<String>>,
     pub cwd: Option<PathBuf>,
     /// Extra environment for the child (`[env]` config table).
     pub env: Vec<(String, String)>,
@@ -33,12 +35,15 @@ pub struct SpawnOptions {
     pub scrollback: usize,
     pub osc52: Osc52Policy,
     pub palette: Palette,
+    /// Cursor shown until the program sets one (`cursor.*` config).
+    pub cursor: CursorDefault,
 }
 
 impl Default for SpawnOptions {
     fn default() -> Self {
         SpawnOptions {
             shell: String::new(),
+            command: None,
             cwd: None,
             env: Vec::new(),
             term: "xterm-256color".into(),
@@ -49,6 +54,7 @@ impl Default for SpawnOptions {
             scrollback: 10_000,
             osc52: Osc52Policy::Write,
             palette: Palette::default(),
+            cursor: CursorDefault::default(),
         }
     }
 }
@@ -58,6 +64,7 @@ pub struct Terminal {
     shared: Arc<Shared>,
     sender: EventLoopSender,
     pid: u32,
+    scrollback: usize,
 }
 
 impl Terminal {
@@ -82,7 +89,7 @@ impl Terminal {
         );
         let listener = Listener(shared.clone());
         let term = Term::new(
-            term_config(opts.scrollback, opts.osc52),
+            term_config(opts.scrollback, opts.osc52, opts.cursor),
             &Size {
                 cols: opts.cols as usize,
                 rows: opts.rows as usize,
@@ -91,12 +98,17 @@ impl Terminal {
         );
         let term = Arc::new(FairMutex::new(term));
 
-        let program = resolve_shell(&opts.shell);
-        // macOS terminals start login shells so PATH matches Terminal.app.
-        let args = if cfg!(target_os = "macos") {
-            vec!["-l".to_string()]
-        } else {
-            Vec::new()
+        let (program, args) = match opts.command.as_deref() {
+            Some([program, rest @ ..]) => (program.clone(), rest.to_vec()),
+            _ => (
+                resolve_shell(&opts.shell),
+                // macOS terminals start login shells so PATH matches Terminal.app.
+                if cfg!(target_os = "macos") {
+                    vec!["-l".to_string()]
+                } else {
+                    Vec::new()
+                },
+            ),
         };
         let mut env: HashMap<String, String> = HashMap::new();
         env.insert("TERM".into(), opts.term.clone());
@@ -128,6 +140,7 @@ impl Terminal {
             shared,
             sender,
             pid,
+            scrollback: opts.scrollback,
         })
     }
 
@@ -166,6 +179,15 @@ impl Terminal {
             rows: rows as usize,
         });
         let _ = self.sender.send(Msg::Resize(ws));
+    }
+
+    /// Applies the settings that may change while the shell runs: the OSC 52 policy and the
+    /// default cursor. Scrollback size is fixed at spawn (SPEC §8.2: new panes only).
+    pub fn set_runtime(&self, osc52: Osc52Policy, cursor: CursorDefault) {
+        self.shared.set_policy(osc52);
+        self.term
+            .lock()
+            .set_options(term_config(self.scrollback, osc52, cursor));
     }
 
     pub fn set_palette(&self, palette: Palette) {

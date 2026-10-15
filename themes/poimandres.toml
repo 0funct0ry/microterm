@@ -1,0 +1,14 @@
+name = "Poimandres"
+appearance = "dark"
+author = "drcmda (poimandres-theme)"
+license = "MIT"
+
+[colors]
+foreground = "#a6accd"
+background = "#1b1e28"
+cursor = "#a6accd"
+cursor_text = "#1b1e28"
+selection_bg = "#89ddff40"
+selection_fg = ""
+ansi    = ["#1b1e28", "#d0679d", "#5de4c7", "#fffac2", "#89ddff", "#fcc5e9", "#add7ff", "#ffffff"]
+brights = ["#506477", "#d0679d", "#5de4c7", "#fffac2", "#89ddff", "#fcc5e9", "#add7ff", "#ffffff"]

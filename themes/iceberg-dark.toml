@@ -1,0 +1,14 @@
+name = "Iceberg Dark"
+appearance = "dark"
+author = "cocopon (iceberg.vim)"
+license = "MIT"
+
+[colors]
+foreground = "#c6c8d1"
+background = "#161821"
+cursor = "#c6c8d1"
+cursor_text = "#161821"
+selection_bg = "#84a0c640"
+selection_fg = ""
+ansi    = ["#1e2132", "#e27878", "#b4be82", "#e2a478", "#84a0c6", "#a093c7", "#89b8c2", "#c6c8d1"]
+brights = ["#6b7089", "#e98989", "#c0ca8e", "#e9b189", "#91acd1", "#ada0d3", "#95c4ce", "#d2d4de"]

@@ -1,0 +1,28 @@
+name = "One Dark"
+appearance = "dark"
+author = "Atom One Dark/Light syntax themes (GitHub, Inc.)"
+license = "MIT"
+
+[colors]
+foreground = "#dce0e5"
+background = "#282c33"
+cursor = "#74ade8"
+cursor_text = "#282c33"
+selection_bg = "#74ade840"
+selection_fg = ""
+ansi    = ["#282c33", "#d07277", "#a1c181", "#dec184", "#74ade8", "#b477cf", "#6eb4bf", "#dce0e5"]
+brights = ["#525561", "#de8f94", "#bad6a1", "#e9d4a1", "#a3c8ef", "#cba2dd", "#9ac9d1", "#ffffff"]
+
+# SPEC §4.1 tokens, hand-tuned instead of derived.
+[ui]
+surface = "#2f343e"
+border = "#464b57"
+border_variant = "#363c46"
+text_muted = "#a9afbc"
+text_placeholder = "#878a98"
+element_hover = "#363c46"
+element_selected = "#454a56"
+accent = "#74ade8"
+success = "#a1c181"
+warning = "#dec184"
+error = "#d07277"

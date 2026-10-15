@@ -1,0 +1,14 @@
+name = "Ayu Light"
+appearance = "light"
+author = "Ayu theme (Ike Ku)"
+license = "MIT"
+
+[colors]
+foreground = "#5c6166"
+background = "#fcfcfc"
+cursor = "#ff9940"
+cursor_text = "#fcfcfc"
+selection_bg = "#399ee640"
+selection_fg = ""
+ansi    = ["#5c6166", "#e65050", "#4cbf99", "#f2ae49", "#399ee6", "#a37acc", "#55b4d4", "#abb0b6"]
+brights = ["#787b80", "#f07171", "#86b300", "#ffaa33", "#55b4d4", "#a37acc", "#4cbf99", "#d3d5d8"]

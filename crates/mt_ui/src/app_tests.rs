@@ -297,3 +297,164 @@ fn registry_chips_match_the_platform_keystrokes(_cx: &mut TestAppContext) {
         }
     }
 }
+
+// ------------------------------------------------------------------ configuration (M3)
+
+fn temp_config(name: &str, body: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("mt_ui_cfg_{}_{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("microterm.toml");
+    std::fs::write(&f, body).unwrap();
+    f
+}
+
+fn setup_with_config(
+    cx: &mut TestAppContext,
+    path: std::path::PathBuf,
+) -> (Entity<AppWindow>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        cx.set_global(crate::settings::Settings::load(path));
+        crate::settings::apply_theme(cx);
+        crate::settings::install_keymap(cx);
+    });
+    let (view, cx) = cx.add_window_view(AppWindow::new);
+    cx.run_until_parked();
+    (view, cx)
+}
+
+#[gpui::test]
+fn startup_config_is_applied(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "startup",
+        "theme = \"Nord\"\n[window]\npadding = { x = 20, y = 10 }\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    assert_eq!(cx.update(|_, cx| cx.global::<Theme>().name), "Nord");
+    assert_eq!(view.read_with(cx, |t, _| t.cfg.window.padding.x), 20.0);
+}
+
+#[gpui::test]
+fn hot_reload_applies_changes_and_keeps_last_valid_config(cx: &mut TestAppContext) {
+    use crate::settings::{reload, ReloadOutcome};
+    let f = temp_config("reload", "");
+    let app = cx.clone();
+    let (view, vcx) = setup_with_config(cx, f.clone());
+    assert_eq!(view.read_with(vcx, |t, _| t.cfg.font.size), 13.0);
+
+    std::fs::write(
+        &f,
+        "theme = \"Dracula\"\n[font]\nsize = 16\n[window]\npadding = { x = 30, y = 2 }\n",
+    )
+    .unwrap();
+    let outcome = app.update(reload);
+    assert!(matches!(outcome, ReloadOutcome::Applied(_)), "{outcome:?}");
+    assert_eq!(app.update(|cx| cx.global::<Theme>().name), "Dracula");
+    assert_eq!(view.read_with(vcx, |t, _| t.cfg.font.size), 16.0);
+    assert_eq!(
+        view.read_with(vcx, |t, _| t.cell.font_size),
+        16.0,
+        "re-layout re-measures"
+    );
+    assert!(view.read_with(vcx, |t, _| t.config_error.is_none()));
+
+    // A syntax error keeps everything as it was and shows the banner with line:column.
+    std::fs::write(&f, "theme = \"Nord\"\n[font]\nsize = = 1\n").unwrap();
+    assert_eq!(app.update(reload), ReloadOutcome::Rejected);
+    assert_eq!(app.update(|cx| cx.global::<Theme>().name), "Dracula");
+    assert_eq!(view.read_with(vcx, |t, _| t.cfg.font.size), 16.0);
+    let banner = view
+        .read_with(vcx, |t, _| t.config_error.clone())
+        .expect("banner");
+    assert!(banner.contains("microterm.toml:3:"), "{banner}");
+    assert!(banner.contains("last valid config"), "{banner}");
+
+    // Fixing the file clears the banner.
+    std::fs::write(&f, "theme = \"Nord\"\n").unwrap();
+    assert!(matches!(app.update(reload), ReloadOutcome::Applied(_)));
+    assert_eq!(app.update(|cx| cx.global::<Theme>().name), "Nord");
+    assert!(view.read_with(vcx, |t, _| t.config_error.is_none()));
+}
+
+#[gpui::test]
+fn unknown_key_is_a_warning_banner_but_still_applies(cx: &mut TestAppContext) {
+    use crate::settings::reload;
+    let f = temp_config("warn", "");
+    let app = cx.clone();
+    let (view, vcx) = setup_with_config(cx, f.clone());
+    std::fs::write(&f, "fnt = 1\n[cursor]\nstyle = \"beam\"\n").unwrap();
+    app.update(reload);
+    assert_eq!(
+        view.read_with(vcx, |t, _| t.cfg.cursor.style),
+        mt_config::CursorStyle::Beam
+    );
+    let banner = view
+        .read_with(vcx, |t, _| t.config_error.clone())
+        .expect("banner");
+    assert!(banner.contains("did you mean \"font\""), "{banner}");
+    assert_eq!(
+        view.read_with(vcx, |t, _| t.config_banner_kind),
+        crate::components::ToastKind::Warning
+    );
+}
+
+#[gpui::test]
+fn reloaded_keybindings_replace_defaults_and_chips(cx: &mut TestAppContext) {
+    use crate::settings::{reload, Settings};
+    let f = temp_config("keys", "");
+    let app = cx.clone();
+    let (view, vcx) = setup_with_config(cx, f.clone());
+    let palette = actions::ACTIONS
+        .iter()
+        .find(|a| a.name == "ShowCommandPalette")
+        .unwrap();
+    let default_chip = app.update(|cx| cx.global::<Settings>().chip(palette));
+    assert!(default_chip.is_some());
+
+    std::fs::write(
+        &f,
+        "[[keys]]\nkey = \"ctrl+alt+k\"\naction = \"ShowCommandPalette\"\n",
+    )
+    .unwrap();
+    app.update(reload);
+    let chip = app
+        .update(|cx| cx.global::<Settings>().chip(palette))
+        .unwrap();
+    assert!(
+        chip.contains('K') && chip != default_chip.unwrap(),
+        "{chip}"
+    );
+    vcx.simulate_keystrokes("ctrl-alt-k");
+    assert_eq!(top(&view, vcx), Some(OverlayKind::CommandPalette));
+    vcx.simulate_keystrokes("escape");
+
+    // Disabling the original binding frees the keystroke.
+    let original = first_binding("ShowCommandPalette");
+    std::fs::write(
+        &f,
+        format!(
+            "[[keys]]\nkey = \"{}\"\naction = \"Disable\"\n",
+            original.replace('-', "+")
+        ),
+    )
+    .unwrap();
+    app.update(reload);
+    vcx.simulate_keystrokes(original);
+    assert_eq!(
+        top(&view, vcx),
+        None,
+        "disabled default must not open the palette"
+    );
+}
+
+#[gpui::test]
+fn theme_selector_lists_every_bundled_theme(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SelectTheme);
+    let count = view.read_with(cx, |t, _| {
+        t.picker.as_ref().map_or(0, |p| p.state.matches().len())
+    });
+    assert_eq!(count, 53, "every bundled theme is browsable");
+    cx.update(|_, cx| {
+        assert_eq!(cx.global::<crate::settings::Settings>().registry.len(), 53);
+    });
+}

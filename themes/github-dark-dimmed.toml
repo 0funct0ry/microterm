@@ -1,0 +1,14 @@
+name = "GitHub Dark Dimmed"
+appearance = "dark"
+author = "GitHub Primer (github-vscode-theme)"
+license = "MIT"
+
+[colors]
+foreground = "#adbac7"
+background = "#22272e"
+cursor = "#539bf5"
+cursor_text = "#22272e"
+selection_bg = "#539bf540"
+selection_fg = ""
+ansi    = ["#545d68", "#f47067", "#57ab5a", "#c69026", "#539bf5", "#b083f0", "#39c5cf", "#909dab"]
+brights = ["#636e7b", "#ff938a", "#6bc46d", "#daaa3f", "#6cb6ff", "#dcbdfb", "#56d4dd", "#cdd9e5"]
