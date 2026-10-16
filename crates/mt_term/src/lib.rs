@@ -15,6 +15,7 @@ mod lines;
 mod mouse;
 mod process;
 mod selection;
+mod sgr;
 mod shell;
 mod snapshot;
 mod terminal;
@@ -33,6 +34,7 @@ pub use mouse::{
 };
 pub use process::ForegroundProcess;
 pub use selection::{SelectionKind, SelectionSpan};
+pub use sgr::encode_row;
 pub use shell::{resolve_shell, resolve_shell_with};
 pub use snapshot::{
     Cell, CellColor, CellFlags, Cursor, CursorShape, Damage, Hyperlink, Modes, RenderSnapshot,

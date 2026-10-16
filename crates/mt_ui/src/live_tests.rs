@@ -570,11 +570,7 @@ fn copy_mode_selection_is_mirrored_into_the_terminal(cx: &mut TestAppContext) {
 #[gpui::test]
 fn quick_select_on_ls_la_can_be_typed_and_escaped(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
-    write(
-        &view,
-        cx,
-        "ls -la /tmp; echo DONE\n",
-    );
+    write(&view, cx, "ls -la /tmp; echo DONE\n");
     wait_for(&view, cx, |r| r == "DONE");
     cx.dispatch_action(ActivateQuickSelect);
     assert_eq!(top(&view, cx), Some(OverlayKind::QuickSelect));

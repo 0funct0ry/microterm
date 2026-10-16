@@ -26,6 +26,14 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Automation',
+          items: [
+            { label: 'CLI overview', slug: 'docs/cli-overview' },
+            { label: 'microterm cli', slug: 'docs/cli' },
+            { label: 'Recording & replay', slug: 'docs/recording-and-replay' },
+          ],
+        },
+        {
           label: 'Customising',
           items: [
             { label: 'Config file', slug: 'docs/config-file' },
@@ -36,7 +44,11 @@ export default defineConfig({
         },
         {
           label: 'Reference',
-          items: [{ label: 'Actions', slug: 'docs/reference/actions' }],
+          items: [
+            { label: 'Actions', slug: 'docs/reference/actions' },
+            { label: 'Environment variables', slug: 'docs/reference/environment-variables' },
+            { label: 'Exit codes', slug: 'docs/reference/exit-codes' },
+          ],
         },
       ],
     }),

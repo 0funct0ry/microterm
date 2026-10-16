@@ -17,8 +17,14 @@ clap.workspace = true
 mt_ui = { path = "../mt_ui" }
 mt_config = { path = "../mt_config" }
 mt_theme = { path = "../mt_theme" }
+mt_proto = { path = "../mt_proto" }
+mt_mux = { path = "../mt_mux" }
+mt_term = { path = "../mt_term" }
+mt_record = { path = "../mt_record" }
+clap_complete = "4"
 async-channel.workspace = true
 serde_json = "1"
+serde.workspace = true
 libc = "0.2"
 
 [dev-dependencies]

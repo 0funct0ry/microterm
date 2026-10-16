@@ -186,6 +186,21 @@ pub(crate) fn mark_here<T>(term: &Term<T>, marks: &mut PromptMarks) {
     marks.push(term.grid().cursor.point.line.0);
 }
 
+/// One row with full styling, by absolute line (for `get-text --escapes`).
+pub(crate) fn styled_line<T>(term: &Term<T>, abs: usize) -> Option<Vec<crate::Cell>> {
+    if abs >= total_lines(term) {
+        return None;
+    }
+    let g = term.grid();
+    let line = grid_line(term, abs);
+    let colors = term.colors();
+    Some(
+        (0..g.columns())
+            .map(|c| crate::snapshot::convert_cell(&g[Point::new(line, Column(c))], colors))
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

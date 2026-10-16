@@ -25,20 +25,11 @@ fn help_lists_subcommands() {
 
 #[test]
 fn stubs_name_their_milestone() {
-    for (args, milestone) in [
-        (vec!["ssh", "host"], "M10"),
-        (vec!["completions", "zsh"], "M9"),
-        (vec!["cli", "list"], "M9"),
-        (vec!["record", "-o", "a.cast", "--", "ls"], "M9"),
-    ] {
-        microterm()
-            .args(&args)
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(format!(
-                "not implemented yet ({milestone})"
-            )));
-    }
+    microterm()
+        .args(["ssh", "host"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not implemented yet (M10)"));
 }
 
 #[test]

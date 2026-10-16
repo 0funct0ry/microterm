@@ -10,7 +10,7 @@ XTASK_FEATURES := --features mt_ui/runtime-shaders
 endif
 endif
 
-.PHONY: run build release test lint fmt themes docs docs-check bench bundle install site-dev site-build release-dry check-facade
+.PHONY: run build release test lint fmt themes docs docs-check bench bundle install site-dev site-build release-dry check-facade clean
 
 run:
 	$(CARGO) run -p microterm $(FEATURES)
@@ -66,3 +66,6 @@ site-dev:
 
 site-build:
 	cd site && npm ci && npm run build
+
+clean:
+	cargo clean

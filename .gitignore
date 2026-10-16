@@ -3,3 +3,4 @@ internal-docs/
 .claude/
 target/
 node_modules/
+.tools/

@@ -252,7 +252,7 @@ fn convert_color(c: Color, colors: &Colors) -> CellColor {
     }
 }
 
-fn convert_cell(cell: &EngineCell, colors: &Colors) -> Cell {
+pub(crate) fn convert_cell(cell: &EngineCell, colors: &Colors) -> Cell {
     let f = cell.flags;
     let mut flags = 0u16;
     let mut set = |on: bool, bit: u16| {

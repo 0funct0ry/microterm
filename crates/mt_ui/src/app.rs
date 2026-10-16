@@ -340,7 +340,7 @@ impl AppWindow {
 
     /// Brings `self.tabs` in line with the mux window: new tabs get a view (and a shell),
     /// removed ones are dropped, order and the active tab are copied.
-    fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (order, active) = {
             let host = mux_host::host(cx);
             match host.mux.window(self.mux_window) {
@@ -383,6 +383,14 @@ impl AppWindow {
                 let mut opts = self.spawn_options(cx);
                 opts.cwd = spec.cwd;
                 opts.command = spec.command;
+                opts.env
+                    .push(("MICROTERM_PANE".into(), self.tabs[i].pane.to_string()));
+                if let Some(sock) = &mux_host::host(cx).socket {
+                    opts.env.push((
+                        "MICROTERM_UNIX_SOCKET".into(),
+                        sock.to_string_lossy().into_owned(),
+                    ));
+                }
                 if let Err(e) = self.attach_terminal(i, opts, window, cx) {
                     self.toast(
                         ToastKind::Error,
@@ -1358,7 +1366,14 @@ impl AppWindow {
             self.renaming = None;
         }
         let empty = {
+            let term = self
+                .tabs
+                .iter()
+                .find(|t| t.id == id)
+                .and_then(|t| t.session.as_ref().map(|s| s.term.clone()));
             let host = mux_host::host(cx);
+            // Finish a running recording while the file is still ours to complete.
+            host.recorders.finish(pane, term.as_deref());
             host.pending.remove(&pane);
             host.mux.close_tab(self.mux_window, id).unwrap_or(false)
         };

@@ -236,6 +236,10 @@ impl Emulator {
         crate::lines::line_cells(&self.term, abs)
     }
 
+    pub fn styled_line(&self, abs: usize) -> Option<Vec<crate::Cell>> {
+        crate::lines::styled_line(&self.term, abs)
+    }
+
     /// The terminal cursor as `(absolute line, column)`.
     pub fn cursor_abs(&self) -> (usize, usize) {
         crate::lines::cursor_abs(&self.term)

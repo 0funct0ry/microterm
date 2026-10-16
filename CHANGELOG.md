@@ -103,6 +103,18 @@
   `mt_term` plus a snapshot step, without touching the engine. Hot-reloadable; documented under
   Fonts → Wide characters and emoji. Known gap: a flag at the very last column wraps as two
   narrow indicators.
+- **M9 — CLI, IPC and recording.** `microterm cli list|spawn|send-text|get-text|activate-tab|
+  set-tab-title|kill-pane|workspace|record|replay|reload-config` drive a running instance over a
+  versioned JSON-lines protocol (`mt_proto`) on a per-user `0700` Unix socket with peer-uid
+  checks and stale-socket cleanup; `--json` everywhere; exit codes 0–4. `send-text` honours
+  bracketed paste (`--no-paste` types raw bytes), `get-text` reads line ranges into scrollback
+  and re-encodes SGR with `--escapes`. `subscribe` streams mux events. Panes get
+  `MICROTERM_PANE` and `MICROTERM_UNIX_SOCKET`. asciicast v2 writer/reader (`mt_record`),
+  `microterm record -o FILE -- CMD`, `cli record` (`--input` is opt-in) and `cli replay`.
+  `microterm completions bash|zsh|fish`. A hidden `--headless` flag runs the mux and IPC server
+  without windows for the end-to-end tests. `mt_term` gains output/input taps and styled
+  scrollback access; `mt_mux` gains `kill_pane`. New docs: CLI overview, microterm cli,
+  Recording & replay, Environment variables, Exit codes.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

@@ -8,6 +8,7 @@ mod builtin_glyphs;
 pub mod components;
 pub mod copy_mode;
 mod gpu_check;
+pub mod ipc_ops;
 pub mod keychips;
 pub mod ls_fonts;
 pub mod metrics;
@@ -38,7 +39,13 @@ use crate::actions::Quit;
 struct WatcherGuard(#[allow(dead_code)] mt_config::watch::ConfigWatcher);
 impl gpui::Global for WatcherGuard {}
 
-pub use mux_host::NewWindowRequest;
+/// The IPC server's hooks into the GUI (SPEC §12): requests to execute on the main thread,
+/// the event hub `subscribe` connections read from, and the socket path panes are told about.
+pub struct IpcHandle {
+    pub calls: async_channel::Receiver<mt_proto::Call>,
+    pub hub: std::sync::Arc<mt_proto::EventHub>,
+    pub socket: std::path::PathBuf,
+}
 
 /// Everything `microterm [FLAGS]` hands to the GUI.
 #[derive(Default)]
@@ -50,8 +57,8 @@ pub struct RunOptions {
     /// `--cwd` and `-e CMD`: applied to the first tab.
     pub cwd: Option<std::path::PathBuf>,
     pub command: Option<Vec<String>>,
-    /// Window requests from other `microterm` invocations (single-instance IPC).
-    pub requests: Option<async_channel::Receiver<NewWindowRequest>>,
+    /// IPC requests from other `microterm` invocations and `microterm cli`.
+    pub ipc: Option<IpcHandle>,
 }
 
 /// Launches the GUI and blocks until the last window closes.
@@ -91,6 +98,9 @@ pub fn run(opts: RunOptions) {
             .detach();
             start_config_watcher(&path, cx);
             mux_host::ensure(cx);
+            if let Some(ipc) = &opts.ipc {
+                mux_host::install_ipc(cx, ipc.socket.clone(), ipc.hub.clone());
+            }
             let first = (opts.cwd.is_some() || opts.command.is_some()).then(|| mt_mux::SpawnSpec {
                 cwd: opts.cwd.clone(),
                 command: opts.command.clone(),
@@ -100,10 +110,14 @@ pub fn run(opts: RunOptions) {
                 eprintln!("microterm: {e}");
                 mux_host::show_workspace(cx, mt_mux::DEFAULT_WORKSPACE, true, None).ok();
             }
-            if let Some(requests) = opts.requests.clone() {
+            if let Some(calls) = opts.ipc.as_ref().map(|i| i.calls.clone()) {
                 cx.spawn(async move |cx| {
-                    while let Ok(req) = requests.recv().await {
-                        if cx.update(|cx| mux_host::handle_request(cx, req)).is_err() {
+                    while let Ok(call) = calls.recv().await {
+                        let ok = cx.update(|cx| {
+                            let result = mux_host::handle_call(cx, call.request);
+                            let _ = call.reply.send(result);
+                        });
+                        if ok.is_err() {
                             break;
                         }
                     }

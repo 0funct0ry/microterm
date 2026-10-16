@@ -143,6 +143,8 @@ pub enum Error {
     NoWindow(Id),
     #[error("no such tab {0}")]
     NoTab(Id),
+    #[error("no such pane {0}")]
+    NoPane(Id),
     #[error("no such workspace '{0}'")]
     NoWorkspace(String),
     #[error("workspace '{0}' already exists")]
@@ -499,6 +501,25 @@ impl Mux {
         self.emit(MuxEvent::PaneOutput { pane });
     }
 
+    /// `(window id, tab index)` of the tab with id `tab`.
+    pub fn tab_location(&self, tab: Id) -> Option<(Id, usize)> {
+        self.windows
+            .iter()
+            .find_map(|w| w.tabs.iter().position(|t| t.id == tab).map(|i| (w.id, i)))
+    }
+
+    /// Removes `pane`. While tabs hold a single pane this closes its tab, and its window when
+    /// that was the last tab. Returns `(window, tab, window_closed)`.
+    pub fn kill_pane(&mut self, pane: Id) -> Result<(Id, Id, bool), Error> {
+        let (window, index) = self.locate_pane(pane).ok_or(Error::NoPane(pane))?;
+        let tab = self.window(window).ok_or(Error::NoWindow(window))?.tabs[index].id;
+        let empty = self.close_tab(window, tab)?;
+        if empty {
+            self.close_window(window)?;
+        }
+        Ok((window, tab, empty))
+    }
+
     /// `(window id, tab index)` holding `pane`.
     pub fn locate_pane(&self, pane: Id) -> Option<(Id, usize)> {
         self.windows.iter().find_map(|w| {
@@ -530,6 +551,24 @@ mod tests {
             .map(|_| mux.spawn_tab(w, None, None).unwrap().0)
             .collect();
         (mux, w, tabs)
+    }
+
+    #[test]
+    fn kill_pane_closes_tab_then_window() {
+        let (mut mux, w, tabs) = mux_with_tabs(2);
+        let log = recorded(&mut mux);
+        let pane = mux.window(w).unwrap().tabs[0].pane().id;
+        assert_eq!(mux.kill_pane(pane).unwrap(), (w, tabs[0], false));
+        assert_eq!(mux.tab_location(tabs[1]), Some((w, 0)));
+        assert_eq!(mux.tab_location(tabs[0]), None);
+        let last = mux.window(w).unwrap().tabs[0].pane().id;
+        assert_eq!(mux.kill_pane(last).unwrap(), (w, tabs[1], true));
+        assert!(mux.window(w).is_none());
+        assert_eq!(mux.kill_pane(last), Err(Error::NoPane(last)));
+        assert!(log
+            .lock()
+            .unwrap()
+            .contains(&MuxEvent::PaneRemoved { pane }));
     }
 
     #[test]

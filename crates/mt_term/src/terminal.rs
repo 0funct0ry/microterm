@@ -65,7 +65,26 @@ impl Default for SpawnOptions {
     }
 }
 
+/// Optional copies of the byte streams, for recording (`mt_record`).
+#[derive(Default)]
+struct Taps {
+    output: std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
+    input: std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
+}
+
+impl Taps {
+    fn send(slot: &std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>, bytes: &[u8]) {
+        let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = g.as_ref() {
+            if tx.send(bytes.to_vec()).is_err() {
+                *g = None; // the receiver went away
+            }
+        }
+    }
+}
+
 pub struct Terminal {
+    taps: Arc<Taps>,
     term: Arc<FairMutex<Term<Listener>>>,
     shared: Arc<Shared>,
     sender: EventLoopSender,
@@ -149,11 +168,13 @@ impl Terminal {
         let wide_ri = Arc::new(AtomicBool::new(opts.wide_regional_indicators));
         let sgr_pixels = Arc::new(AtomicBool::new(false));
         let pending_marks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let taps = Arc::new(Taps::default());
         let pty = FilteredPty::new(
             pty,
             wide_ri.clone(),
             sgr_pixels.clone(),
             pending_marks.clone(),
+            taps.clone(),
         )?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
@@ -161,6 +182,7 @@ impl Terminal {
         // The loop thread owns the PTY; it exits on Shutdown or child exit.
         let _ = event_loop.spawn();
         Ok(Terminal {
+            taps,
             term,
             shared,
             sender,
@@ -192,7 +214,20 @@ impl Terminal {
 
     /// Queues bytes for the child. Never blocks on a full PTY buffer.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        let _ = self.sender.send(Msg::Input(bytes.into()));
+        let bytes = bytes.into();
+        Taps::send(&self.taps.input, &bytes);
+        let _ = self.sender.send(Msg::Input(bytes));
+    }
+
+    /// Copies every byte the child prints (before any width filtering) to `tx`, or stops the
+    /// copy with `None`. Used by `record.start`.
+    pub fn set_output_tap(&self, tx: Option<std::sync::mpsc::Sender<Vec<u8>>>) {
+        *self.taps.output.lock().unwrap_or_else(|e| e.into_inner()) = tx;
+    }
+
+    /// Copies every byte written to the child (keystrokes, pastes) to `tx`.
+    pub fn set_input_tap(&self, tx: Option<std::sync::mpsc::Sender<Vec<u8>>>) {
+        *self.taps.input.lock().unwrap_or_else(|e| e.into_inner()) = tx;
     }
 
     pub fn send_key(&self, key: &KeyInput) {
@@ -339,6 +374,15 @@ impl Terminal {
             .collect()
     }
 
+    /// Styled rows, absolute lines `from..to`, clamped to the grid.
+    pub fn styled_lines(&self, from: usize, to: usize) -> Vec<Vec<crate::Cell>> {
+        let t = self.term.lock();
+        let to = to.min(crate::lines::total_lines(&t));
+        (from..to)
+            .filter_map(|a| crate::lines::styled_line(&t, a))
+            .collect()
+    }
+
     /// The terminal cursor as `(absolute line, column)`.
     pub fn cursor_abs(&self) -> (usize, usize) {
         crate::lines::cursor_abs(&self.term.lock())
@@ -401,6 +445,7 @@ struct FilterReader {
     sniffer: crate::mouse::PixelModeSniffer,
     prompt_sniffer: crate::lines::PromptSniffer,
     pending_marks: Arc<std::sync::atomic::AtomicUsize>,
+    taps: Arc<Taps>,
     raw: Vec<u8>,
     out: Vec<u8>,
 }
@@ -411,6 +456,7 @@ impl FilteredPty {
         enabled: Arc<AtomicBool>,
         pixels: Arc<AtomicBool>,
         pending_marks: Arc<std::sync::atomic::AtomicUsize>,
+        taps: Arc<Taps>,
     ) -> io::Result<Self> {
         let file = inner.file().try_clone()?;
         Ok(Self {
@@ -422,6 +468,7 @@ impl FilteredPty {
                 sniffer: crate::mouse::PixelModeSniffer::new(pixels),
                 prompt_sniffer: Default::default(),
                 pending_marks,
+                taps,
                 raw: Vec::new(),
                 out: Vec::new(),
             },
@@ -449,6 +496,7 @@ impl io::Read for FilterReader {
                 return Ok(held.len());
             }
             let n = self.file.read(buf)?;
+            Taps::send(&self.taps.output, &buf[..n]);
             self.sniffer.feed(&buf[..n]);
             self.note_prompts(&buf[..n]);
             return Ok(n);
@@ -468,6 +516,7 @@ impl io::Read for FilterReader {
                 return Ok(held.len());
             }
             self.out.clear();
+            Taps::send(&self.taps.output, &self.raw[..n]);
             self.sniffer.feed(&self.raw[..n]);
             let raw = std::mem::take(&mut self.raw);
             self.note_prompts(&raw[..n]);
@@ -576,6 +625,24 @@ mod tests {
                 .any(|l| l.contains("env:xterm-256color:truecolor:microterm:yes")),
             "{rows:?}"
         );
+    }
+
+    #[test]
+    fn taps_copy_both_directions_in_order() {
+        let (t, rx) = spawn_sh("true");
+        let (otx, orx) = mpsc::channel();
+        let (itx, irx) = mpsc::channel();
+        t.set_output_tap(Some(otx));
+        t.set_input_tap(Some(itx));
+        t.write(b"echo tap-$((20+22))\n".to_vec());
+        wait_for(&t, &rx, "tap-42");
+        assert_eq!(irx.try_recv().unwrap(), b"echo tap-$((20+22))\n");
+        let out: Vec<u8> = orx.try_iter().flatten().collect();
+        assert!(String::from_utf8_lossy(&out).contains("tap-42"));
+        t.set_output_tap(None);
+        t.write(b"echo more\n".to_vec());
+        wait_for(&t, &rx, "more");
+        assert!(orx.try_recv().is_err());
     }
 
     /// Column of the `x` that follows a flag in the row whose text starts with that flag.
