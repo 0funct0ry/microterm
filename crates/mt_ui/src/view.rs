@@ -9,7 +9,7 @@ use mt_term::ScrollCmd;
 
 use crate::{
     actions::*,
-    app::{AppWindow, PickerData, QUICK_SELECT_ALPHABET},
+    app::{AppWindow, PickerData},
     assets::IconName,
     components::*,
     metrics::*,
@@ -27,6 +27,9 @@ impl Render for AppWindow {
         let csd = matches!(window.window_decorations(), Decorations::Client { .. })
             && self.platform == Platform::Linux;
         self.sync_window_title(window);
+        if std::mem::take(&mut self.refocus_viewport) && self.overlays.is_empty() {
+            window.focus(&self.viewport_focus);
+        }
 
         let mut root = div()
             .id("root")
@@ -491,8 +494,13 @@ impl AppWindow {
             self.screen()
         };
         let copy_active = self.overlays.contains(OverlayKind::CopyMode);
+        let copy_cursor = if copy_active {
+            self.copy_cursor_view()
+        } else {
+            None
+        };
         let hits = if self.overlays.contains(OverlayKind::Search) {
-            self.search_hits()
+            self.search_marks()
         } else {
             Vec::new()
         };
@@ -503,12 +511,12 @@ impl AppWindow {
         let lines = screen.iter().enumerate().map(|(row, line)| {
             let line_hits: Vec<(usize, usize, bool)> = hits
                 .iter()
-                .enumerate()
-                .filter(|(_, h)| h.0 == row)
-                .map(|(i, h)| (h.1, h.2, i == self.search.current))
+                .filter(|h| h.0 == row)
+                .map(|h| (h.1, h.2, h.3))
                 .collect();
-            let cursor = if copy_active && self.copy.row == row {
-                Some(self.copy.col)
+            let cursor = if let Some((r, c)) = copy_cursor.filter(|(r, _)| *r == row) {
+                let _ = r;
+                Some(c)
             } else if !copy_active && focused_viewport && row == last_row {
                 Some(line.cols())
             } else {
@@ -537,7 +545,7 @@ impl AppWindow {
                 }),
             )
             .on_scroll_wheel(cx.listener(|this, ev, _, cx| this.on_scroll_wheel(ev, cx)))
-            .on_key_down(cx.listener(|this, ev, _, cx| this.on_viewport_key(ev, cx)))
+            .on_key_down(cx.listener(|this, ev, w, cx| this.on_viewport_key(ev, w, cx)))
             .on_key_up(cx.listener(|this, ev, _, cx| this.on_viewport_key_up(ev, cx)));
 
         let pointer = self.pointer_style();
@@ -599,7 +607,7 @@ impl AppWindow {
                         .size_full(),
                     ),
             );
-            view = view.child(self.live_marks(t, &hits, copy_active));
+            view = view.child(self.live_marks(t, &hits, copy_cursor));
             if self.bell_flash {
                 view = view.child(
                     div()
@@ -687,8 +695,8 @@ impl AppWindow {
     fn live_marks(
         &self,
         t: &Theme,
-        hits: &[(usize, usize, usize)],
-        copy_active: bool,
+        hits: &[crate::mode_overlays::ViewMark],
+        copy_cursor: Option<(usize, usize)>,
     ) -> impl IntoElement {
         let c = self.cell;
         let (pad_x, pad_y) = (self.cfg.window.padding.x, self.cfg.window.padding.y);
@@ -701,25 +709,19 @@ impl AppWindow {
                 .h(px(c.height))
                 .bg(color)
         };
-        let current = self.search.current;
         div()
             .absolute()
             .inset_0()
-            .children(hits.iter().enumerate().map(|(i, (row, col, len))| {
-                let color = if i == current {
+            .children(hits.iter().map(|&(row, col, len, current)| {
+                let color = if current {
                     t.accent.opacity(0.6)
                 } else {
                     t.warning.opacity(0.35)
                 };
-                mark(*row, *col, *len, color)
+                mark(row, col, len, color)
             }))
-            .when(copy_active, |el| {
-                el.child(mark(
-                    self.copy.row,
-                    self.copy.col,
-                    1,
-                    t.term.fg.opacity(0.7),
-                ))
+            .when_some(copy_cursor, |el, (row, col)| {
+                el.child(mark(row, col, 1, t.term.fg.opacity(0.7)))
             })
     }
 
@@ -869,45 +871,59 @@ impl AppWindow {
 
     fn quick_select_chips(&self, t: &Theme) -> impl IntoElement {
         let typed = self.quick.typed.clone();
+        let (top, rows) = self.view_geometry();
+        let cell = self.cell;
         let chips = self
             .quick
-            .matches
+            .hits
             .iter()
-            .filter(|(label, _)| label.starts_with(&typed))
-            .map(|(label, hit)| {
-                let x = hit.col as f32 * self.cell.width;
-                let y = hit.row as f32 * self.cell.height;
-                let rest = label[typed.len()..].to_string();
+            .filter(|h| h.label.starts_with(&typed))
+            .flat_map(|hit| {
+                let rest = hit.label[typed.len()..].to_string();
+                hit.segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (abs, _, _))| *abs >= top && *abs < top + rows)
+                    .map(|(i, &(abs, col, len))| {
+                        // The label chip sits on the first segment only.
+                        let label = (i == 0).then(|| rest.clone());
+                        (abs - top, col, len, label)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map(|(row, col, len, label)| {
                 div()
                     .absolute()
-                    .left(px(x))
-                    .top(px(y))
-                    .h(px(self.cell.height))
-                    .w(px(hit.text.chars().count() as f32 * self.cell.width))
+                    .left(px(col as f32 * cell.width))
+                    .top(px(row as f32 * cell.height))
+                    .h(px(cell.height))
+                    .w(px(len as f32 * cell.width))
                     .rounded(px(2.))
                     .bg(t.accent.opacity(0.28))
                     .border_1()
                     .border_color(t.accent)
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(-1.))
-                            .top(px(-1.))
-                            .px_1()
-                            .h(px(self.cell.height))
-                            .flex()
-                            .items_center()
-                            .rounded(px(2.))
-                            .bg(t.accent)
-                            .text_color(if t.is_dark {
-                                t.background
-                            } else {
-                                gpui::white()
-                            })
-                            .font_weight(FontWeight::BOLD)
-                            .text_size(px(11.))
-                            .child(rest),
-                    )
+                    .when_some(label, |el, label| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .left(px(-1.))
+                                .top(px(-1.))
+                                .px_1()
+                                .h(px(cell.height))
+                                .flex()
+                                .items_center()
+                                .rounded(px(2.))
+                                .bg(t.accent)
+                                .text_color(if t.is_dark {
+                                    t.background
+                                } else {
+                                    gpui::white()
+                                })
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(11.))
+                                .child(label),
+                        )
+                    })
             });
         div()
             .absolute()
@@ -919,15 +935,21 @@ impl AppWindow {
 
     /// Mode pill and find bar, top-right of the viewport.
     fn mode_strip(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let pill = if self.overlays.contains(OverlayKind::CopyMode) {
-            Some("COPY")
-        } else if self.overlays.contains(OverlayKind::QuickSelect) {
-            Some("QUICK SELECT")
-        } else if self.overlays.contains(OverlayKind::Search) {
-            Some("SEARCH")
+        let copy = if self.overlays.contains(OverlayKind::CopyMode) {
+            self.copy_pill()
         } else {
             None
         };
+        let pill: Option<String> = if let Some((label, _)) = &copy {
+            Some(label.clone())
+        } else if self.overlays.contains(OverlayKind::QuickSelect) {
+            Some("QUICK SELECT".into())
+        } else if self.overlays.contains(OverlayKind::Search) {
+            Some("SEARCH".into())
+        } else {
+            None
+        };
+        let prompt = copy.and_then(|(_, p)| p);
         div()
             .absolute()
             .top(px(8.))
@@ -935,6 +957,21 @@ impl AppWindow {
             .flex()
             .items_center()
             .gap_2()
+            .when_some(prompt, |el, text| {
+                el.child(
+                    div()
+                        .h(px(24.))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .rounded(px(RADIUS_POPOVER))
+                        .border_1()
+                        .border_color(t.border)
+                        .bg(t.elevated_surface)
+                        .text_size(px(12.))
+                        .child(format!("{text}▏")),
+                )
+            })
             .when_some(pill, |el, text| el.child(Pill::new(text)))
             .when(self.overlays.contains(OverlayKind::Search), |el| {
                 el.child(self.search_bar(t, cx))
@@ -942,14 +979,7 @@ impl AppWindow {
     }
 
     fn search_bar(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let hits = self.search_hits().len();
-        let status = if self.search.query.is_empty() {
-            String::new()
-        } else if hits == 0 {
-            "no results".to_string()
-        } else {
-            format!("{} of {}", self.search.current + 1, hits)
-        };
+        let status = self.search_status();
         div()
             .flex()
             .items_center()
@@ -967,6 +997,16 @@ impl AppWindow {
                     .w(px(180.))
                     .child(TextInput::new(self.search.query.clone()).placeholder("Find")),
             )
+            .when(!status.is_empty(), |el| {
+                el.child(
+                    div()
+                        .px_1()
+                        .text_size(px(12.))
+                        .text_color(t.text_muted)
+                        .whitespace_nowrap()
+                        .child(status),
+                )
+            })
             .child(
                 IconButton::new("search-case", IconName::CaseSensitive)
                     .tooltip("Match case")
@@ -978,13 +1018,6 @@ impl AppWindow {
                     .tooltip("Use regular expression")
                     .selected(self.search.regex)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_search_regex(cx))),
-            )
-            .child(
-                div()
-                    .min_w(px(52.))
-                    .text_size(px(12.))
-                    .text_color(t.text_muted)
-                    .child(status),
             )
             .child(
                 IconButton::new("search-prev", IconName::ArrowUp)
@@ -1267,6 +1300,3 @@ fn styled_line(
     }
     StyledText::new(text).with_runs(runs)
 }
-
-#[allow(dead_code)]
-const _: &str = QUICK_SELECT_ALPHABET;

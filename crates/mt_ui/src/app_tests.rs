@@ -345,24 +345,74 @@ fn workspace_switcher_lists_real_workspaces(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn copy_mode_cursor_moves_with_hjkl(cx: &mut TestAppContext) {
+fn copy_mode_moves_selects_and_yanks(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
     cx.dispatch_action(ActivateCopyMode);
-    let pos = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
-        view.read_with(cx, |t, _| (t.copy.row, t.copy.col))
+    let cursor = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |t, _| t.copy.mode.as_ref().unwrap().cursor)
     };
-    let (row, col) = pos(&view, cx);
+    let (row, col) = cursor(&view, cx);
     assert_eq!(col, 0);
     cx.simulate_keystrokes("k");
-    assert_eq!(pos(&view, cx), (row - 1, 0));
+    assert_eq!(cursor(&view, cx), (row - 1, 0));
     cx.simulate_keystrokes("l l l");
-    assert_eq!(pos(&view, cx), (row - 1, 3));
+    assert_eq!(cursor(&view, cx), (row - 1, 3));
     cx.simulate_keystrokes("h");
-    assert_eq!(pos(&view, cx), (row - 1, 2));
+    assert_eq!(cursor(&view, cx), (row - 1, 2));
     cx.simulate_keystrokes("j");
-    assert_eq!(pos(&view, cx).0, row);
+    assert_eq!(cursor(&view, cx).0, row);
     cx.simulate_keystrokes("h h h h");
-    assert_eq!(pos(&view, cx).1, 0, "clamped at the left edge");
+    assert_eq!(cursor(&view, cx).1, 0, "clamped at the left edge");
+    cx.simulate_keystrokes("2 k");
+    assert_eq!(cursor(&view, cx).0, row - 2, "numeric prefix");
+
+    // V y yanks the whole row and leaves copy mode.
+    let line = view.read_with(cx, |t, _| t.screen()[row - 2].text());
+    cx.simulate_keystrokes("shift-v");
+    assert_eq!(
+        view.read_with(cx, |t, _| t.copy_pill().unwrap().0),
+        "V-LINE"
+    );
+    cx.simulate_keystrokes("y");
+    assert_eq!(top(&view, cx), None);
+    assert!(viewport_focused(&view, cx));
+    let copied = cx.read_from_clipboard().and_then(|c| c.text());
+    assert_eq!(copied.as_deref(), Some(line.trim_end()));
+}
+
+#[gpui::test]
+fn copy_mode_escape_clears_selection_before_exiting(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ActivateCopyMode);
+    cx.simulate_keystrokes("v");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), Some(OverlayKind::CopyMode));
+    assert!(view.read_with(cx, |t, _| t.copy.mode.as_ref().unwrap().sel.is_none()));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None);
+    cx.dispatch_action(ActivateCopyMode);
+    cx.simulate_keystrokes("q");
+    assert_eq!(top(&view, cx), None, "q exits");
+}
+
+#[gpui::test]
+fn copy_mode_slash_prompt_shows_in_the_pill_and_searches(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ActivateCopyMode);
+    cx.simulate_keystrokes("g g");
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("main");
+    let prompt = view.read_with(cx, |t, _| t.copy_pill().unwrap().1);
+    assert_eq!(prompt.as_deref(), Some("/main"));
+    cx.simulate_keystrokes("enter");
+    let (cursor, line) = view.read_with(cx, |t, _| {
+        let c = t.copy.mode.as_ref().unwrap().cursor;
+        (c, t.screen()[c.0].text())
+    });
+    assert!(
+        line[cursor.1..].starts_with("main"),
+        "{line:?} at {cursor:?}"
+    );
 }
 
 #[gpui::test]
@@ -370,8 +420,8 @@ fn quick_select_label_copies_the_match(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
     cx.dispatch_action(ActivateQuickSelect);
     let (label, text) = view.read_with(cx, |t, _| {
-        let (l, m) = &t.quick.matches[0];
-        (l.clone(), m.text.clone())
+        let h = &t.quick.hits[0];
+        (h.label.clone(), h.text.clone())
     });
     cx.simulate_input(&label);
     assert_eq!(top(&view, cx), None, "a complete label closes quick select");
@@ -381,7 +431,27 @@ fn quick_select_label_copies_the_match(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |t, _| t
         .toasts
         .iter()
-        .any(|x| x.text.contains("Copied"))));
+        .any(|x| x.text.as_ref() == format!("Copied {text}"))));
+}
+
+#[gpui::test]
+fn quick_select_labels_come_from_the_configured_alphabet_and_esc_cancels(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ActivateQuickSelect);
+    let alphabet = view.read_with(cx, |t, _| t.cfg.quick_select.alphabet.clone());
+    view.read_with(cx, |t, _| {
+        assert!(
+            !t.quick.hits.is_empty(),
+            "the mock screen has hashes and IPs"
+        );
+        for h in &t.quick.hits {
+            assert!(h.label.chars().all(|c| alphabet.contains(c)), "{}", h.label);
+        }
+    });
+    // A letter that starts no label is ignored.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None);
+    assert!(cx.read_from_clipboard().and_then(|c| c.text()).is_none());
 }
 
 #[gpui::test]
@@ -389,14 +459,50 @@ fn search_counts_matches_and_steps(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
     cx.dispatch_action(Search);
     cx.simulate_input("main");
-    let hits = view.read_with(cx, |t, _| t.search_hits().len());
+    let hits = view.read_with(cx, |t, _| t.search.matches.len());
     assert!(hits >= 2, "mock screen has several 'main'");
+    let status = view.read_with(cx, |t, _| t.search_status());
+    assert_eq!(status, format!("1 of {hits}"));
     cx.simulate_keystrokes("enter");
     assert_eq!(view.read_with(cx, |t, _| t.search.current), 1);
     cx.simulate_keystrokes("shift-enter");
     assert_eq!(view.read_with(cx, |t, _| t.search.current), 0);
+    cx.simulate_keystrokes("shift-enter");
+    assert_eq!(
+        view.read_with(cx, |t, _| t.search.current),
+        hits - 1,
+        "wraps backwards"
+    );
     cx.simulate_keystrokes("backspace");
     assert_eq!(view.read_with(cx, |t, _| t.search.query.clone()), "mai");
+}
+
+#[gpui::test]
+fn search_toggles_change_the_results(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(Search);
+    cx.simulate_input("MAIN");
+    let insensitive = view.read_with(cx, |t, _| t.search.matches.len());
+    assert!(insensitive > 0);
+    view.update(cx, |t, cx| t.toggle_search_case(cx));
+    assert_eq!(view.read_with(cx, |t, _| t.search.matches.len()), 0);
+    assert_eq!(view.read_with(cx, |t, _| t.search_status()), "no results");
+    view.update(cx, |t, cx| t.toggle_search_case(cx));
+    view.update(cx, |t, cx| t.toggle_search_regex(cx));
+    cx.simulate_keystrokes("backspace backspace backspace backspace");
+    cx.simulate_input("(");
+    assert_eq!(
+        view.read_with(cx, |t, _| t.search_status()),
+        "invalid regex"
+    );
+    cx.simulate_keystrokes("backspace");
+    cx.simulate_input("ma.n");
+    assert!(
+        view.read_with(cx, |t, _| t.search.matches.len()) > 0,
+        "regex mode"
+    );
+    // Marks cover the matched cells.
+    assert!(view.read_with(cx, |t, _| !t.search_marks().is_empty()));
 }
 
 #[gpui::test]
@@ -845,4 +951,70 @@ fn recently_run_items_rank_first(cx: &mut TestAppContext) {
     cx.simulate_input("rename");
     let labels = picker_labels(&view, cx);
     assert_eq!(labels[0], second, "was {first} before");
+}
+
+#[gpui::test]
+fn quick_select_can_be_turned_off(cx: &mut TestAppContext) {
+    let f = temp_config("qs_off", "[quick_select]\nenabled = false\n");
+    let (view, cx) = setup_with_config(cx, f);
+    cx.dispatch_action(ActivateQuickSelect);
+    assert_eq!(top(&view, cx), None, "the action does nothing");
+    assert!(viewport_focused(&view, cx));
+    assert!(view.read_with(cx, |t, _| t
+        .toasts
+        .iter()
+        .any(|x| x.text.contains("turned off"))));
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("quick select");
+    let labels: Vec<String> = view.read_with(cx, |t, _| {
+        let p = t.picker.as_ref().unwrap();
+        p.state
+            .visible()
+            .1
+            .iter()
+            .map(|m| p.state.label(m).to_string())
+            .collect()
+    });
+    assert!(
+        !labels
+            .iter()
+            .any(|l| l.to_lowercase().contains("quick select")),
+        "{labels:?}"
+    );
+    // Copy mode and search are unaffected.
+    cx.simulate_keystrokes("escape");
+    cx.dispatch_action(Search);
+    assert_eq!(top(&view, cx), Some(OverlayKind::Search));
+}
+
+#[gpui::test]
+fn switching_tabs_ends_copy_mode_and_refreshes_search(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    cx.dispatch_action(ActivateCopyMode);
+    cx.simulate_keystrokes("v");
+    view.update(cx, |t, cx| t.activate_tab(0, cx));
+    cx.run_until_parked();
+    assert_eq!(top(&view, cx), None, "copy mode ends when the tab changes");
+    assert!(view.read_with(cx, |t, _| t.copy.mode.is_none()));
+    assert!(viewport_focused(&view, cx));
+
+    cx.dispatch_action(Search);
+    cx.simulate_input("main");
+    let fresh = view.read_with(cx, |t, _| t.search.matches.len());
+    view.update(cx, |t, _| {
+        let stale = t.search.matches[0].clone();
+        t.search.matches.push(stale);
+    });
+    view.update(cx, |t, cx| t.activate_tab(1, cx));
+    assert_eq!(
+        top(&view, cx),
+        Some(OverlayKind::Search),
+        "the find bar stays"
+    );
+    assert_eq!(
+        view.read_with(cx, |t, _| t.search.matches.len()),
+        fresh,
+        "matches were recomputed for the new tab"
+    );
 }

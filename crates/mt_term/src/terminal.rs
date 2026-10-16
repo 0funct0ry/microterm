@@ -77,6 +77,9 @@ pub struct Terminal {
     wide_ri: Arc<AtomicBool>,
     /// DECSET 1016 state, set by the PTY reader's sniffer.
     sgr_pixels: Arc<AtomicBool>,
+    /// OSC 133;A prompts seen by the reader that have not been placed on a line yet.
+    pending_marks: Arc<std::sync::atomic::AtomicUsize>,
+    marks: std::sync::Mutex<crate::lines::PromptMarks>,
 }
 
 impl Terminal {
@@ -145,7 +148,13 @@ impl Terminal {
         let master_fd = pty.file().as_raw_fd();
         let wide_ri = Arc::new(AtomicBool::new(opts.wide_regional_indicators));
         let sgr_pixels = Arc::new(AtomicBool::new(false));
-        let pty = FilteredPty::new(pty, wide_ri.clone(), sgr_pixels.clone())?;
+        let pending_marks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let pty = FilteredPty::new(
+            pty,
+            wide_ri.clone(),
+            sgr_pixels.clone(),
+            pending_marks.clone(),
+        )?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         shared.set_pty(sender.clone());
@@ -160,6 +169,8 @@ impl Terminal {
             scrollback: opts.scrollback,
             wide_ri,
             sgr_pixels,
+            pending_marks,
+            marks: Default::default(),
         })
     }
 
@@ -306,6 +317,60 @@ impl Terminal {
         snap
     }
 
+    pub fn total_lines(&self) -> usize {
+        crate::lines::total_lines(&self.term.lock())
+    }
+
+    pub fn history_size(&self) -> usize {
+        crate::lines::history_size(&self.term.lock())
+    }
+
+    /// One row by absolute line (0 = oldest scrollback row).
+    pub fn line_cells(&self, abs: usize) -> Option<crate::LineCells> {
+        crate::lines::line_cells(&self.term.lock(), abs)
+    }
+
+    /// Several rows under one lock: absolute lines `from..to`, clamped to the grid.
+    pub fn lines_range(&self, from: usize, to: usize) -> Vec<crate::LineCells> {
+        let t = self.term.lock();
+        let to = to.min(crate::lines::total_lines(&t));
+        (from..to)
+            .filter_map(|a| crate::lines::line_cells(&t, a))
+            .collect()
+    }
+
+    /// The terminal cursor as `(absolute line, column)`.
+    pub fn cursor_abs(&self) -> (usize, usize) {
+        crate::lines::cursor_abs(&self.term.lock())
+    }
+
+    pub fn select_abs(
+        &self,
+        kind: crate::SelectionKind,
+        start: (usize, usize),
+        end: (usize, usize),
+    ) {
+        crate::lines::select_abs(&mut self.term.lock(), kind, start, end);
+    }
+
+    pub fn scroll_to_abs(&self, abs: usize, center: bool) {
+        crate::lines::scroll_to_abs(&mut self.term.lock(), abs, center);
+    }
+
+    /// Absolute lines of OSC 133;A prompt starts, ascending; empty without shell integration.
+    ///
+    /// The PTY reader only counts prompts; they are placed on the cursor line when first
+    /// observed here, which is the prompt line for an idle shell.
+    pub fn prompt_marks(&self) -> Vec<usize> {
+        let term = self.term.lock();
+        let mut marks = self.marks.lock().unwrap();
+        marks.sync(crate::lines::history_size(&term));
+        if self.pending_marks.swap(0, Ordering::Relaxed) > 0 {
+            marks.push(term.grid().cursor.point.line.0);
+        }
+        marks.abs_lines()
+    }
+
     pub fn size(&self) -> (usize, usize) {
         let t = self.term.lock();
         use alacritty_terminal::grid::Dimensions;
@@ -334,12 +399,19 @@ struct FilterReader {
     enabled: Arc<AtomicBool>,
     filter: WidthFilter,
     sniffer: crate::mouse::PixelModeSniffer,
+    prompt_sniffer: crate::lines::PromptSniffer,
+    pending_marks: Arc<std::sync::atomic::AtomicUsize>,
     raw: Vec<u8>,
     out: Vec<u8>,
 }
 
 impl FilteredPty {
-    fn new(inner: tty::Pty, enabled: Arc<AtomicBool>, pixels: Arc<AtomicBool>) -> io::Result<Self> {
+    fn new(
+        inner: tty::Pty,
+        enabled: Arc<AtomicBool>,
+        pixels: Arc<AtomicBool>,
+        pending_marks: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> io::Result<Self> {
         let file = inner.file().try_clone()?;
         Ok(Self {
             inner,
@@ -348,10 +420,21 @@ impl FilteredPty {
                 enabled,
                 filter: WidthFilter::new(),
                 sniffer: crate::mouse::PixelModeSniffer::new(pixels),
+                prompt_sniffer: Default::default(),
+                pending_marks,
                 raw: Vec::new(),
                 out: Vec::new(),
             },
         })
+    }
+}
+
+impl FilterReader {
+    fn note_prompts(&mut self, bytes: &[u8]) {
+        let n = self.prompt_sniffer.feed(bytes).len();
+        if n > 0 {
+            self.pending_marks.fetch_add(n, Ordering::Relaxed);
+        }
     }
 }
 
@@ -367,6 +450,7 @@ impl io::Read for FilterReader {
             }
             let n = self.file.read(buf)?;
             self.sniffer.feed(&buf[..n]);
+            self.note_prompts(&buf[..n]);
             return Ok(n);
         }
         // Every 4-byte indicator grows by one byte and up to 3 held-back bytes are re-emitted,
@@ -385,6 +469,9 @@ impl io::Read for FilterReader {
             }
             self.out.clear();
             self.sniffer.feed(&self.raw[..n]);
+            let raw = std::mem::take(&mut self.raw);
+            self.note_prompts(&raw[..n]);
+            self.raw = raw;
             self.filter.filter(&self.raw[..n], &mut self.out);
             if self.out.is_empty() {
                 continue; // only a partial UTF-8 sequence so far; read on

@@ -20,6 +20,9 @@ export default defineConfig({
             { label: 'Command palette & launcher', slug: 'docs/command-palette-and-launcher' },
             { label: 'Mouse & selection', slug: 'docs/mouse-and-selection' },
             { label: 'Hyperlinks', slug: 'docs/hyperlinks' },
+            { label: 'Quick select', slug: 'docs/quick-select' },
+            { label: 'Copy mode', slug: 'docs/copy-mode' },
+            { label: 'Search', slug: 'docs/search' },
           ],
         },
         {

@@ -209,6 +209,7 @@ const ROOT: &[(&str, K)] = &[
     (
         "quick_select",
         K::Table(&[
+            ("enabled", K::Leaf),
             ("alphabet", K::Leaf),
             ("patterns", K::Leaf),
             ("disable_builtin", K::Leaf),

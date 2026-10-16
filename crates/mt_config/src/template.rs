@@ -76,6 +76,7 @@ confirm_multiline = true
 mode = "visual"                  # "visual" | "audible" | "none"
 
 [quick_select]
+enabled = true                    # false turns quick select off
 alphabet = "asdfqwerzxcvjklmiuopghtybn"
 patterns = []                    # extra regexes appended to built-ins
 disable_builtin = []             # e.g. ["ipv6", "number"]

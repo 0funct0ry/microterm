@@ -182,3 +182,16 @@ fn tab_and_workspace_validation() {
     assert!(msg("startup_workspace = \"ghost\"\n").contains("not defined"));
     assert!(parse_str("startup_workspace = \"api\"\n[[workspaces]]\nname = \"api\"\n").is_ok());
 }
+
+#[test]
+fn quick_select_can_be_switched_off() {
+    assert!(Config::default().quick_select.enabled);
+    let cfg = parse_str("[quick_select]\nenabled = false\n")
+        .unwrap()
+        .config;
+    assert!(!cfg.quick_select.enabled);
+    assert_eq!(
+        cfg.quick_select.alphabet,
+        Config::default().quick_select.alphabet
+    );
+}

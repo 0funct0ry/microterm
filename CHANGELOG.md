@@ -85,6 +85,18 @@
   Invalid `hyperlink_rules[].regex` values are config errors. Known gaps: implicit links do not
   span wrapped rows; the pointer shape updates on the next mouse move after the modifier changes;
   `ftp://` links are recognised but blocked until `ftp` is added to `hyperlinks.schemes`.
+- **M8 — Quick select, copy mode and search.** Quick select (Cmd/Ctrl+Shift+Space) scans the
+  visible rows with the built-in git SHA, URL, path, UUID, IPv4/IPv6, email, hex colour and
+  number patterns plus `quick_select.patterns`, minus `quick_select.disable_builtin`; overlapping
+  matches resolve to the longest, matches that wrap rows are found whole, labels come from
+  `quick_select.alphabet` (prefix-free, shortest nearest the cursor), a lowercase label copies and
+  an uppercase one copies and pastes. Copy mode (Cmd/Ctrl+Shift+X) is a vi-style cursor over the
+  whole scrollback with every SPEC §10.5 motion, numeric prefixes, character/line/block
+  selection, `o`, `y`/`Y`, `/ ? n N` search, `[`/`]` prompt jumps from OSC 133 marks (recorded in
+  `mt_term`), and bindings overridable in `[[copy_mode.keys]]`. The find bar searches scrollback
+  and screen with case and regex toggles, highlights visible matches, caps at 10,000 matches and
+  shows `n of m`. `mt_term` gains absolute-line access, selection by absolute line and prompt
+  marks; `mt_patterns` gains `QuickSet`. New docs: Quick select, Copy mode, Search.
 - **`text.wide_regional_indicators`** (default `false`). Counts each regional indicator as two
   cells, so a flag takes four like zsh's line editor assumes. Fixes the cursor jumping to the
   wrong column after zsh-autosuggestions draws a flag emoji. Implemented as a PTY output filter in

@@ -111,6 +111,8 @@ pub struct Emulator {
     wide_ri: bool,
     width_filter: crate::width_filter::WidthFilter,
     sniffer: crate::mouse::PixelModeSniffer,
+    prompt_sniffer: crate::lines::PromptSniffer,
+    marks: crate::lines::PromptMarks,
 }
 
 impl Emulator {
@@ -142,6 +144,8 @@ impl Emulator {
             wide_ri: false,
             width_filter: crate::width_filter::WidthFilter::new(),
             sniffer: Default::default(),
+            prompt_sniffer: Default::default(),
+            marks: Default::default(),
         }
     }
 
@@ -153,6 +157,17 @@ impl Emulator {
 
     pub fn advance(&mut self, bytes: &[u8]) {
         self.sniffer.feed(bytes);
+        // Split after each OSC 133;A prefix so the mark records the cursor line it arrived on.
+        let mut start = 0;
+        for end in self.prompt_sniffer.feed(bytes) {
+            self.advance_raw(&bytes[start..end]);
+            crate::lines::mark_here(&self.term, &mut self.marks);
+            start = end;
+        }
+        self.advance_raw(&bytes[start..]);
+    }
+
+    fn advance_raw(&mut self, bytes: &[u8]) {
         if self.wide_ri {
             let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 4);
             self.width_filter.filter(bytes, &mut out);
@@ -205,6 +220,44 @@ impl Emulator {
 
     pub fn selection_text(&self, trim_trailing: bool) -> Option<String> {
         crate::selection::text(&self.term, trim_trailing)
+    }
+
+    /// Lines of scrollback plus visible rows.
+    pub fn total_lines(&self) -> usize {
+        crate::lines::total_lines(&self.term)
+    }
+
+    pub fn history_size(&self) -> usize {
+        crate::lines::history_size(&self.term)
+    }
+
+    /// One row by absolute line (0 = oldest scrollback row).
+    pub fn line_cells(&self, abs: usize) -> Option<crate::LineCells> {
+        crate::lines::line_cells(&self.term, abs)
+    }
+
+    /// The terminal cursor as `(absolute line, column)`.
+    pub fn cursor_abs(&self) -> (usize, usize) {
+        crate::lines::cursor_abs(&self.term)
+    }
+
+    pub fn select_abs(
+        &mut self,
+        kind: crate::SelectionKind,
+        start: (usize, usize),
+        end: (usize, usize),
+    ) {
+        crate::lines::select_abs(&mut self.term, kind, start, end);
+    }
+
+    pub fn scroll_to_abs(&mut self, abs: usize, center: bool) {
+        crate::lines::scroll_to_abs(&mut self.term, abs, center);
+    }
+
+    /// Absolute lines of OSC 133;A prompt starts, ascending. Empty when the shell sends none.
+    pub fn prompt_marks(&mut self) -> Vec<usize> {
+        self.marks.sync(self.history_size());
+        self.marks.abs_lines()
     }
 
     pub fn drain_events(&mut self) -> Vec<TermEvent> {

@@ -11,6 +11,7 @@
 mod emulator;
 mod events;
 mod input;
+mod lines;
 mod mouse;
 mod process;
 mod selection;
@@ -25,6 +26,7 @@ pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,
     KittyFlags, Mods,
 };
+pub use lines::{LineCells, PromptSniffer};
 pub use mouse::{
     encode_mouse, MouseButton, MouseEvent, MouseEventKind, MouseModes, MouseTracking,
     PixelModeSniffer,

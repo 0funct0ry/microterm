@@ -454,3 +454,159 @@ mod mouse {
         assert!(menu.link.is_none());
     }
 }
+
+fn top(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Option<OverlayKind> {
+    view.read_with(cx, |this, _| this.overlays.top())
+}
+
+fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|c| c.text())
+}
+
+#[gpui::test]
+fn quick_select_copies_a_git_sha_from_the_live_screen(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(&view, cx, "printf 'abc1234 fix bug\\n'\n");
+    wait_for(&view, cx, |r| r == "abc1234 fix bug");
+    cx.dispatch_action(ActivateQuickSelect);
+    let (label, text) = view.read_with(cx, |t, _| {
+        let h = t
+            .quick
+            .hits
+            .iter()
+            .find(|h| h.text == "abc1234")
+            .expect("sha is labelled");
+        (h.label.clone(), h.text.clone())
+    });
+    cx.simulate_input(&label);
+    assert_eq!(top(&view, cx), None);
+    assert_eq!(clipboard(cx).as_deref(), Some(text.as_str()));
+}
+
+#[gpui::test]
+fn uppercase_quick_select_label_pastes_into_the_pane(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(&view, cx, "printf 'abc1234 fix bug\\n'\n");
+    wait_for(&view, cx, |r| r == "abc1234 fix bug");
+    cx.dispatch_action(ActivateQuickSelect);
+    let label = view.read_with(cx, |t, _| {
+        t.quick
+            .hits
+            .iter()
+            .find(|h| h.text == "abc1234")
+            .unwrap()
+            .label
+            .clone()
+    });
+    cx.simulate_input(&label.to_uppercase());
+    assert_eq!(clipboard(cx).as_deref(), Some("abc1234"));
+    let pasted = |r: &str| r.ends_with("$ abc1234");
+    let rows = wait_for(&view, cx, pasted);
+    assert!(rows.iter().any(|r| pasted(r)), "{rows:?}");
+}
+
+#[gpui::test]
+fn copy_mode_yanks_a_block_from_scrollback_with_the_keyboard(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(&view, cx, "seq 1 200\n");
+    wait_for(&view, cx, |r| r == "200");
+    assert!(view.read_with(cx, |t, _| t.live().unwrap().snapshot.history_size) > 0);
+    cx.dispatch_action(ActivateCopyMode);
+    // Find where the output starts: the prompt may wrap, so do not assume a row.
+    let first = view.read_with(cx, |t, _| {
+        t.grid_full()
+            .rows
+            .iter()
+            .position(|r| r.text(0, 9, true) == "1")
+            .expect("row with 1")
+    });
+    cx.simulate_keystrokes("g g");
+    for d in first.to_string().chars() {
+        cx.simulate_keystrokes(&d.to_string());
+    }
+    cx.simulate_keystrokes("j");
+    cx.simulate_keystrokes("ctrl-v j j l");
+    cx.simulate_keystrokes("y");
+    assert_eq!(top(&view, cx), None);
+    assert_eq!(clipboard(cx).as_deref(), Some("1\n2\n3"));
+    // The view followed the cursor into scrollback while selecting.
+    assert!(view.read_with(cx, |t, _| t.live().unwrap().snapshot.display_offset) > 0);
+}
+
+#[gpui::test]
+fn search_finds_matches_in_scrollback_and_scrolls_to_them(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(&view, cx, "seq 1 200\n");
+    wait_for(&view, cx, |r| r == "200");
+    cx.dispatch_action(Search);
+    cx.simulate_input("150");
+    assert_eq!(view.read_with(cx, |t, _| t.search_status()), "1 of 1");
+    let visible = view.read_with(cx, |t, _| {
+        let (top, rows) = t.view_geometry();
+        let line = t.search.matches[0].start().0;
+        (line >= top && line < top + rows, t.search_marks().len())
+    });
+    assert_eq!(visible, (true, 1), "the match was scrolled into view");
+}
+
+#[gpui::test]
+fn copy_mode_selection_is_mirrored_into_the_terminal(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(&view, cx, "echo hello-world\n");
+    wait_for(&view, cx, |r| r == "hello-world");
+    cx.dispatch_action(ActivateCopyMode);
+    cx.simulate_keystrokes("k");
+    cx.simulate_keystrokes("v $");
+    let sel = view.read_with(cx, |t, _| t.live().unwrap().snapshot.selection);
+    assert!(
+        sel.is_some(),
+        "selection is highlighted like a mouse selection"
+    );
+    cx.simulate_keystrokes("escape");
+    let sel = view.read_with(cx, |t, _| t.live().unwrap().snapshot.selection);
+    assert!(sel.is_none());
+}
+
+#[gpui::test]
+fn quick_select_on_ls_la_can_be_typed_and_escaped(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(
+        &view,
+        cx,
+        "ls -la /tmp; echo DONE\n",
+    );
+    wait_for(&view, cx, |r| r == "DONE");
+    cx.dispatch_action(ActivateQuickSelect);
+    assert_eq!(top(&view, cx), Some(OverlayKind::QuickSelect));
+    let n = view.read_with(cx, |t, _| t.quick.hits.len());
+    eprintln!("hits: {n}");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None, "Esc closes");
+    cx.dispatch_action(ActivateQuickSelect);
+    let label = view.read_with(cx, |t, _| t.quick.hits.first().map(|h| h.label.clone()));
+    if let Some(label) = label {
+        cx.simulate_input(&label);
+        assert_eq!(top(&view, cx), None, "label closes");
+    }
+}
+
+#[gpui::test]
+fn overlay_keys_still_work_if_focus_is_stuck_on_the_viewport(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    write(&view, cx, "printf 'abc1234\\n'\n");
+    wait_for(&view, cx, |r| r == "abc1234");
+    cx.dispatch_action(ActivateQuickSelect);
+    // Simulate focus landing on the pane while quick select is open.
+    view.update_in(cx, |this, window, _| window.focus(&this.viewport_focus));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        top(&view, cx),
+        None,
+        "Esc closes even without overlay focus"
+    );
+    cx.dispatch_action(ActivateQuickSelect);
+    view.update_in(cx, |this, window, _| window.focus(&this.viewport_focus));
+    let label = view.read_with(cx, |t, _| t.quick.hits[0].label.clone());
+    cx.simulate_input(&label);
+    assert_eq!(top(&view, cx), None, "labels work too");
+}

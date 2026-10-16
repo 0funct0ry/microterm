@@ -457,6 +457,8 @@ impl Default for Bell {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct QuickSelect {
+    /// `false` turns quick select off: the action does nothing and leaves the palette.
+    pub enabled: bool,
     pub alphabet: String,
     pub patterns: Vec<String>,
     pub disable_builtin: Vec<String>,
@@ -465,6 +467,7 @@ pub struct QuickSelect {
 impl Default for QuickSelect {
     fn default() -> Self {
         Self {
+            enabled: true,
             alphabet: "asdfqwerzxcvjklmiuopghtybn".into(),
             patterns: Vec::new(),
             disable_builtin: Vec::new(),

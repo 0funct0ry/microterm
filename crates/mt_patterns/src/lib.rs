@@ -8,6 +8,9 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::ops::Range;
 
+mod quick;
+pub use quick::{QuickError, QuickMatch, QuickSet, BUILTIN_NAMES};
+
 /// A hyperlink found in a row of text. `range` is a char-index range into the row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMatch {
@@ -39,7 +42,7 @@ pub struct LinkSet {
     rules: Vec<Rule>,
 }
 
-const BUILTIN_URL: &str =
+pub(crate) const BUILTIN_URL: &str =
     r#"(?:https?://|ftp://|file://|mailto:)[^\s<>"'`\x00-\x1f]*[^\s<>"'`.,;:!?)\]}\x00-\x1f]"#;
 const BUILTIN_LOCALHOST: &str = r"\blocalhost:\d{1,5}\b(?:/[^\s<>]*)?";
 

@@ -18,7 +18,8 @@ use crate::{
     assets::IconName,
     components::{StatusKind, ToastKind},
     metrics::*,
-    mock::{assign_labels, scan_matches, Line, MockKind, QsMatch},
+    mock::{Line, MockKind},
+    mode_overlays::{CopyState, QuickState, SearchState},
     mux_host::{self, MuxHost},
     overlay_stack::{OverlayKind, OverlayStack},
     picker_state::{PickerInput, PickerOutcome, PickerState},
@@ -28,8 +29,6 @@ use crate::{
     terminal_view::{CellMetrics, TermFont},
     theme::Theme,
 };
-
-pub const QUICK_SELECT_ALPHABET: &str = "asdfghjkl";
 
 /// The view-side companion of a mux tab: its live terminal and display state. The order of
 /// `AppWindow::tabs` always mirrors the mux window's tabs.
@@ -147,27 +146,6 @@ pub struct PickerData {
     pub placeholder: &'static str,
 }
 
-#[derive(Default)]
-pub struct SearchState {
-    pub query: String,
-    pub case_sensitive: bool,
-    pub regex: bool,
-    /// Index into the match list of the highlighted hit.
-    pub current: usize,
-}
-
-#[derive(Default)]
-pub struct CopyState {
-    pub row: usize,
-    pub col: usize,
-}
-
-#[derive(Default)]
-pub struct QuickState {
-    pub matches: Vec<(String, QsMatch)>,
-    pub typed: String,
-}
-
 pub struct ToastItem {
     pub id: u64,
     pub kind: ToastKind,
@@ -226,6 +204,8 @@ pub struct AppWindow {
     /// False until the first paint has sized the PTY, so start-up shows no resize HUD.
     pub(crate) hud_armed: Rc<Cell<bool>>,
     blink_started: bool,
+    /// Give the pane focus on the next frame (an overlay closed during a tab switch).
+    pub(crate) refocus_viewport: bool,
     theme_restore: Option<Theme>,
     _subscriptions: Vec<Subscription>,
 }
@@ -317,6 +297,7 @@ impl AppWindow {
             config_banner_kind: ToastKind::Error,
             hud_armed: Rc::new(Cell::new(false)),
             blink_started: false,
+            refocus_viewport: false,
             theme_restore: None,
             _subscriptions: vec![subscription, appearance, release],
         };
@@ -627,6 +608,9 @@ impl AppWindow {
             }
         }
         session.refresh();
+        if index == self.active_tab {
+            self.search_follow_output();
+        }
         if let Some(title) = new_title {
             mux_host::host(cx).mux.set_pane_title(pane, &title);
             self.refresh_titles(cx);
@@ -675,7 +659,23 @@ impl AppWindow {
         .detach();
     }
 
-    pub(crate) fn on_viewport_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+    pub(crate) fn on_viewport_key(
+        &mut self,
+        ev: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The pane must never swallow keys while an overlay is open: if focus ended up here,
+        // take it back and hand the key to the overlay so Esc and labels still work.
+        if !self.overlays.is_empty() {
+            self.sync_focus(window);
+            if ev.keystroke.key == "escape" {
+                self.dismiss_top(window, cx);
+            } else {
+                self.on_overlay_key(ev, window, cx);
+            }
+            return;
+        }
         if self.renaming.is_some() {
             self.rename_key(ev, cx);
             return;
@@ -872,28 +872,6 @@ impl AppWindow {
         self.active_kind().map(MockKind::lines).unwrap_or_default()
     }
 
-    /// `(row, col, len, is_current)` of every search hit on the active screen.
-    pub(crate) fn search_hits(&self) -> Vec<(usize, usize, usize)> {
-        if self.search.query.is_empty() {
-            return Vec::new();
-        }
-        let needle: Vec<char> = fold(&self.search.query, self.search.case_sensitive);
-        let mut hits = Vec::new();
-        for (row, line) in self.screen().iter().enumerate() {
-            let hay: Vec<char> = fold(&line.text(), self.search.case_sensitive);
-            let mut i = 0;
-            while i + needle.len() <= hay.len() {
-                if hay[i..i + needle.len()] == needle[..] {
-                    hits.push((row, i, needle.len()));
-                    i += needle.len();
-                } else {
-                    i += 1;
-                }
-            }
-        }
-        hits
-    }
-
     // ---------------------------------------------------------------- overlays & focus
 
     fn sync_focus(&self, window: &mut Window) {
@@ -909,6 +887,14 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if kind == OverlayKind::QuickSelect && !self.cfg.quick_select.enabled {
+            self.toast(
+                ToastKind::Info,
+                "Quick select is turned off (quick_select.enabled = false)",
+                cx,
+            );
+            return;
+        }
         self.tab_menu = None;
         self.mouse.menu = None;
         self.prepare(kind, cx);
@@ -938,20 +924,13 @@ impl AppWindow {
             | OverlayKind::Launcher
             | OverlayKind::WorkspaceSwitcher
             | OverlayKind::ThemeSelector => self.picker = Some(self.build_picker(kind, cx)),
-            OverlayKind::QuickSelect => {
-                let found = scan_matches(&self.screen());
-                let labels = assign_labels(found.len(), QUICK_SELECT_ALPHABET);
-                self.quick = QuickState {
-                    matches: labels.into_iter().zip(found).collect(),
-                    typed: String::new(),
-                };
+            OverlayKind::QuickSelect => self.prepare_quick_select(cx),
+            OverlayKind::CopyMode => self.prepare_copy_mode(cx),
+            OverlayKind::Search => {
+                if !self.search.query.is_empty() {
+                    self.search_refresh(true);
+                }
             }
-            OverlayKind::CopyMode => {
-                let screen = self.screen();
-                let row = screen.len().saturating_sub(1);
-                self.copy = CopyState { row, col: 0 };
-            }
-            OverlayKind::Search => self.search.current = 0,
             OverlayKind::SshReconnect => self.start_ssh_attempts(cx),
             OverlayKind::PasteConfirm | OverlayKind::CloseConfirm | OverlayKind::NamePrompt => {}
         }
@@ -963,6 +942,10 @@ impl AppWindow {
             cx.notify();
             return;
         }
+        if self.overlays.top() == Some(OverlayKind::CopyMode) {
+            self.copy_escape(window, cx);
+            return;
+        }
         if let Some(kind) = self.overlays.dismiss_top() {
             self.teardown(kind, true, cx);
         }
@@ -970,7 +953,7 @@ impl AppWindow {
         cx.notify();
     }
 
-    fn close_overlay(
+    pub(crate) fn close_overlay(
         &mut self,
         kind: OverlayKind,
         keep_theme: bool,
@@ -999,11 +982,15 @@ impl AppWindow {
                 self.picker = None;
             }
             OverlayKind::QuickSelect => self.quick = QuickState::default(),
+            OverlayKind::CopyMode => self.teardown_copy_mode(),
+            OverlayKind::Search => {
+                self.search.matches.clear();
+                self.search.error = None;
+            }
             OverlayKind::SshReconnect => self.ssh_epoch += 1,
             OverlayKind::PasteConfirm => self.paste_confirm = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
-            OverlayKind::CopyMode | OverlayKind::Search => {}
         }
     }
 
@@ -1096,7 +1083,13 @@ impl AppWindow {
     /// Every palette provider's rows: actions, workspaces, tabs, themes (SPEC §10.1).
     fn palette_entries(&self, cx: &mut Context<Self>) -> Vec<(String, Entry)> {
         let mut items: Vec<(String, Entry)> = Vec::new();
-        for (i, def) in ACTIONS.iter().enumerate().filter(|(_, d)| d.palette) {
+        let quick_select_on = self.cfg.quick_select.enabled;
+        for (i, def) in ACTIONS
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.palette)
+            .filter(|(_, d)| quick_select_on || d.name != "ActivateQuickSelect")
+        {
             let mut e = Entry::new(Target::Action(i), format!("action:{}", def.name));
             e.detail = Some(def.description.to_string());
             e.chip = cx.global::<Settings>().chip(def);
@@ -1492,18 +1485,41 @@ impl AppWindow {
         {
             self.commit_rename(cx);
         }
+        self.leave_tab(cx);
         let _ = mux_host::host(cx).mux.activate_tab(self.mux_window, index);
         self.active_tab = index;
+        self.entered_tab();
         cx.notify();
+    }
+
+    /// Before the active tab changes: copy mode and quick select belong to one pane's buffer,
+    /// so they end here (copy mode clears its selection on the pane it is leaving).
+    fn leave_tab(&mut self, cx: &mut Context<Self>) {
+        for kind in [OverlayKind::CopyMode, OverlayKind::QuickSelect] {
+            if self.overlays.contains(kind) {
+                self.overlays.close(kind);
+                self.teardown(kind, true, cx);
+                self.refocus_viewport = true;
+            }
+        }
+    }
+
+    /// After the active tab changed: the find bar's matches were computed for the old pane.
+    fn entered_tab(&mut self) {
+        if self.overlays.contains(OverlayKind::Search) {
+            self.search_refresh(true);
+        }
     }
 
     pub(crate) fn on_action_tab_relative(&mut self, delta: isize, cx: &mut Context<Self>) {
         self.commit_rename(cx);
+        self.leave_tab(cx);
         let host = mux_host::host(cx);
         let _ = host.mux.activate_tab_relative(self.mux_window, delta);
         if let Some(w) = host.mux.window(self.mux_window) {
             self.active_tab = w.active;
         }
+        self.entered_tab();
         cx.notify();
     }
 
@@ -1855,7 +1871,7 @@ impl AppWindow {
             }
             Some(OverlayKind::Search) => self.search_key(ev, cx),
             Some(OverlayKind::QuickSelect) => self.quick_key(ev, window, cx),
-            Some(OverlayKind::CopyMode) => self.copy_key(ev, cx),
+            Some(OverlayKind::CopyMode) => self.copy_key(ev, window, cx),
             Some(OverlayKind::SshReconnect) => {
                 if ev.keystroke.key == "enter" {
                     self.reconnect_now(cx);
@@ -1874,113 +1890,6 @@ impl AppWindow {
             Some(OverlayKind::NamePrompt) => self.prompt_key(ev, window, cx),
             None => {}
         }
-    }
-
-    fn search_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let k = &ev.keystroke;
-        let hits = self.search_hits().len();
-        if k.key == "enter" {
-            if hits > 0 {
-                self.search.current = if k.modifiers.shift {
-                    (self.search.current + hits - 1) % hits
-                } else {
-                    (self.search.current + 1) % hits
-                };
-            }
-        } else if k.key == "backspace" {
-            self.search.query.pop();
-            self.search.current = 0;
-        } else if k.modifiers.alt && k.key == "c" {
-            self.search.case_sensitive = !self.search.case_sensitive;
-            self.search.current = 0;
-        } else if k.modifiers.alt && k.key == "r" {
-            self.search.regex = !self.search.regex;
-        } else if let Some(text) = typed_text(ev, self.platform) {
-            self.search.query.push_str(text);
-            self.search.current = 0;
-        } else {
-            return;
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn step_search(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let hits = self.search_hits().len();
-        if hits > 0 {
-            self.search.current = if forward {
-                (self.search.current + 1) % hits
-            } else {
-                (self.search.current + hits - 1) % hits
-            };
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn toggle_search_case(&mut self, cx: &mut Context<Self>) {
-        self.search.case_sensitive = !self.search.case_sensitive;
-        self.search.current = 0;
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_search_regex(&mut self, cx: &mut Context<Self>) {
-        self.search.regex = !self.search.regex;
-        cx.notify();
-    }
-
-    fn quick_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = typed_text(ev, self.platform) else {
-            return;
-        };
-        let Some(ch) = text.chars().next() else {
-            return;
-        };
-        let mut typed = self.quick.typed.clone();
-        typed.push(ch.to_ascii_lowercase());
-        let upper = ch.is_ascii_uppercase();
-        if let Some((_, hit)) = self.quick.matches.iter().find(|(label, _)| *label == typed) {
-            let text = hit.text.clone();
-            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-            self.close_overlay(OverlayKind::QuickSelect, true, window, cx);
-            let verb = if upper { "Copied and pasted" } else { "Copied" };
-            self.toast(ToastKind::Success, format!("{verb} {text}"), cx);
-        } else if self
-            .quick
-            .matches
-            .iter()
-            .any(|(label, _)| label.starts_with(&typed))
-        {
-            self.quick.typed = typed;
-            cx.notify();
-        }
-    }
-
-    fn copy_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let screen = self.screen();
-        if screen.is_empty() {
-            return;
-        }
-        let last_row = screen.len() - 1;
-        let width = |row: usize| screen[row].cols().max(1);
-        let k = &ev.keystroke;
-        let key = if k.key == "g" && k.modifiers.shift {
-            "G"
-        } else {
-            k.key.as_str()
-        };
-        let c = &mut self.copy;
-        match key {
-            "h" | "left" => c.col = c.col.saturating_sub(1),
-            "l" | "right" => c.col = (c.col + 1).min(width(c.row) - 1),
-            "k" | "up" => c.row = c.row.saturating_sub(1),
-            "j" | "down" => c.row = (c.row + 1).min(last_row),
-            "0" => c.col = 0,
-            "$" => c.col = width(c.row) - 1,
-            "g" => c.row = 0,
-            "G" => c.row = last_row,
-            _ => return,
-        }
-        c.col = c.col.min(width(c.row) - 1);
-        cx.notify();
     }
 
     // ---------------------------------------------------------------- action handlers
@@ -2320,14 +2229,6 @@ pub(crate) fn typed_text(ev: &KeyDownEvent, platform: Platform) -> Option<&str> 
         .key_char
         .as_deref()
         .filter(|s| !s.is_empty() && !s.chars().any(char::is_control))
-}
-
-fn fold(s: &str, case_sensitive: bool) -> Vec<char> {
-    if case_sensitive {
-        s.chars().collect()
-    } else {
-        s.chars().flat_map(char::to_lowercase).collect()
-    }
 }
 
 fn plural(n: usize) -> &'static str {
