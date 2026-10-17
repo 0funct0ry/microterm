@@ -268,6 +268,26 @@ impl Emulator {
         self.shared.drain()
     }
 
+    /// A byte stream that, fed to a fresh emulator of the same size, reproduces this one's
+    /// screen, scrollback (at most `max_history` rows), modes, cursor, colours and title
+    /// (SPEC D6). Not preserved: scroll region, saved cursor, charsets, tab stops, hyperlinks
+    /// and the main screen hidden behind an active alternate screen.
+    pub fn replay_bytes(&self, max_history: usize) -> Vec<u8> {
+        crate::replay::synthesize(
+            &self.term,
+            self.shared.title().as_deref(),
+            self.sniffer
+                .flag()
+                .load(std::sync::atomic::Ordering::Relaxed),
+            max_history,
+        )
+    }
+
+    /// The last OSC 0/2 title the program set.
+    pub fn title(&self) -> Option<String> {
+        self.shared.title()
+    }
+
     /// Visible rows as trimmed text.
     pub fn screen_text(&mut self) -> Vec<String> {
         let s = self.snapshot();

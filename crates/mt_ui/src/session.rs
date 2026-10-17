@@ -62,6 +62,20 @@ impl TerminalSession {
         })
     }
 
+    /// Wraps a terminal that was not spawned here (a remote pane).
+    pub fn from_terminal(term: Arc<Terminal>, default_title: String) -> TerminalSession {
+        let snapshot = Arc::new(term.snapshot());
+        TerminalSession {
+            term,
+            snapshot,
+            cache: Rc::default(),
+            size: Rc::new(Cell::new((0, 0))),
+            grid_origin: Rc::new(Cell::new((0.0, 0.0))),
+            scroll_remainder: 0.0,
+            default_title,
+        }
+    }
+
     pub fn refresh(&mut self) {
         self.snapshot = Arc::new(self.term.snapshot());
     }

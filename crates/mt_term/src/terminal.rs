@@ -83,14 +83,44 @@ impl Taps {
     }
 }
 
+/// How a terminal reaches its process.
+enum Backend {
+    /// A local PTY driven by the engine's event loop.
+    Local {
+        sender: EventLoopSender,
+        pid: u32,
+        /// PTY master fd, for foreground-process queries. Owned by the event loop.
+        master_fd: RawFd,
+    },
+    /// A pane owned by a `microterm-mux` daemon: bytes are pushed in with `feed`.
+    Remote {
+        io: RemoteIo,
+        feed: Box<std::sync::Mutex<RemoteFeed>>,
+    },
+}
+
+/// Outbound side of a daemon-backed terminal.
+pub struct RemoteIo {
+    /// Keystrokes and terminal replies, in order.
+    pub input: Box<dyn Fn(Vec<u8>) + Send + Sync>,
+    /// The visible size changed (cols, rows).
+    pub resize: Box<dyn Fn(u16, u16) + Send + Sync>,
+}
+
+/// Parser state for bytes arriving from a daemon.
+pub struct RemoteFeed {
+    parser: alacritty_terminal::vte::ansi::Processor,
+    filter: WidthFilter,
+    sniffer: crate::mouse::PixelModeSniffer,
+    prompt_sniffer: crate::lines::PromptSniffer,
+    out: Vec<u8>,
+}
+
 pub struct Terminal {
     taps: Arc<Taps>,
     term: Arc<FairMutex<Term<Listener>>>,
     shared: Arc<Shared>,
-    sender: EventLoopSender,
-    pid: u32,
-    /// PTY master fd, for foreground-process queries. Owned by the event loop.
-    master_fd: RawFd,
+    backend: Backend,
     scrollback: usize,
     /// `text.wide_regional_indicators`, shared with the PTY reader.
     wide_ri: Arc<AtomicBool>,
@@ -185,9 +215,11 @@ impl Terminal {
             taps,
             term,
             shared,
-            sender,
-            pid,
-            master_fd,
+            backend: Backend::Local {
+                sender,
+                pid,
+                master_fd,
+            },
             scrollback: opts.scrollback,
             wide_ri,
             sgr_pixels,
@@ -196,27 +228,138 @@ impl Terminal {
         })
     }
 
+    /// A terminal whose process lives in a remote `microterm-mux` daemon. Feed it the daemon's
+    /// `Output`/`Replay` bytes with [`Terminal::feed`]; keystrokes go out through `io.input`.
+    pub fn remote(
+        opts: SpawnOptions,
+        io: RemoteIo,
+        waker: impl Fn() + Send + Sync + 'static,
+    ) -> Terminal {
+        let window_size = WindowSize {
+            num_lines: opts.rows,
+            num_cols: opts.cols,
+            cell_width: opts.cell_width,
+            cell_height: opts.cell_height,
+        };
+        let shared = Shared::new(
+            Box::new(waker),
+            opts.palette.clone(),
+            window_size,
+            opts.osc52,
+        );
+        let term = Term::new(
+            term_config(opts.scrollback, opts.osc52, opts.cursor),
+            &Size {
+                cols: opts.cols as usize,
+                rows: opts.rows as usize,
+            },
+            Listener(shared.clone()),
+        );
+        let input: Arc<dyn Fn(Vec<u8>) + Send + Sync> = Arc::from(io.input);
+        let reply = input.clone();
+        shared.set_sink(Box::new(move |b| reply(b)));
+        let io = RemoteIo {
+            input: Box::new(move |b| input(b)),
+            resize: io.resize,
+        };
+        let sgr_pixels = Arc::new(AtomicBool::new(false));
+        Terminal {
+            taps: Arc::new(Taps::default()),
+            term: Arc::new(FairMutex::new(term)),
+            shared,
+            backend: Backend::Remote {
+                io,
+                feed: Box::new(std::sync::Mutex::new(RemoteFeed {
+                    parser: Default::default(),
+                    filter: WidthFilter::new(),
+                    sniffer: crate::mouse::PixelModeSniffer::new(sgr_pixels.clone()),
+                    prompt_sniffer: Default::default(),
+                    out: Vec::new(),
+                })),
+            },
+            scrollback: opts.scrollback,
+            wide_ri: Arc::new(AtomicBool::new(opts.wide_regional_indicators)),
+            sgr_pixels,
+            pending_marks: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            marks: Default::default(),
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self.backend, Backend::Remote { .. })
+    }
+
+    /// Parses bytes that arrived from the daemon (remote terminals only).
+    pub fn feed(&self, bytes: &[u8]) {
+        let Backend::Remote { feed, .. } = &self.backend else {
+            return;
+        };
+        Taps::send(&self.taps.output, bytes);
+        let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
+        let f = &mut *f;
+        f.sniffer.feed(bytes);
+        let n = f.prompt_sniffer.feed(bytes).len();
+        if n > 0 {
+            self.pending_marks.fetch_add(n, Ordering::Relaxed);
+        }
+        let mut term = self.term.lock();
+        if self.wide_ri.load(Ordering::Relaxed) {
+            f.out.clear();
+            f.filter.filter(bytes, &mut f.out);
+            f.parser.advance(&mut *term, &f.out);
+        } else {
+            let held = f.filter.take_pending();
+            f.filter.reset();
+            if !held.is_empty() {
+                f.parser.advance(&mut *term, &held);
+            }
+            f.parser.advance(&mut *term, bytes);
+        }
+        drop(term);
+        self.shared.notify(TermEvent::Wakeup);
+    }
+
+    /// Reports that a remote process exited (shows up as `TermEvent::ChildExit`).
+    pub fn remote_exited(&self, status: Option<i32>) {
+        self.shared.notify(TermEvent::ChildExit(status));
+    }
+
+    /// Process id of the local child; `0` for remote terminals.
     pub fn pid(&self) -> u32 {
-        self.pid
+        match &self.backend {
+            Backend::Local { pid, .. } => *pid,
+            Backend::Remote { .. } => 0,
+        }
     }
 
     /// The foreground process when it is not the shell itself (drives the dirty dot and the
     /// `confirm_close = \"process\"` policy).
     pub fn foreground_process(&self) -> Option<crate::ForegroundProcess> {
-        crate::process::foreground(self.master_fd, self.pid)
+        match &self.backend {
+            Backend::Local { pid, master_fd, .. } => crate::process::foreground(*master_fd, *pid),
+            Backend::Remote { .. } => None,
+        }
     }
 
     /// Working directory of the foreground process, falling back to the shell's.
     pub fn cwd(&self) -> Option<PathBuf> {
-        let pid = self.foreground_process().map_or(self.pid, |p| p.pid);
-        crate::process::process_cwd(pid).or_else(|| crate::process::process_cwd(self.pid))
+        let Backend::Local { pid: shell, .. } = &self.backend else {
+            return None;
+        };
+        let pid = self.foreground_process().map_or(*shell, |p| p.pid);
+        crate::process::process_cwd(pid).or_else(|| crate::process::process_cwd(*shell))
     }
 
     /// Queues bytes for the child. Never blocks on a full PTY buffer.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let bytes = bytes.into();
         Taps::send(&self.taps.input, &bytes);
-        let _ = self.sender.send(Msg::Input(bytes));
+        match &self.backend {
+            Backend::Local { sender, .. } => {
+                let _ = sender.send(Msg::Input(bytes));
+            }
+            Backend::Remote { io, .. } => (io.input)(bytes.into_owned()),
+        }
     }
 
     /// Copies every byte the child prints (before any width filtering) to `tx`, or stops the
@@ -255,7 +398,12 @@ impl Terminal {
             cols: cols as usize,
             rows: rows as usize,
         });
-        let _ = self.sender.send(Msg::Resize(ws));
+        match &self.backend {
+            Backend::Local { sender, .. } => {
+                let _ = sender.send(Msg::Resize(ws));
+            }
+            Backend::Remote { io, .. } => (io.resize)(cols, rows),
+        }
     }
 
     /// Applies the settings that may change while the shell runs: the OSC 52 policy and the
@@ -424,7 +572,9 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self.sender.send(Msg::Shutdown);
+        if let Backend::Local { sender, .. } = &self.backend {
+            let _ = sender.send(Msg::Shutdown);
+        }
     }
 }
 
@@ -757,5 +907,38 @@ mod tests {
             }
         }
         assert_eq!(code, Some(Some(3)));
+    }
+
+    #[test]
+    fn remote_terminal_parses_fed_bytes_and_forwards_input_and_resize() {
+        use std::sync::Mutex as M;
+        let sent = Arc::new(M::new(Vec::<u8>::new()));
+        let sizes = Arc::new(M::new(Vec::<(u16, u16)>::new()));
+        let (s2, z2) = (sent.clone(), sizes.clone());
+        let t = Terminal::remote(
+            SpawnOptions::default(),
+            RemoteIo {
+                input: Box::new(move |b| s2.lock().unwrap().extend(b)),
+                resize: Box::new(move |c, r| z2.lock().unwrap().push((c, r))),
+            },
+            || {},
+        );
+        assert!(t.is_remote());
+        t.feed(b"hi\x1b[1;31m!\x1b[c");
+        let snap = t.snapshot();
+        assert_eq!(snap.row_text(0), "hi!");
+        // The device-attributes query is answered through the remote input path.
+        assert!(sent.lock().unwrap().starts_with(b"\x1b[?"));
+        t.write(&b"ls\r"[..]);
+        assert!(sent.lock().unwrap().ends_with(b"ls\r"));
+        t.resize(100, 30, 8, 16);
+        assert_eq!(*sizes.lock().unwrap(), vec![(100, 30)]);
+        assert_eq!(t.size(), (100, 30));
+        t.remote_exited(Some(2));
+        assert!(t
+            .drain_events()
+            .iter()
+            .any(|e| matches!(e, TermEvent::ChildExit(Some(2)))));
+        assert!(t.foreground_process().is_none() && t.cwd().is_none());
     }
 }

@@ -115,6 +115,25 @@
   without windows for the end-to-end tests. `mt_term` gains output/input taps and styled
   scrollback access; `mt_mux` gains `kill_pane`. New docs: CLI overview, microterm cli,
   Recording & replay, Environment variables, Exit codes.
+- **M10 — SSH domains and reconnection.** Tabs can live on remote hosts and survive dropped
+  connections. `microterm-mux` (new `mt_mux_server` crate, no GPUI) is a per-user daemon
+  (`serve`, `proxy`, `list`, `kill`) that owns the PTYs and an authoritative terminal per pane,
+  behind a `0700` socket with peer-credential checks. On attach it replays the screen,
+  scrollback, modes, cursor, colours and title as a synthesized VT stream (`mt_term`
+  round-trip tested; `Terminal::remote` runs a pane with no local PTY). `mt_proto::mux` adds the
+  postcard frame codec and message set with a `Hello` version check. `mt_ssh` (russh on a
+  background Tokio runtime) reads `~/.ssh/config` (`Host` patterns, `ProxyJump`, `ProxyCommand`,
+  identities, keepalive), authenticates via agent, identity files, keyboard-interactive and
+  password, verifies `known_hosts` (trust dialog; a changed key is a hard failure), bootstraps
+  the daemon over SFTP with a `SHA256SUMS`-verified cache, and falls back to a plain session
+  with a notice when that fails. Reconnection backs off 1, 2, 4, 8, 16, 30 s with jitter, with a
+  real overlay (attempt counter, *Reconnect now*, *Close tab*), blocked input and replay on
+  re-attach. `[[ssh_domains]]` entries appear in the launcher with status dots, *Connect to
+  host…* opens an ad-hoc domain, `microterm ssh [--domain NAME]` and `cli spawn --domain` work,
+  and the title bar shows the active domain's state. `mt_mux` gains `SshDomain`,
+  `DomainState` and `DomainStateChanged`. The M1 debug action `DebugShowSshOverlay` is gone.
+  New docs: SSH domains, microterm-mux. Not preserved on replay: scroll region, saved cursor,
+  character sets, tab stops, hyperlinks and the normal screen behind a full-screen app.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

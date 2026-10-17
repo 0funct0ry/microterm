@@ -143,10 +143,14 @@ pub(crate) struct Shared {
     armed: AtomicBool,
     wakeup_queued: AtomicBool,
     waker: Box<dyn Fn() + Send + Sync>,
-    pty: OnceLock<EventLoopSender>,
+    /// Where terminal-generated replies (DA, CPR, colour queries) go: the PTY, or the remote
+    /// connection for a daemon-backed pane.
+    sink: OnceLock<Box<dyn Fn(Vec<u8>) + Send + Sync>>,
     pub(crate) palette: Mutex<Palette>,
     pub(crate) size: Mutex<WindowSize>,
     policy: Mutex<Osc52Policy>,
+    /// Last OSC 0/2 title, kept for VT replay (`None` after a reset).
+    title: Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -161,11 +165,16 @@ impl Shared {
             armed: AtomicBool::new(false),
             wakeup_queued: AtomicBool::new(false),
             waker,
-            pty: OnceLock::new(),
+            sink: OnceLock::new(),
             palette: Mutex::new(palette),
             size: Mutex::new(size),
             policy: Mutex::new(policy),
+            title: Mutex::new(None),
         })
+    }
+
+    pub(crate) fn title(&self) -> Option<String> {
+        self.title.lock().unwrap().clone()
     }
 
     pub(crate) fn set_policy(&self, policy: Osc52Policy) {
@@ -173,12 +182,23 @@ impl Shared {
     }
 
     pub(crate) fn set_pty(&self, sender: EventLoopSender) {
-        let _ = self.pty.set(sender);
+        self.set_sink(Box::new(move |bytes| {
+            let _ = sender.send(Msg::Input(Cow::Owned(bytes)));
+        }));
+    }
+
+    pub(crate) fn set_sink(&self, sink: Box<dyn Fn(Vec<u8>) + Send + Sync>) {
+        let _ = self.sink.set(sink);
+    }
+
+    /// Queues an event for the UI, as the reader does.
+    pub(crate) fn notify(&self, ev: TermEvent) {
+        self.push(ev);
     }
 
     fn write_pty(&self, bytes: Vec<u8>) {
-        if let Some(tx) = self.pty.get() {
-            let _ = tx.send(Msg::Input(Cow::Owned(bytes)));
+        if let Some(sink) = self.sink.get() {
+            sink(bytes);
         }
     }
 
@@ -215,8 +235,14 @@ impl EventListener for Listener {
         let s = &self.0;
         match event {
             Event::Wakeup => s.push(TermEvent::Wakeup),
-            Event::Title(t) => s.push(TermEvent::Title(t)),
-            Event::ResetTitle => s.push(TermEvent::ResetTitle),
+            Event::Title(t) => {
+                *s.title.lock().unwrap() = Some(t.clone());
+                s.push(TermEvent::Title(t));
+            }
+            Event::ResetTitle => {
+                *s.title.lock().unwrap() = None;
+                s.push(TermEvent::ResetTitle);
+            }
             Event::Bell => s.push(TermEvent::Bell),
             Event::CursorBlinkingChange => s.push(TermEvent::CursorBlinkingChange),
             Event::ClipboardStore(t, text) => {

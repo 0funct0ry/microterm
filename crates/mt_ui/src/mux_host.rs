@@ -17,7 +17,7 @@ use mt_term::Terminal;
 use serde_json::{json, Value};
 
 use crate::ipc_ops::{self, Recorders};
-use crate::{app::AppWindow, app::TabView, settings::Settings};
+use crate::{app::AppWindow, app::TabView, settings::Settings, ssh_host::SshHub};
 
 pub struct MuxHost {
     pub mux: Mux,
@@ -31,6 +31,8 @@ pub struct MuxHost {
     pub(crate) recorders: Recorders,
     /// Path of the IPC socket, exported to panes as `MICROTERM_UNIX_SOCKET`.
     pub(crate) socket: Option<PathBuf>,
+    /// SSH domain connections.
+    pub(crate) ssh: SshHub,
 }
 
 impl Global for MuxHost {}
@@ -44,6 +46,7 @@ impl MuxHost {
             open: HashMap::new(),
             recorders: Recorders::default(),
             socket: None,
+            ssh: SshHub::default(),
         }
     }
 
@@ -55,7 +58,7 @@ impl MuxHost {
     pub(crate) fn spawn_tab(&mut self, window: Id, spec: SpawnSpec) -> Option<(Id, Id)> {
         let (tab, pane) = self
             .mux
-            .spawn_tab(window, spec.cwd.clone(), spec.title.clone())
+            .spawn_tab_in(window, spec.domain, spec.cwd.clone(), spec.title.clone())
             .ok()?;
         self.pending.insert(pane, spec);
         Some((tab, pane))
@@ -137,6 +140,7 @@ fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec
                     cwd: t.cwd.as_deref().map(expand_tilde),
                     command: (!t.command.is_empty()).then_some(t.command),
                     title: t.title,
+                    ..Default::default()
                 })
                 .collect()
         })
@@ -315,6 +319,33 @@ fn pane_terminal(cx: &mut App, pane: Id) -> Result<Arc<Terminal>, RpcError> {
     terminal(cx, pane).ok_or_else(|| RpcError::internal(format!("pane {pane} has no terminal")))
 }
 
+/// Runs `f` on the first open window (prompts and notices have no better home).
+pub(crate) fn with_first_window(
+    cx: &mut App,
+    f: impl FnOnce(&mut AppWindow, &mut gpui::Window, &mut gpui::Context<AppWindow>),
+) {
+    let handle = host(cx).open.values().next().copied();
+    if let Some(h) = handle {
+        let _ = h.update(cx, |view, window, cx| f(view, window, cx));
+    }
+}
+
+/// Tells every open window that a domain's state changed (overlay, title bar, launcher dots).
+pub(crate) fn notify_windows(cx: &mut App) {
+    let handles: Vec<_> = host(cx).open.values().copied().collect();
+    for h in handles {
+        let _ = h.update(cx, |view, window, cx| view.on_domain_event(window, cx));
+    }
+}
+
+pub(crate) fn toast_all(cx: &mut App, kind: crate::components::ToastKind, text: String) {
+    let handles: Vec<_> = host(cx).open.values().copied().collect();
+    for h in handles {
+        let text = text.clone();
+        let _ = h.update(cx, |view, _, cx| view.toast(kind, text, cx));
+    }
+}
+
 /// Re-syncs the OS window of `window` (if shown) with the mux.
 fn reconcile_window(cx: &mut App, window: Id, close: bool) {
     let handle = host(cx).open.get(&window).copied();
@@ -349,7 +380,10 @@ fn spawned(cx: &mut App, window: Id, tab_index: usize) -> Reply {
 }
 
 fn spawn(cx: &mut App, p: &mt_proto::SpawnParams) -> Reply {
-    let spec = ipc_ops::spawn_spec(p)?;
+    let mut spec = ipc_ops::spawn_spec(p)?;
+    if let Some(d) = p.domain.as_deref() {
+        spec.domain = crate::ssh_host::resolve_domain(cx, d)?;
+    }
     // An explicit window decides the workspace; otherwise `workspace`, otherwise the active one.
     let ws_name = {
         let h = host(cx);
@@ -537,7 +571,10 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         Request::PaneSpawn(p) => spawn(cx, &p),
         Request::WindowNew(p) => {
             // The single-instance request of a second `microterm` (SPEC §12.1).
-            let spec = ipc_ops::spawn_spec(&p)?;
+            let mut spec = ipc_ops::spawn_spec(&p)?;
+            if let Some(d) = p.domain.as_deref() {
+                spec.domain = crate::ssh_host::resolve_domain(cx, d)?;
+            }
             let active = host(cx).mux.active_workspace().name.clone();
             match p.workspace {
                 Some(ws) if ws != active => {
@@ -684,6 +721,7 @@ mod tests {
                 cwd: Some("/var".into()),
                 command: Some(vec!["htop".into()]),
                 title: None,
+                ..Default::default()
             };
             show_workspace(cx, "ops", true, Some(spec)).unwrap();
             let h = cx.global::<MuxHost>();

@@ -3,7 +3,7 @@
 use crate::snapshot::{Cell, CellColor, CellFlags, Underline};
 
 #[derive(Clone, PartialEq)]
-struct Style {
+pub(crate) struct Style {
     fg: CellColor,
     bg: CellColor,
     flags: u16,
@@ -19,7 +19,7 @@ const STYLE_BITS: u16 = CellFlags::BOLD
     | CellFlags::STRIKE;
 
 impl Style {
-    fn of(c: &Cell) -> Self {
+    pub(crate) fn of(c: &Cell) -> Self {
         Style {
             fg: c.fg,
             bg: c.bg,
@@ -30,11 +30,11 @@ impl Style {
         }
     }
 
-    fn is_default(&self) -> bool {
+    pub(crate) fn is_default(&self) -> bool {
         *self == Style::of(&Cell::default())
     }
 
-    fn sgr(&self) -> String {
+    pub(crate) fn sgr(&self) -> String {
         let mut p: Vec<String> = vec!["0".into()];
         for (bit, code) in [
             (CellFlags::BOLD, "1"),

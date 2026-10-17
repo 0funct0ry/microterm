@@ -9,4 +9,10 @@ publish = false
 name = "microterm-mux"
 path = "src/main.rs"
 
+# No GPUI here: this binary is copied to remote hosts (statically linked with musl).
+# CI asserts `cargo tree -p mt_mux_server` contains no gpui.
 [dependencies]
+mt_proto = { path = "../mt_proto" }
+mt_term = { path = "../mt_term" }
+clap.workspace = true
+libc = "0.2"

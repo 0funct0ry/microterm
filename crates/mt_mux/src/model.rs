@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use crate::domain::{DomainId, LOCAL_DOMAIN_ID};
+use crate::domain::{
+    Domain, DomainId, DomainKind, DomainState, LocalDomain, SshDomain, LOCAL_DOMAIN_ID,
+};
 
 pub type Id = u64;
 
@@ -18,6 +20,9 @@ pub enum Axis {
 pub struct Pane {
     pub id: Id,
     pub domain_id: DomainId,
+    /// The pane's id inside its domain's daemon (`(domain_id, remote_pane_id)`, SPEC §5);
+    /// `None` for local panes.
+    pub remote_pane_id: Option<u64>,
     pub title: String,
     pub cwd: Option<PathBuf>,
 }
@@ -135,6 +140,10 @@ pub enum MuxEvent {
         from: Id,
         to: Id,
     },
+    DomainStateChanged {
+        domain: DomainId,
+        state: DomainState,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -149,6 +158,8 @@ pub enum Error {
     NoWorkspace(String),
     #[error("workspace '{0}' already exists")]
     DuplicateWorkspace(String),
+    #[error("no such domain {0}")]
+    NoDomain(DomainId),
     #[error("workspace name cannot be empty")]
     EmptyName,
     #[error("the '{0}' workspace cannot be renamed")]
@@ -157,8 +168,14 @@ pub enum Error {
 
 type Listener = Box<dyn FnMut(&MuxEvent) + Send>;
 
+struct DomainRec {
+    domain: Box<dyn Domain>,
+    state: DomainState,
+}
+
 pub struct Mux {
     next_id: Id,
+    domains: Vec<DomainRec>,
     workspaces: Vec<Workspace>,
     windows: Vec<Window>,
     active_workspace: Id,
@@ -174,7 +191,12 @@ impl Default for Mux {
 impl Mux {
     pub fn new() -> Self {
         let mut mux = Mux {
+            // Id 0 is the local domain; every other id (domains included) comes from `alloc`.
             next_id: 1,
+            domains: vec![DomainRec {
+                domain: Box::new(LocalDomain),
+                state: DomainState::Connected,
+            }],
             workspaces: Vec::new(),
             windows: Vec::new(),
             active_workspace: 0,
@@ -351,19 +373,118 @@ impl Mux {
 
     // ---- tabs ----
 
-    /// Open a tab after the active one and activate it. Returns `(tab_id, pane_id)`.
+    // ---- domains ----
+
+    pub fn domains(&self) -> impl Iterator<Item = (&dyn Domain, &DomainState)> {
+        self.domains.iter().map(|d| (d.domain.as_ref(), &d.state))
+    }
+
+    pub fn domain_by_name(&self, name: &str) -> Option<DomainId> {
+        self.domains
+            .iter()
+            .find(|d| d.domain.name() == name)
+            .map(|d| d.domain.id())
+    }
+
+    pub fn domain_state(&self, id: DomainId) -> Option<&DomainState> {
+        self.domains
+            .iter()
+            .find(|d| d.domain.id() == id)
+            .map(|d| &d.state)
+    }
+
+    pub fn domain_kind(&self, id: DomainId) -> Option<DomainKind> {
+        self.domains
+            .iter()
+            .find(|d| d.domain.id() == id)
+            .map(|d| d.domain.kind())
+    }
+
+    /// Registers an SSH domain (or returns the existing one with that name). New domains start
+    /// `Connecting`.
+    pub fn register_ssh_domain(&mut self, name: &str) -> DomainId {
+        if let Some(id) = self.domain_by_name(name) {
+            return id;
+        }
+        let id = self.alloc();
+        self.domains.push(DomainRec {
+            domain: Box::new(SshDomain::new(id, name)),
+            state: DomainState::Connecting,
+        });
+        self.emit(MuxEvent::DomainStateChanged {
+            domain: id,
+            state: DomainState::Connecting,
+        });
+        id
+    }
+
+    pub fn set_domain_state(&mut self, id: DomainId, state: DomainState) -> Result<(), Error> {
+        let rec = self
+            .domains
+            .iter_mut()
+            .find(|d| d.domain.id() == id)
+            .ok_or(Error::NoDomain(id))?;
+        if rec.state != state {
+            rec.state = state.clone();
+            self.emit(MuxEvent::DomainStateChanged { domain: id, state });
+        }
+        Ok(())
+    }
+
+    /// The domain `pane` lives in.
+    pub fn pane_domain(&self, pane: Id) -> Option<DomainId> {
+        self.windows
+            .iter()
+            .flat_map(|w| w.tabs.iter())
+            .flat_map(|t| t.tree.panes())
+            .find(|p| p.id == pane)
+            .map(|p| p.domain_id)
+    }
+
+    /// Records the daemon-side id of a remote pane.
+    pub fn set_remote_pane_id(&mut self, pane: Id, remote: u64) {
+        if let Some(p) = self.pane_mut(pane) {
+            p.remote_pane_id = Some(remote);
+        }
+    }
+
+    /// Panes living in `domain`.
+    pub fn panes_in_domain(&self, domain: DomainId) -> Vec<Id> {
+        self.windows
+            .iter()
+            .flat_map(|w| w.tabs.iter())
+            .flat_map(|t| t.tree.panes())
+            .filter(|p| p.domain_id == domain)
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Open a local tab after the active one and activate it. Returns `(tab_id, pane_id)`.
     pub fn spawn_tab(
         &mut self,
         window: Id,
         cwd: Option<PathBuf>,
         title: Option<String>,
     ) -> Result<(Id, Id), Error> {
+        self.spawn_tab_in(window, LOCAL_DOMAIN_ID, cwd, title)
+    }
+
+    /// Like [`Mux::spawn_tab`], in `domain`.
+    pub fn spawn_tab_in(
+        &mut self,
+        window: Id,
+        domain: DomainId,
+        cwd: Option<PathBuf>,
+        title: Option<String>,
+    ) -> Result<(Id, Id), Error> {
         self.window(window).ok_or(Error::NoWindow(window))?;
+        self.domain_state(domain).ok_or(Error::NoDomain(domain))?;
         let tab_id = self.alloc();
         let pane_id = self.alloc();
         let pane = Pane {
             id: pane_id,
-            domain_id: LOCAL_DOMAIN_ID,
+            domain_id: domain,
+            remote_pane_id: None,
             title: String::new(),
             cwd,
         };
@@ -551,6 +672,93 @@ mod tests {
             .map(|_| mux.spawn_tab(w, None, None).unwrap().0)
             .collect();
         (mux, w, tabs)
+    }
+
+    #[test]
+    fn ssh_domains_register_once_with_monotonic_ids_and_state_events() {
+        let mut mux = Mux::new();
+        let log = recorded(&mut mux);
+        assert_eq!(
+            mux.domain_state(LOCAL_DOMAIN_ID),
+            Some(&DomainState::Connected)
+        );
+        let prod = mux.register_ssh_domain("prod");
+        assert_ne!(prod, LOCAL_DOMAIN_ID);
+        assert_eq!(
+            mux.register_ssh_domain("prod"),
+            prod,
+            "same name, same domain"
+        );
+        let infra = mux.register_ssh_domain("infra");
+        assert!(infra > prod, "ids are monotonic and never reused");
+        assert_eq!(mux.domain_by_name("infra"), Some(infra));
+        assert_eq!(
+            mux.domain_kind(prod),
+            Some(DomainKind::Ssh {
+                name: "prod".into()
+            })
+        );
+        assert_eq!(mux.domain_state(prod), Some(&DomainState::Connecting));
+
+        mux.set_domain_state(prod, DomainState::Connected).unwrap();
+        mux.set_domain_state(prod, DomainState::Connected).unwrap(); // no change, no event
+        mux.set_domain_state(
+            prod,
+            DomainState::Reconnecting {
+                attempt: 3,
+                next_in_secs: 4,
+            },
+        )
+        .unwrap();
+        assert!(mux.set_domain_state(999, DomainState::Connected).is_err());
+        let states: Vec<_> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                MuxEvent::DomainStateChanged { domain, state } if *domain == prod => {
+                    Some(state.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                DomainState::Connecting,
+                DomainState::Connected,
+                DomainState::Reconnecting {
+                    attempt: 3,
+                    next_in_secs: 4
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_tabs_record_their_domain_and_remote_pane_id() {
+        let mut mux = Mux::new();
+        let w = mux.spawn_window(None);
+        let prod = mux.register_ssh_domain("prod");
+        let (_, local) = mux.spawn_tab(w, None, None).unwrap();
+        let (_, remote) = mux.spawn_tab_in(w, prod, None, None).unwrap();
+        mux.set_remote_pane_id(remote, 42);
+        let p = mux
+            .window(w)
+            .unwrap()
+            .tabs
+            .iter()
+            .flat_map(|t| t.tree.panes())
+            .find(|p| p.id == remote)
+            .unwrap()
+            .clone();
+        assert_eq!((p.domain_id, p.remote_pane_id), (prod, Some(42)));
+        assert_eq!(mux.panes_in_domain(prod), vec![remote]);
+        assert_eq!(mux.panes_in_domain(LOCAL_DOMAIN_ID), vec![local]);
+        assert_eq!(
+            mux.spawn_tab_in(w, 777, None, None),
+            Err(Error::NoDomain(777))
+        );
     }
 
     #[test]

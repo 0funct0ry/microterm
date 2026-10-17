@@ -35,7 +35,7 @@ except the ones that need an argument (`SendString`, `SpawnCommand`, …): bind 
 `⌘⇧L` / `Ctrl+Shift+L`, or right-click the `+` button in the tab bar. It lists:
 
 - your `[[launch]]` profiles,
-- **New tab in …** for each domain (`local` today; SSH domains arrive with M10),
+- **New tab in …** for each domain (`local`, then your [SSH domains](/docs/ssh-domains/) with a connection dot), plus *Connect to host…*,
 - workspaces.
 
 ```toml

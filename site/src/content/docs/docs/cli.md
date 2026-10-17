@@ -24,8 +24,9 @@ microterm cli spawn [--window ID | --new-window] [--workspace NAME] [--domain NA
 
 Opens a tab and prints the new **pane id**. Without `--window` the tab goes into the first window
 of the target workspace. `--workspace` switches to that workspace (creating it when it does not
-exist); the first tab spawned into an empty workspace becomes that workspace's first tab. Until
-SSH domains arrive only `--domain local` exists. The new tab becomes the active tab.
+exist); the first tab spawned into an empty workspace becomes that workspace's first tab.
+`--domain` takes `local`, the name of an [SSH domain](/docs/ssh-domains/), or
+`ssh:[user@]host[:port]` for a temporary one. The new tab becomes the active tab.
 
 ## send-text
 

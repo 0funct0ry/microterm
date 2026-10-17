@@ -21,6 +21,7 @@ mt_mux = { path = "../mt_mux" }
 mt_patterns = { path = "../mt_patterns" }
 mt_proto = { path = "../mt_proto" }
 mt_record = { path = "../mt_record" }
+mt_ssh = { path = "../mt_ssh" }
 async-channel = "2"
 anyhow = "1"
 fontdb = "0.24.0"

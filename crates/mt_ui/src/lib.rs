@@ -24,6 +24,7 @@ pub mod quick_select;
 pub mod search;
 pub mod session;
 pub mod settings;
+pub mod ssh_host;
 pub mod state;
 pub mod terminal_view;
 pub mod textgrid;
@@ -57,6 +58,8 @@ pub struct RunOptions {
     /// `--cwd` and `-e CMD`: applied to the first tab.
     pub cwd: Option<std::path::PathBuf>,
     pub command: Option<Vec<String>>,
+    /// Domain of the first tab (`microterm ssh`): a configured name or `ssh:[user@]host[:port]`.
+    pub domain: Option<String>,
     /// IPC requests from other `microterm` invocations and `microterm cli`.
     pub ipc: Option<IpcHandle>,
 }
@@ -101,11 +104,20 @@ pub fn run(opts: RunOptions) {
             if let Some(ipc) = &opts.ipc {
                 mux_host::install_ipc(cx, ipc.socket.clone(), ipc.hub.clone());
             }
-            let first = (opts.cwd.is_some() || opts.command.is_some()).then(|| mt_mux::SpawnSpec {
-                cwd: opts.cwd.clone(),
-                command: opts.command.clone(),
-                title: None,
+            let domain = opts.domain.as_deref().and_then(|d| {
+                ssh_host::resolve_domain(cx, d)
+                    .map_err(|e| eprintln!("microterm: {}", e.message))
+                    .ok()
             });
+            let first =
+                (opts.cwd.is_some() || opts.command.is_some() || domain.is_some()).then(|| {
+                    mt_mux::SpawnSpec {
+                        domain: domain.unwrap_or(mt_mux::LOCAL_DOMAIN_ID),
+                        cwd: opts.cwd.clone(),
+                        command: opts.command.clone(),
+                        title: None,
+                    }
+                });
             if let Err(e) = mux_host::show_workspace(cx, &startup_workspace, true, first) {
                 eprintln!("microterm: {e}");
                 mux_host::show_workspace(cx, mt_mux::DEFAULT_WORKSPACE, true, None).ok();

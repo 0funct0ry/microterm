@@ -2,6 +2,7 @@
 //! driven by mock data. Rendering lives in `view.rs`.
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +11,8 @@ use gpui::{
     prelude::*, px, App, Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, KeyUpEvent,
     Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Subscription, Window,
 };
-use mt_mux::SpawnSpec;
+use mt_mux::{DomainState, SpawnSpec};
+use mt_ssh::prompt::{PromptKind as SshAsk, PromptRequest, Secret};
 use mt_term::{KeyEventKind, ScrollCmd, TermEvent};
 
 use crate::{
@@ -74,8 +76,18 @@ pub enum CloseTarget {
 /// What a name prompt will do with the typed name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptKind {
+    ConnectHost,
     CreateWorkspace,
     RenameWorkspace(u64),
+}
+
+/// What the reconnect card shows (SPEC §4.6).
+pub struct SshCard {
+    pub domain: mt_mux::DomainId,
+    pub name: String,
+    /// `user@host:port`.
+    pub label: String,
+    pub state: DomainState,
 }
 
 pub struct NamePrompt {
@@ -87,8 +99,10 @@ pub struct NamePrompt {
 #[derive(Clone, Debug)]
 pub enum Target {
     Action(usize),
-    /// `New tab in <domain>`; only `local` exists until M10.
+    /// `New tab in <domain>`.
     NewTab(String),
+    /// "Connect to host…": asks for `[user@]host[:port]`.
+    ConnectHost,
     Workspace(String),
     CreateWorkspace,
     Theme(usize),
@@ -176,8 +190,11 @@ pub struct AppWindow {
     pub(crate) toasts: Vec<ToastItem>,
     next_toast_id: u64,
     pub(crate) config_error: Option<SharedString>,
-    pub(crate) ssh_attempt: u32,
-    ssh_epoch: u64,
+    /// Questions from SSH connections (host keys, passwords), oldest first; the front one is
+    /// on screen. Dropping a request cancels it.
+    pub(crate) ssh_prompts: VecDeque<PromptRequest>,
+    /// What has been typed into the front secret prompt (never rendered, never stored).
+    pub(crate) ssh_input: String,
     pub(crate) hud: Option<(usize, usize)>,
     hud_epoch: u64,
     pub(crate) scrollbar_visible: bool,
@@ -276,8 +293,8 @@ impl AppWindow {
             toasts: Vec::new(),
             next_toast_id: 0,
             config_error: None,
-            ssh_attempt: 1,
-            ssh_epoch: 0,
+            ssh_prompts: VecDeque::new(),
+            ssh_input: String::new(),
             hud: None,
             hud_epoch: 0,
             scrollbar_visible: false,
@@ -380,6 +397,14 @@ impl AppWindow {
                     .pending
                     .remove(&self.tabs[i].pane)
                     .unwrap_or_default();
+                if spec.domain != mt_mux::LOCAL_DOMAIN_ID {
+                    let domain = spec.domain;
+                    if let Err(e) = self.attach_remote_terminal(i, domain, &spec, window, cx) {
+                        self.toast(ToastKind::Error, format!("Could not open the tab: {e}"), cx);
+                        failed.push(id);
+                    }
+                    continue;
+                }
                 let mut opts = self.spawn_options(cx);
                 opts.cwd = spec.cwd;
                 opts.command = spec.command;
@@ -528,6 +553,42 @@ impl AppWindow {
             })
             .detach();
         }
+        Ok(())
+    }
+
+    /// Attaches a terminal whose process lives in an SSH domain's daemon to tab `index`.
+    fn attach_remote_terminal(
+        &mut self,
+        index: usize,
+        domain: mt_mux::DomainId,
+        spec: &SpawnSpec,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let mut opts = self.spawn_options(cx);
+        opts.cols = session::DEFAULT_COLS;
+        opts.rows = session::DEFAULT_ROWS;
+        opts.cell_width = self.cell.width as u16;
+        opts.cell_height = self.cell.height as u16;
+        opts.palette = palette_of(cx.global::<Theme>());
+        if opts.scrollback == 0 {
+            opts.scrollback = session::DEFAULT_SCROLLBACK;
+        }
+        let pane = self.tabs.get(index).ok_or("no such tab")?.pane;
+        let (tx, rx) = async_channel::bounded::<()>(1);
+        let term = crate::ssh_host::remote_terminal(cx, domain, pane, spec, opts, tx)?;
+        let title = {
+            let host = mux_host::host(cx);
+            match host.mux.domain_kind(domain) {
+                Some(mt_mux::DomainKind::Ssh { name }) => name,
+                _ => "ssh".to_string(),
+            }
+        };
+        let tab = self.tabs.get_mut(index).ok_or("no such tab")?;
+        tab.session = Some(TerminalSession::from_terminal(term, title));
+        tab.wake = Some(rx);
+        let tab_id = tab.id;
+        self.start_pump(tab_id, window, cx);
         Ok(())
     }
 
@@ -686,6 +747,13 @@ impl AppWindow {
         }
         if self.renaming.is_some() {
             self.rename_key(ev, cx);
+            return;
+        }
+        // Keyboard input is blocked while the domain is down (SPEC §11.4); Enter retries now.
+        if self.ssh_blocks_input(cx) {
+            if ev.keystroke.key == "enter" {
+                self.reconnect_now(cx);
+            }
             return;
         }
         self.send_key(&ev.keystroke, ev.is_held, KeyEventKind::Press, cx);
@@ -939,8 +1007,10 @@ impl AppWindow {
                     self.search_refresh(true);
                 }
             }
-            OverlayKind::SshReconnect => self.start_ssh_attempts(cx),
-            OverlayKind::PasteConfirm | OverlayKind::CloseConfirm | OverlayKind::NamePrompt => {}
+            OverlayKind::PasteConfirm
+            | OverlayKind::CloseConfirm
+            | OverlayKind::NamePrompt
+            | OverlayKind::SshPrompt => {}
         }
     }
 
@@ -995,7 +1065,11 @@ impl AppWindow {
                 self.search.matches.clear();
                 self.search.error = None;
             }
-            OverlayKind::SshReconnect => self.ssh_epoch += 1,
+            OverlayKind::SshPrompt => {
+                // Closing without answering cancels the request (dropped here).
+                self.ssh_prompts.pop_front();
+                self.ssh_input.clear();
+            }
             OverlayKind::PasteConfirm => self.paste_confirm = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
@@ -1156,9 +1230,13 @@ impl AppWindow {
             let mut e = Entry::new(Target::NewTab(domain.clone()), format!("domain:{domain}"));
             e.icon = Some(IconName::Plus);
             e.detail = Some("domain".into());
-            e.status = Some(StatusKind::Connected);
+            e.status = Some(self.domain_status(&domain, cx));
             items.push((format!("New tab in {domain}"), e));
         }
+        let mut e = Entry::new(Target::ConnectHost, "domain:connect".to_string());
+        e.icon = Some(IconName::Plus);
+        e.detail = Some("ssh".into());
+        items.push(("Connect to host…".to_string(), e));
         for (name, detail, _) in self.workspace_rows(cx) {
             let mut e = Entry::new(Target::Workspace(name.clone()), format!("workspace:{name}"));
             e.icon = Some(IconName::Layers);
@@ -1168,9 +1246,31 @@ impl AppWindow {
         items
     }
 
-    /// Names of the domains a tab can open in. Only `local` exists until SSH domains (M10).
-    fn domain_names(&self, _cx: &App) -> Vec<String> {
-        vec!["local".to_string()]
+    /// Names of the domains a tab can open in: `local`, then the `[[ssh_domains]]`.
+    fn domain_names(&self, cx: &App) -> Vec<String> {
+        let mut v = vec!["local".to_string()];
+        v.extend(crate::ssh_host::configured_names(cx));
+        v
+    }
+
+    /// The status dot of a domain in the launcher.
+    pub(crate) fn domain_status(&self, name: &str, cx: &mut Context<Self>) -> StatusKind {
+        if name == "local" {
+            return StatusKind::Connected;
+        }
+        let host = mux_host::host(cx);
+        match host
+            .mux
+            .domain_by_name(name)
+            .and_then(|d| host.mux.domain_state(d))
+        {
+            Some(DomainState::Connected) => StatusKind::Connected,
+            Some(DomainState::Connecting | DomainState::Reconnecting { .. }) => {
+                StatusKind::Reconnecting
+            }
+            Some(DomainState::Disconnected { .. }) => StatusKind::Error,
+            None => StatusKind::Idle,
+        }
     }
 
     /// Rebuilds an open palette or launcher in place (config reload), keeping the query.
@@ -1284,13 +1384,12 @@ impl AppWindow {
                 let action = (ACTIONS[i].build)();
                 window.defer(cx, move |window, cx| window.dispatch_action(action, cx));
             }
+            Target::ConnectHost => {
+                self.begin_prompt(PromptKind::ConnectHost, String::new(), window, cx);
+            }
             Target::NewTab(domain) => {
                 if domain != "local" {
-                    self.toast(
-                        ToastKind::Warning,
-                        format!("No domain named \"{domain}\""),
-                        cx,
-                    );
+                    self.spawn_tab_in_domain(&domain, window, cx);
                 } else if new_window {
                     let spec = SpawnSpec {
                         cwd: self.new_tab_cwd(cx),
@@ -1685,6 +1784,11 @@ impl AppWindow {
             return;
         }
         match prompt.kind {
+            PromptKind::ConnectHost => {
+                self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
+                let domain = format!("{}{name}", crate::ssh_host::ADHOC_PREFIX);
+                self.spawn_tab_in_domain(&domain, window, cx);
+            }
             PromptKind::CreateWorkspace => {
                 self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
                 self.switch_workspace_named(name, true, cx);
@@ -1826,39 +1930,148 @@ impl AppWindow {
         cx.notify();
     }
 
-    fn start_ssh_attempts(&mut self, cx: &mut Context<Self>) {
-        self.ssh_epoch += 1;
-        self.ssh_attempt = 1;
-        let epoch = self.ssh_epoch;
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(Duration::from_secs(2)).await;
-            let keep_going = this
-                .update(cx, |this, cx| {
-                    if this.ssh_epoch != epoch {
-                        return false;
-                    }
-                    this.ssh_attempt += 1;
-                    cx.notify();
-                    true
-                })
-                .unwrap_or(false);
-            if !keep_going {
-                break;
-            }
+    // ---------------------------------------------------------------- SSH domains
+
+    /// The reconnect card's data for the active tab: its domain, unless it is connected.
+    pub(crate) fn ssh_card(&self, cx: &mut App) -> Option<SshCard> {
+        let pane = self.tabs.get(self.active_tab)?.pane;
+        let host = mux_host::host(cx);
+        let domain = host.mux.pane_domain(pane)?;
+        let state = host.mux.domain_state(domain)?.clone();
+        let mt_mux::DomainKind::Ssh { name } = host.mux.domain_kind(domain)? else {
+            return None;
+        };
+        let label = host
+            .ssh
+            .conns
+            .get(&domain)
+            .map_or_else(|| name.clone(), |c| c.label.clone());
+        Some(SshCard {
+            domain,
+            name,
+            label,
+            state,
         })
-        .detach();
+    }
+
+    /// The active tab's domain is connecting or disconnected: its keys go nowhere.
+    pub(crate) fn ssh_blocks_input(&self, cx: &mut App) -> bool {
+        self.ssh_card(cx)
+            .is_some_and(|c| c.state != DomainState::Connected)
     }
 
     pub(crate) fn reconnect_now(&mut self, cx: &mut Context<Self>) {
-        let next = self.ssh_attempt + 1;
-        self.start_ssh_attempts(cx);
-        self.ssh_attempt = next;
-        self.toast(ToastKind::Warning, "Reconnecting to prod…", cx);
+        if let Some(card) = self.ssh_card(cx) {
+            crate::ssh_host::reconnect_now(cx, card.domain);
+        }
     }
 
+    /// *Close tab* on the reconnect card: the remote pane keeps running on the host.
     pub(crate) fn close_ssh_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The mock SSH tab is gone (real SSH domains arrive with M10); closing just dismisses.
-        self.close_overlay(OverlayKind::SshReconnect, true, window, cx);
+        if let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) {
+            self.close_tab(id, window, cx);
+        }
+    }
+
+    /// A domain's connection state changed (or a notice is due): repaint.
+    pub(crate) fn on_domain_event(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
+    /// Queues a question from an SSH connection and shows it when nothing else is asked.
+    pub(crate) fn enqueue_ssh_prompt(
+        &mut self,
+        req: PromptRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ssh_prompts.push_back(req);
+        if self.ssh_prompts.len() == 1 {
+            self.ssh_input.clear();
+            self.open_overlay(OverlayKind::SshPrompt, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Answers the front prompt and moves on to the next one.
+    fn answer_ssh_prompt(
+        &mut self,
+        answer: impl FnOnce(PromptRequest, String),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(req) = self.ssh_prompts.pop_front() {
+            let typed = std::mem::take(&mut self.ssh_input);
+            answer(req, typed);
+        }
+        if self.ssh_prompts.is_empty() {
+            self.close_overlay(OverlayKind::SshPrompt, true, window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn ssh_prompt_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(front) = self.ssh_prompts.front() else {
+            return;
+        };
+        match &front.kind {
+            SshAsk::HostKey(_) => {
+                if ev.keystroke.key == "enter" {
+                    self.answer_ssh_prompt(|r, _| r.confirm(true), window, cx);
+                }
+            }
+            SshAsk::Secret(_) => match ev.keystroke.key.as_str() {
+                "enter" => self.answer_ssh_prompt(
+                    |r, typed| r.secret(Some(Secret::new(typed))),
+                    window,
+                    cx,
+                ),
+                "backspace" => {
+                    self.ssh_input.pop();
+                    cx.notify();
+                }
+                _ => {
+                    if let Some(typed) = typed_text(ev, self.platform) {
+                        self.ssh_input.push_str(typed);
+                        cx.notify();
+                    }
+                }
+            },
+        }
+    }
+
+    pub(crate) fn confirm_host_key(
+        &mut self,
+        trust: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.answer_ssh_prompt(|r, _| r.confirm(trust), window, cx);
+    }
+
+    /// Opens a tab in a named SSH domain (or `local`).
+    pub(crate) fn spawn_tab_in_domain(
+        &mut self,
+        domain: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match crate::ssh_host::resolve_domain(cx, domain) {
+            Ok(id) => {
+                let spec = SpawnSpec {
+                    domain: id,
+                    cwd: if id == mt_mux::LOCAL_DOMAIN_ID {
+                        self.new_tab_cwd(cx)
+                    } else {
+                        None
+                    },
+                    ..Default::default()
+                };
+                self.spawn_tab(Some(spec), window, cx);
+            }
+            Err(e) => self.toast(ToastKind::Warning, e.message, cx),
+        }
     }
 
     // ---------------------------------------------------------------- keyboard
@@ -1887,11 +2100,7 @@ impl AppWindow {
             Some(OverlayKind::Search) => self.search_key(ev, cx),
             Some(OverlayKind::QuickSelect) => self.quick_key(ev, window, cx),
             Some(OverlayKind::CopyMode) => self.copy_key(ev, window, cx),
-            Some(OverlayKind::SshReconnect) => {
-                if ev.keystroke.key == "enter" {
-                    self.reconnect_now(cx);
-                }
-            }
+            Some(OverlayKind::SshPrompt) => self.ssh_prompt_key(ev, window, cx),
             Some(OverlayKind::PasteConfirm) => {
                 if ev.keystroke.key == "enter" {
                     self.confirm_paste(window, cx);
@@ -2129,6 +2338,7 @@ impl AppWindow {
             cwd: self.new_tab_cwd(cx),
             command: Some(argv),
             title: Some(title),
+            ..Default::default()
         };
         self.spawn_tab(Some(spec), window, cx);
     }
@@ -2197,6 +2407,7 @@ pub(crate) fn spawn_spec_for(
         cwd: cwd.map(expand_tilde),
         command: (!command.is_empty()).then(|| command.to_vec()),
         title,
+        ..Default::default()
     }
 }
 

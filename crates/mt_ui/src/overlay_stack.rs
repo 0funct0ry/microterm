@@ -10,7 +10,7 @@ pub enum OverlayKind {
     QuickSelect,
     CopyMode,
     Search,
-    SshReconnect,
+    SshPrompt,
     PasteConfirm,
     CloseConfirm,
     NamePrompt,
@@ -22,7 +22,6 @@ enum Class {
     Picker,
     Mode,
     Search,
-    Ssh,
     Paste,
     Dialog,
 }
@@ -36,9 +35,8 @@ impl OverlayKind {
             | Self::ThemeSelector => Class::Picker,
             Self::QuickSelect | Self::CopyMode => Class::Mode,
             Self::Search => Class::Search,
-            Self::SshReconnect => Class::Ssh,
             Self::PasteConfirm => Class::Paste,
-            Self::CloseConfirm | Self::NamePrompt => Class::Dialog,
+            Self::CloseConfirm | Self::NamePrompt | Self::SshPrompt => Class::Dialog,
         }
     }
 }
@@ -170,10 +168,10 @@ mod tests {
     #[test]
     fn reopening_moves_an_overlay_to_the_top() {
         let mut s = OverlayStack::default();
-        s.open(SshReconnect);
+        s.open(SshPrompt);
         s.open(CopyMode);
-        s.open(SshReconnect);
-        assert_eq!(s.top(), Some(SshReconnect));
+        s.open(SshPrompt);
+        assert_eq!(s.top(), Some(SshPrompt));
         assert_eq!(s.len(), 2);
     }
 

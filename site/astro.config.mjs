@@ -23,6 +23,8 @@ export default defineConfig({
             { label: 'Quick select', slug: 'docs/quick-select' },
             { label: 'Copy mode', slug: 'docs/copy-mode' },
             { label: 'Search', slug: 'docs/search' },
+            { label: 'SSH domains', slug: 'docs/ssh-domains' },
+            { label: 'microterm-mux', slug: 'docs/microterm-mux' },
           ],
         },
         {

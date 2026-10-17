@@ -7,6 +7,13 @@ yanked = "warn"
 # Only fail on unmaintained crates we depend on directly. gpui's transitive tree contains a few
 # (ttf-parser, rustybuzz, paste, ...) that we cannot replace; real vulnerabilities still fail.
 unmaintained = "workspace"
+ignore = [
+  # Marvin attack on RSA (via russh's RSA key support, used by mt_ssh). No patched `rsa` exists.
+  # It needs an attacker who can time many RSA *private-key* operations over the network; the
+  # SSH client only signs during its own authentication. Re-check when `rsa` ships a fix, or
+  # drop russh's `rsa` feature if RSA keys stop mattering.
+  "RUSTSEC-2023-0071",
+]
 
 [licenses]
 version = 2

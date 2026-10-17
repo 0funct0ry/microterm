@@ -44,7 +44,6 @@ actions!(
         ResetFontSize,
         ReloadConfig,
         OpenConfig,
-        DebugShowSshOverlay,
         DebugShowConfigError,
         DebugShowToast,
         // Overlay-internal; bound in the `Overlay` / `Picker` key contexts, not in the palette.
@@ -540,7 +539,6 @@ pub static ACTIONS: &[ActionDef] = &[
         "Open a tab on the named SSH domain (arrives with M10)",
         ConnectSsh(String::new())
     ),
-    def!(debug "DebugShowSshOverlay", "Debug: Show SSH reconnect overlay", "Show the reconnect card with mock state", DebugShowSshOverlay),
     def!(debug "DebugShowConfigError", "Debug: Show config error banner", "Show the invalid-config banner", DebugShowConfigError),
     def!(debug "DebugShowToast", "Debug: Show toast", "Push a toast onto the stack", DebugShowToast),
 ];

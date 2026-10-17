@@ -57,3 +57,21 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
       - run: make site-build
+
+  # Real SSH against a Docker openssh-server: auth (key, password), host keys, bootstrap from an
+  # empty home, and kill-the-connection-then-reconnect (SPEC §14).
+  ssh-integration:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      # The container is x86_64 Linux, so it gets the static musl build of the daemon.
+      - run: cargo build --release -p mt_mux_server --target x86_64-unknown-linux-musl
+      - run: make test-ssh
+        env:
+          MICROTERM_MUX_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/microterm-mux

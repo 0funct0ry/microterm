@@ -40,6 +40,18 @@ pub fn event_of(e: &MuxEvent) -> Event {
         MuxEvent::WindowAdded { window } => Event::WindowAdded { window },
         MuxEvent::WindowRemoved { window } => Event::WindowRemoved { window },
         MuxEvent::WorkspaceSwitched { from, to } => Event::WorkspaceSwitched { from, to },
+        MuxEvent::DomainStateChanged { domain, ref state } => Event::DomainStateChanged {
+            domain,
+            state: state.label().into(),
+            attempt: match state {
+                mt_mux::DomainState::Reconnecting { attempt, .. } => Some(*attempt),
+                _ => None,
+            },
+            reason: match state {
+                mt_mux::DomainState::Disconnected { reason } => Some(reason.clone()),
+                _ => None,
+            },
+        },
     }
 }
 
@@ -76,7 +88,9 @@ pub fn snapshot(mux: &Mux) -> MuxSnapshot {
                                     id: p.id,
                                     title: p.title.clone(),
                                     cwd: p.cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
-                                    domain: "local".into(),
+                                    domain: mux
+                                        .domain_kind(p.domain_id)
+                                        .map_or_else(|| "local".into(), |k| domain_name(&k)),
                                 })
                                 .collect(),
                         })
@@ -88,18 +102,15 @@ pub fn snapshot(mux: &Mux) -> MuxSnapshot {
     MuxSnapshot { workspaces }
 }
 
-/// The launch spec of a `pane.spawn`. Only the local domain exists until M10.
+/// The launch spec of a `pane.spawn`. The domain is resolved by the caller (it needs the app's
+/// SSH domains); the spec starts out local.
 pub fn spawn_spec(p: &SpawnParams) -> Result<SpawnSpec, RpcError> {
-    if let Some(d) = p.domain.as_deref() {
-        if d != "local" {
-            return Err(RpcError::not_found(format!("no domain named \"{d}\"")));
-        }
-    }
     let command = p.command.clone().filter(|c| !c.is_empty());
     Ok(SpawnSpec {
         cwd: p.cwd.as_deref().map(expand_tilde),
         command,
         title: p.title.clone(),
+        ..Default::default()
     })
 }
 
@@ -384,16 +395,14 @@ mod tests {
     }
 
     #[test]
-    fn only_the_local_domain_exists() {
-        let ok = SpawnParams::default();
-        assert!(spawn_spec(&ok).is_ok());
-        let bad = SpawnParams {
+    fn spawn_spec_is_local_until_the_caller_resolves_the_domain() {
+        let p = SpawnParams {
             domain: Some("prod".into()),
+            cwd: Some("~/x".into()),
             ..Default::default()
         };
-        assert_eq!(
-            spawn_spec(&bad).unwrap_err().code,
-            mt_proto::ErrorCode::NotFound
-        );
+        let spec = spawn_spec(&p).unwrap();
+        assert_eq!(spec.domain, mt_mux::LOCAL_DOMAIN_ID);
+        assert!(spec.cwd.is_some());
     }
 }

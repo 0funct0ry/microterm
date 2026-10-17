@@ -14,14 +14,14 @@ use crate::cli::{Cli, Command};
 
 fn main() {
     // Usage errors exit 1 (SPEC §12.1); `--help` / `--version` still exit 0.
-    let cli = Cli::try_parse().unwrap_or_else(|err| {
+    let mut cli = Cli::try_parse().unwrap_or_else(|err| {
         let _ = err.print();
         std::process::exit(if err.use_stderr() { 1 } else { 0 });
     });
     if cli.headless {
         std::process::exit(headless::run(cli.config));
     }
-    match cli.command {
+    match cli.command.take() {
         Some(Command::Config(cmd)) => {
             std::process::exit(commands::config(&cmd, cli.config.as_deref()))
         }
@@ -37,16 +37,16 @@ fn main() {
         Some(Command::ReplayInternal { file, speed }) => {
             std::process::exit(cli_cmd::replay_internal(&file, speed))
         }
-        Some(command) => {
-            eprintln!("not implemented yet ({})", command.milestone());
-            std::process::exit(1);
+        Some(Command::Ssh(args)) => {
+            let domain = args.domain_ref();
+            launch_gui(cli, Some(domain))
         }
-        None => launch_gui(cli),
+        None => launch_gui(cli, None),
     }
 }
 
 /// No subcommand: open a window in the running instance, or become the instance.
-fn launch_gui(cli: Cli) {
+fn launch_gui(cli: Cli, domain: Option<String>) {
     let cwd = cli.cwd.map(|p| std::path::absolute(&p).unwrap_or(p));
     let command = (!cli.exec.is_empty()).then(|| cli.exec.clone());
     if !cli.new_instance {
@@ -54,6 +54,7 @@ fn launch_gui(cli: Cli) {
             workspace: cli.workspace.clone(),
             cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
             command: command.clone(),
+            domain: domain.clone(),
             ..Default::default()
         };
         match client::Client::connect()
@@ -83,6 +84,7 @@ fn launch_gui(cli: Cli) {
         workspace: cli.workspace,
         cwd,
         command,
+        domain,
         ipc,
     });
     drop(server); // removes the socket file

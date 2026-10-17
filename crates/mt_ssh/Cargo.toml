@@ -6,3 +6,19 @@ license.workspace = true
 publish = false
 
 [dependencies]
+mt_proto = { path = "../mt_proto" }
+# Pure-Rust SSH (SPEC D5). Pinned exactly: the client API is pre-1.0.
+russh = "=0.64.1"
+russh-sftp = "=3.0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "process", "macros", "fs"] }
+sha2 = "0.10"
+zeroize = "1"
+thiserror = { workspace = true }
+ureq = "3"
+async-channel = "2"
+
+[dev-dependencies]
+russh = "=0.64.1"
+mt_mux_server = { path = "../mt_mux_server" }
+mt_term = { path = "../mt_term" }
+tokio = { version = "1", features = ["test-util"] }

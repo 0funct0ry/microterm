@@ -17,6 +17,8 @@ pub const PROTO_VERSION: u32 = 1;
 /// Longest accepted line, in bytes.
 pub const MAX_LINE: usize = 1024 * 1024;
 
+pub mod mux;
+
 /// CLI exit codes (SPEC §12.1).
 pub mod exit {
     pub const OK: i32 = 0;
@@ -400,6 +402,16 @@ pub enum Event {
     WorkspaceSwitched {
         from: u64,
         to: u64,
+    },
+    /// `state` is `connecting`, `connected`, `reconnecting` or `disconnected`; `attempt` is set
+    /// while reconnecting, `reason` when disconnected.
+    DomainStateChanged {
+        domain: u64,
+        state: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 }
 

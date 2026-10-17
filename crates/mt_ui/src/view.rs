@@ -5,6 +5,7 @@ use gpui::{
     FontStyle, FontWeight, Hsla, KeyContext, MouseButton, SharedString, StrikethroughStyle,
     StyledText, TextRun, UnderlineStyle, Window, WindowControlArea,
 };
+use mt_mux::DomainState;
 use mt_term::ScrollCmd;
 
 use crate::{
@@ -97,6 +98,9 @@ impl Render for AppWindow {
         if let Some(prompt) = &self.prompt {
             root = root.child(self.prompt_modal(&t, prompt, cx));
         }
+        if let Some(req) = self.ssh_prompts.front() {
+            root = root.child(self.ssh_prompt_modal(&t, req, cx));
+        }
         if let Some(top) = self.overlays.top() {
             root = root.child(self.focus_node(top, cx));
         }
@@ -126,11 +130,7 @@ impl Render for AppWindow {
                 if a.0 == "local" {
                     this.on_action_spawn_tab(w, cx)
                 } else {
-                    this.toast(
-                        ToastKind::Warning,
-                        format!("No domain named \"{}\"", a.0),
-                        cx,
-                    )
+                    this.spawn_tab_in_domain(&a.0, w, cx)
                 }
             }))
             .on_action(cx.listener(|this, a: &ActivateTab, _, cx| this.activate_tab(a.0, cx)))
@@ -157,12 +157,12 @@ impl Render for AppWindow {
                     crate::app::spawn_spec_for(&a.command, a.cwd.as_deref(), a.title.clone());
                 this.spawn_tab(Some(spec), w, cx)
             }))
-            .on_action(cx.listener(|this, a: &ConnectSsh, _, cx| {
-                this.toast(
-                    ToastKind::Info,
-                    format!("SSH domain \"{}\": SSH domains arrive with M10", a.0),
-                    cx,
-                )
+            .on_action(cx.listener(|this, a: &ConnectSsh, w, cx| {
+                if a.0.is_empty() {
+                    this.begin_prompt(crate::app::PromptKind::ConnectHost, String::new(), w, cx)
+                } else {
+                    this.spawn_tab_in_domain(&a.0, w, cx)
+                }
             }))
             // Needs OSC 133 prompt marks (M8); a no-op until a pane has them.
             .on_action(cx.listener(|_, _: &ScrollToPrompt, _, _| {}))
@@ -223,9 +223,6 @@ impl Render for AppWindow {
             .on_action(
                 cx.listener(|this, _: &Search, w, cx| this.toggle(OverlayKind::Search, w, cx)),
             )
-            .on_action(cx.listener(|this, _: &DebugShowSshOverlay, w, cx| {
-                this.open_overlay(OverlayKind::SshReconnect, w, cx)
-            }))
             .on_action(
                 cx.listener(|this, _: &DebugShowConfigError, _, cx| this.show_config_error(cx)),
             )
@@ -257,11 +254,21 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let reconnecting = self.overlays.contains(OverlayKind::SshReconnect);
-        let (dot, domain) = if reconnecting {
-            (StatusKind::Reconnecting, "prod · reconnecting")
-        } else {
-            (StatusKind::Connected, "local")
+        let (dot, domain) = match self.ssh_card(cx) {
+            None => (StatusKind::Connected, "local".to_string()),
+            Some(c) => match c.state {
+                DomainState::Connected => (StatusKind::Connected, c.name),
+                DomainState::Connecting => {
+                    (StatusKind::Reconnecting, format!("{} · connecting", c.name))
+                }
+                DomainState::Reconnecting { .. } => (
+                    StatusKind::Reconnecting,
+                    format!("{} · reconnecting", c.name),
+                ),
+                DomainState::Disconnected { .. } => {
+                    (StatusKind::Error, format!("{} · disconnected", c.name))
+                }
+            },
         };
         let title = self.active_title();
         let workspace = self.active_workspace_name(cx);
@@ -655,8 +662,11 @@ impl AppWindow {
         if show_scrollbar {
             view = view.child(self.scrollbar(t));
         }
-        if self.overlays.contains(OverlayKind::SshReconnect) {
-            view = view.child(self.ssh_overlay(t, cx));
+        if let Some(card) = self
+            .ssh_card(cx)
+            .filter(|c| c.state != DomainState::Connected)
+        {
+            view = view.child(self.ssh_overlay(t, &card, cx));
         }
         view
     }
@@ -772,6 +782,7 @@ impl AppWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let title = match prompt.kind {
+            crate::app::PromptKind::ConnectHost => "Connect to host (user@host:port)",
             crate::app::PromptKind::CreateWorkspace => "Create workspace",
             crate::app::PromptKind::RenameWorkspace(_) => "Rename workspace",
         };
@@ -1031,7 +1042,47 @@ impl AppWindow {
             )
     }
 
-    fn ssh_overlay(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn ssh_overlay(
+        &self,
+        t: &Theme,
+        card: &crate::app::SshCard,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let (title, detail, status, dot) = match &card.state {
+            DomainState::Reconnecting {
+                attempt,
+                next_in_secs,
+            } => (
+                format!("Connection to {} lost", card.name),
+                format!(
+                    "{} — your session keeps running on the remote host.",
+                    card.label
+                ),
+                if *next_in_secs == 0 {
+                    format!("Reconnecting… (attempt {attempt})")
+                } else {
+                    format!("Reconnecting in {next_in_secs} s (attempt {attempt}).")
+                },
+                StatusKind::Reconnecting,
+            ),
+            DomainState::Disconnected { reason } => (
+                format!("Could not connect to {}", card.name),
+                reason.clone(),
+                "Disconnected".to_string(),
+                StatusKind::Error,
+            ),
+            _ => (
+                format!("Connecting to {}", card.name),
+                card.label.clone(),
+                "Connecting…".to_string(),
+                StatusKind::Reconnecting,
+            ),
+        };
+        let retry = if matches!(card.state, DomainState::Disconnected { .. }) {
+            "Retry"
+        } else {
+            "Reconnect now"
+        };
         div()
             .id("ssh-overlay")
             .absolute()
@@ -1043,7 +1094,7 @@ impl AppWindow {
             .occlude()
             .child(
                 div()
-                    .w(px(340.))
+                    .w(px(360.))
                     .flex()
                     .flex_col()
                     .gap_3()
@@ -1059,27 +1110,127 @@ impl AppWindow {
                             .items_center()
                             .gap_2()
                             .child(Icon::new(IconName::WifiOff).size(px(16.)).color(t.warning))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Connection to prod lost")),
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(title)),
                     )
-                    .child(div().text_size(px(12.)).text_color(t.text_muted).child("deploy@prod.example.com:22 — your session keeps running on the remote host."))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child(detail),
+                    )
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_2()
                             .text_size(px(12.))
-                            .child(StatusDot::new(StatusKind::Reconnecting))
-                            .child(format!("Reconnecting… attempt {}", self.ssh_attempt)),
+                            .child(StatusDot::new(dot))
+                            .child(status),
                     )
                     .child(
                         div()
                             .flex()
                             .gap_2()
                             .justify_end()
-                            .child(Button::new("ssh-close", "Close tab").on_click(cx.listener(|this, _, w, cx| this.close_ssh_tab(w, cx))))
-                            .child(Button::new("ssh-reconnect", "Reconnect now").style(ButtonStyle::Filled).on_click(cx.listener(|this, _, _, cx| this.reconnect_now(cx)))),
+                            .child(
+                                Button::new("ssh-close", "Close tab").on_click(
+                                    cx.listener(|this, _, w, cx| this.close_ssh_tab(w, cx)),
+                                ),
+                            )
+                            .child(
+                                Button::new("ssh-reconnect", retry)
+                                    .style(ButtonStyle::Filled)
+                                    .on_click(cx.listener(|this, _, _, cx| this.reconnect_now(cx))),
+                            ),
                     ),
             )
+    }
+
+    /// Host-key confirmation and password / passphrase prompts (SPEC §4.6).
+    fn ssh_prompt_modal(
+        &self,
+        t: &Theme,
+        req: &mt_ssh::prompt::PromptRequest,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use mt_ssh::prompt::{PromptKind, SecretPrompt};
+        let mut body = div().flex().flex_col().gap_3().p_4();
+        match &req.kind {
+            PromptKind::HostKey(h) => {
+                let host = if h.port == 22 {
+                    h.host.clone()
+                } else {
+                    format!("[{}]:{}", h.host, h.port)
+                };
+                body = body
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("Trust host {host}?")))
+                    .child(div().text_size(px(12.)).text_color(t.text_muted).child(format!(
+                        "The authenticity of this host (for \"{}\") cannot be established. It presents a {} key with fingerprint:",
+                        req.domain, h.key_type
+                    )))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(RADIUS_CONTROL))
+                            .bg(t.background)
+                            .border_1()
+                            .border_color(t.border)
+                            .font_family("monospace")
+                            .text_size(px(12.))
+                            .child(h.fingerprint.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(Button::new("hk-cancel", "Cancel").on_click(cx.listener(|this, _, w, cx| this.confirm_host_key(false, w, cx))))
+                            .child(Button::new("hk-trust", "Trust and connect").style(ButtonStyle::Filled).on_click(cx.listener(|this, _, w, cx| this.confirm_host_key(true, w, cx)))),
+                    );
+            }
+            PromptKind::Secret(p) => {
+                let (title, echo) = match p {
+                    SecretPrompt::Password { user, host } => {
+                        (format!("Password for {user}@{host}"), false)
+                    }
+                    SecretPrompt::Passphrase { path } => (format!("Passphrase for {path}"), false),
+                    SecretPrompt::Interactive { text, echo, .. } => (text.clone(), *echo),
+                };
+                // Typed text is shown as dots unless the server marked the prompt as echoing.
+                let shown = if echo {
+                    self.ssh_input.clone()
+                } else {
+                    "•".repeat(self.ssh_input.chars().count())
+                };
+                body = body
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .h(px(30.))
+                            .px_2()
+                            .rounded(px(RADIUS_CONTROL))
+                            .border_1()
+                            .border_color(t.border)
+                            .bg(t.background)
+                            .child(shown)
+                            .child(div().w(px(1.)).h(px(16.)).ml(px(1.)).bg(t.accent)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child("Enter to continue, Esc to cancel. It is not stored."),
+                    );
+            }
+        }
+        Modal::new("ssh-prompt")
+            .width(px(440.))
+            .top(px(TITLE_BAR_HEIGHT + PALETTE_TOP_OFFSET))
+            .on_dismiss(cx.listener_for_dismiss())
+            .child(body)
     }
 
     // ------------------------------------------------------------------ pickers

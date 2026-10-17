@@ -24,12 +24,18 @@ fn help_lists_subcommands() {
 }
 
 #[test]
-fn stubs_name_their_milestone() {
+fn ssh_needs_a_destination_or_a_domain() {
     microterm()
-        .args(["ssh", "host"])
+        .arg("ssh")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("not implemented yet (M10)"));
+        .code(1)
+        .stderr(predicate::str::contains("<TARGET>").or(predicate::str::contains("--domain")));
+    // `ssh --help` documents both ways in.
+    microterm()
+        .args(["ssh", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--domain"));
 }
 
 #[test]

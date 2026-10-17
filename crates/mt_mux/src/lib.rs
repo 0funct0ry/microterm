@@ -7,7 +7,9 @@ mod domain;
 mod model;
 mod title;
 
-pub use domain::{Domain, DomainId, DomainKind, LocalDomain, SpawnSpec, LOCAL_DOMAIN_ID};
+pub use domain::{
+    Domain, DomainId, DomainKind, DomainState, LocalDomain, SpawnSpec, SshDomain, LOCAL_DOMAIN_ID,
+};
 pub use model::{
     Axis, Error, Id, Mux, MuxEvent, Pane, PaneTree, Tab, Window, Workspace, DEFAULT_WORKSPACE,
 };

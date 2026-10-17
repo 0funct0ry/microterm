@@ -103,6 +103,5 @@ action = "Disable"   # unbind a default
 
 | Action | Description | macOS | Linux |
 |---|---|---|---|
-| `DebugShowSshOverlay` | **Debug: Show SSH reconnect overlay** — Show the reconnect card with mock state | — | — |
 | `DebugShowConfigError` | **Debug: Show config error banner** — Show the invalid-config banner | — | — |
 | `DebugShowToast` | **Debug: Show toast** — Push a toast onto the stack | — | — |

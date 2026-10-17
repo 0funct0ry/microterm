@@ -79,10 +79,23 @@ pub enum Command {
 
 #[derive(Args, Debug)]
 pub struct SshArgs {
-    /// `[user@]host[:port]`
-    pub target: String,
-    #[arg(long)]
+    /// `[user@]host[:port]`; resolved through `~/.ssh/config` too.
+    #[arg(required_unless_present = "domain")]
+    pub target: Option<String>,
+    /// Use the `[[ssh_domains]]` entry with this name instead of an ad-hoc destination.
+    #[arg(long, value_name = "NAME")]
     pub domain: Option<String>,
+}
+
+impl SshArgs {
+    /// The domain string the app resolves: a configured name or `ssh:<destination>`.
+    pub fn domain_ref(&self) -> String {
+        match (&self.domain, &self.target) {
+            (Some(d), _) => d.clone(),
+            (None, Some(t)) => format!("ssh:{t}"),
+            (None, None) => String::new(),
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -205,7 +218,7 @@ EXAMPLES:
         /// Workspace to spawn into; created and switched to when needed.
         #[arg(long, value_name = "NAME")]
         workspace: Option<String>,
-        /// Domain to start the pane in. Only `local` exists until SSH domains arrive.
+        /// Domain to start the pane in: `local`, a configured SSH domain, or `ssh:[user@]host[:port]`.
         #[arg(long, value_name = "NAME")]
         domain: Option<String>,
         /// Working directory of the new pane (default: the shell's default).
@@ -455,18 +468,4 @@ EXAMPLES:
         /// New name (must not exist yet).
         new: String,
     },
-}
-
-impl Command {
-    /// The milestone that implements this subcommand.
-    pub fn milestone(&self) -> &'static str {
-        match self {
-            Command::Ssh(_) => "M10",
-            Command::Themes(_) | Command::Config(_) | Command::LsFonts { .. } => "M3",
-            Command::Completions { .. }
-            | Command::Record(_)
-            | Command::Cli(_)
-            | Command::ReplayInternal { .. } => "M9",
-        }
-    }
 }

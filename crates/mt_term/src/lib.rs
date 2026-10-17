@@ -10,10 +10,12 @@
 
 mod emulator;
 mod events;
+mod headless;
 mod input;
 mod lines;
 mod mouse;
 mod process;
+mod replay;
 mod selection;
 mod sgr;
 mod shell;
@@ -23,6 +25,7 @@ mod width_filter;
 
 pub use emulator::{CursorDefault, Emulator, ScrollCmd};
 pub use events::{ClipboardKind, Osc52Policy, Palette, TermEvent, OSC52_MAX_BYTES};
+pub use headless::{HeadlessOptions, HeadlessPane, PaneEvent};
 pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,
     KittyFlags, Mods,
@@ -40,4 +43,4 @@ pub use snapshot::{
     Cell, CellColor, CellFlags, Cursor, CursorShape, Damage, Hyperlink, Modes, RenderSnapshot,
     Underline,
 };
-pub use terminal::{SpawnOptions, Terminal};
+pub use terminal::{RemoteIo, SpawnOptions, Terminal};

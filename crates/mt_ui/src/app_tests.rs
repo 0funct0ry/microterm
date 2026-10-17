@@ -505,21 +505,149 @@ fn search_toggles_change_the_results(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |t, _| !t.search_marks().is_empty()));
 }
 
+/// Registers an SSH domain and opens a tab in it (tests have no terminals or connections).
+fn open_ssh_tab(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> mt_mux::DomainId {
+    view.update_in(cx, |this, window, cx| {
+        let domain = crate::mux_host::host(cx).mux.register_ssh_domain("prod");
+        let spec = mt_mux::SpawnSpec {
+            domain,
+            ..Default::default()
+        };
+        this.spawn_tab(Some(spec), window, cx);
+        domain
+    })
+}
+
+fn set_domain(cx: &mut VisualTestContext, domain: mt_mux::DomainId, s: mt_mux::DomainState) {
+    cx.update(|_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_domain_state(domain, s)
+            .unwrap();
+    });
+}
+
+fn card_state(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Option<mt_mux::DomainState> {
+    view.update(cx, |this, cx| this.ssh_card(cx).map(|c| c.state))
+}
+
 #[gpui::test]
-fn ssh_overlay_counts_attempts_and_can_close_the_tab(cx: &mut TestAppContext) {
+fn reconnect_card_follows_the_active_tabs_domain_state(cx: &mut TestAppContext) {
+    use mt_mux::DomainState as S;
     let (view, cx) = setup(cx);
-    cx.dispatch_action(DebugShowSshOverlay);
-    assert_eq!(top(&view, cx), Some(OverlayKind::SshReconnect));
-    assert_eq!(view.read_with(cx, |t, _| t.ssh_attempt), 1);
-    cx.executor()
-        .advance_clock(std::time::Duration::from_secs(5));
-    cx.run_until_parked();
+    assert_eq!(card_state(&view, cx), None, "a local tab has no card");
+    let domain = open_ssh_tab(&view, cx);
+    assert_eq!(card_state(&view, cx), Some(S::Connecting));
     assert!(
-        view.read_with(cx, |t, _| t.ssh_attempt) >= 3,
-        "attempts keep counting"
+        view.update(cx, |t, cx| t.ssh_blocks_input(cx)),
+        "connecting blocks keys"
     );
+
+    set_domain(cx, domain, S::Connected);
+    assert!(!view.update(cx, |t, cx| t.ssh_blocks_input(cx)));
+
+    set_domain(
+        cx,
+        domain,
+        S::Reconnecting {
+            attempt: 3,
+            next_in_secs: 4,
+        },
+    );
+    assert_eq!(
+        card_state(&view, cx),
+        Some(S::Reconnecting {
+            attempt: 3,
+            next_in_secs: 4
+        })
+    );
+    assert!(view.update(cx, |t, cx| t.ssh_blocks_input(cx)));
+
+    set_domain(
+        cx,
+        domain,
+        S::Disconnected {
+            reason: "host key changed".into(),
+        },
+    );
+    let card = view.update(cx, |t, cx| t.ssh_card(cx)).unwrap();
+    assert_eq!((card.name.as_str(), card.domain), ("prod", domain));
+
+    // The first tab is local again: the card goes away with the switch.
+    view.update(cx, |t, cx| t.activate_tab(0, cx));
+    assert_eq!(card_state(&view, cx), None);
+    assert!(!view.update(cx, |t, cx| t.ssh_blocks_input(cx)));
+}
+
+#[gpui::test]
+fn closing_the_tab_from_the_reconnect_card_removes_it(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let domain = open_ssh_tab(&view, cx);
+    set_domain(
+        cx,
+        domain,
+        mt_mux::DomainState::Reconnecting {
+            attempt: 1,
+            next_in_secs: 1,
+        },
+    );
+    let before = view.read_with(cx, |t, _| t.tabs.len());
+    view.update_in(cx, |t, w, cx| t.close_ssh_tab(w, cx));
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), before - 1);
+    assert_eq!(card_state(&view, cx), None);
+}
+
+#[gpui::test]
+fn host_key_prompt_is_answered_with_enter_and_cancelled_with_escape(cx: &mut TestAppContext) {
+    use mt_ssh::prompt::{Answered, HostKeyPrompt, PromptKind, PromptRequest};
+    let (view, cx) = setup(cx);
+    let hk = || {
+        PromptKind::HostKey(HostKeyPrompt {
+            host: "prod.example.com".into(),
+            port: 22,
+            fingerprint: "SHA256:abc".into(),
+            key_type: "ssh-ed25519".into(),
+        })
+    };
+    let (req, mut a1) = PromptRequest::for_test("prod", hk());
+    let (req2, mut a2) = PromptRequest::for_test("prod", hk());
+    view.update_in(cx, |t, w, cx| {
+        t.enqueue_ssh_prompt(req, w, cx);
+        t.enqueue_ssh_prompt(req2, w, cx);
+    });
+    assert_eq!(top(&view, cx), Some(OverlayKind::SshPrompt));
+    assert_eq!(a1.poll(), Answered::Pending);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(a1.poll(), Answered::Confirm(true));
+    // The second question is now on screen.
+    assert_eq!(top(&view, cx), Some(OverlayKind::SshPrompt));
     cx.simulate_keystrokes("escape");
+    assert_eq!(a2.poll(), Answered::Cancelled, "Esc refuses");
     assert_eq!(top(&view, cx), None);
+    assert!(viewport_focused(&view, cx));
+}
+
+#[gpui::test]
+fn password_prompt_collects_typed_text_and_never_echoes_it(cx: &mut TestAppContext) {
+    use mt_ssh::prompt::{Answered, PromptKind, PromptRequest, SecretPrompt};
+    let (view, cx) = setup(cx);
+    let (req, mut answer) = PromptRequest::for_test(
+        "prod",
+        PromptKind::Secret(SecretPrompt::Password {
+            user: "bruce".into(),
+            host: "prod".into(),
+        }),
+    );
+    view.update_in(cx, |t, w, cx| t.enqueue_ssh_prompt(req, w, cx));
+    cx.simulate_input("hunter2");
+    cx.simulate_keystrokes("backspace");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(answer.poll(), Answered::Secret(Some("hunter".into())));
+    assert_eq!(top(&view, cx), None);
+    assert!(
+        view.read_with(cx, |t, _| t.ssh_input.is_empty()),
+        "nothing is kept"
+    );
 }
 
 #[gpui::test]
@@ -892,7 +1020,40 @@ fn launcher_has_no_mock_rows_and_lists_real_ones(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
     cx.dispatch_action(ShowLauncher);
     let labels = picker_labels(&view, cx);
-    assert_eq!(labels, ["New tab in local", "Workspace: default"]);
+    assert_eq!(
+        labels,
+        ["New tab in local", "Connect to host…", "Workspace: default"]
+    );
+}
+
+#[gpui::test]
+fn launcher_lists_ssh_domains_with_status_dots(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "sshdomains",
+        "[[ssh_domains]]\nname = \"prod\"\nhost = \"prod.example.com\"\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    cx.dispatch_action(ShowLauncher);
+    assert!(picker_labels(&view, cx).contains(&"New tab in prod".to_string()));
+    // Not connected yet (never registered): idle; once registered and connected: green.
+    let dot = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+        view.update(cx, |t, cx| t.domain_status("prod", cx))
+    };
+    assert_eq!(dot(&view, cx), crate::components::StatusKind::Idle);
+    let id = cx.update(|_, cx| crate::mux_host::host(cx).mux.register_ssh_domain("prod"));
+    assert_eq!(
+        dot(&view, cx),
+        crate::components::StatusKind::Reconnecting,
+        "connecting"
+    );
+    set_domain(cx, id, mt_mux::DomainState::Connected);
+    assert_eq!(dot(&view, cx), crate::components::StatusKind::Connected);
+    set_domain(
+        cx,
+        id,
+        mt_mux::DomainState::Disconnected { reason: "x".into() },
+    );
+    assert_eq!(dot(&view, cx), crate::components::StatusKind::Error);
 }
 
 #[gpui::test]
