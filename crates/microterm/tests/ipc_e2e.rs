@@ -837,6 +837,9 @@ fn completions_for_all_shells() {
             "get-text",
             "run",
             "wait",
+            "notify",
+            "status",
+            "events",
             "close",
             "focus",
             "rename",
@@ -854,6 +857,9 @@ fn completions_for_all_shells() {
         }
         if shell != "fish" {
             for flag in [
+                "ttl",
+                "progress",
+                "snapshot",
                 "last-command",
                 "propagate-exit",
                 "command-finished",
@@ -1302,4 +1308,252 @@ fn pane_list_reports_exit_state_and_size() {
         (p["exited"].as_bool(), p["exit_code"].is_null()),
         (Some(false), true)
     );
+}
+
+// ---- M10.3: notify, status and events --------------------------------------------------------
+
+fn status_of(mt: &Instance, pane: &str) -> Value {
+    mt.json(&["pane", "status", "get", "--pane", pane])["status"].clone()
+}
+
+#[test]
+fn status_set_get_clear_and_it_shows_in_pane_list_and_selectors() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("sleep 60", &[]);
+    assert!(status_of(&mt, &pane).is_null());
+    mt.ctl(&[
+        "pane",
+        "status",
+        "set",
+        "--pane",
+        &pane,
+        "--state",
+        "working",
+        "--progress",
+        "40",
+        "running tests",
+    ]);
+    let st = status_of(&mt, &pane);
+    assert_eq!(st["state"], "working");
+    assert_eq!(st["text"], "running tests");
+    assert_eq!(st["progress"], 40);
+    assert!(st["updated_at"].as_str().unwrap().ends_with('Z'), "{st}");
+    // pane list/get carry the status, and the selector key finds it.
+    let list = mt.json(&["pane", "list"]);
+    assert_eq!(list[0]["status"]["state"], "working");
+    assert_eq!(
+        mt.json(&["pane", "get", "--pane", &pane])["status"]["progress"],
+        40
+    );
+    let hit = mt.json(&["pane", "list", "--match", "status:working"]);
+    assert_eq!(hit.as_array().unwrap().len(), 1);
+    let miss = mt.json(&["pane", "list", "--match", "status:waiting"]);
+    assert!(miss.as_array().unwrap().is_empty());
+    // Without --state the status means working.
+    mt.ctl(&["pane", "status", "set", "--pane", &pane, "busy"]);
+    assert_eq!(status_of(&mt, &pane)["state"], "working");
+    mt.ctl(&["pane", "status", "clear", "--pane", &pane]);
+    assert!(status_of(&mt, &pane).is_null());
+    assert!(mt.json(&["pane", "list"])[0]["status"].is_null());
+}
+
+#[test]
+fn status_never_falls_back_to_the_focused_pane_and_validates_input() {
+    let mt = Instance::start();
+    let _pane = mt.spawn_sh("sleep 60", &[]);
+    assert_eq!(mt.ctl_code(&["pane", "status", "set", "x"]), 1);
+    assert_eq!(mt.ctl_code(&["pane", "status", "clear"]), 1);
+    assert_eq!(mt.ctl_code(&["pane", "notify", "hello"]), 1);
+    // Reading may use the focused pane.
+    assert_eq!(mt.ctl_code(&["pane", "status", "get"]), 0);
+    assert_eq!(
+        mt.ctl_code(&["pane", "status", "set", "--pane", "1", "--state", "busy"]),
+        1,
+        "a bad flag value is a usage error"
+    );
+    assert_eq!(
+        mt.ctl_code(&["pane", "status", "set", "--pane", "1", "--progress", "101"]),
+        1
+    );
+    assert_eq!(
+        mt.ctl_code(&["pane", "status", "set", "--pane", "9999", "x"]),
+        3
+    );
+    assert_eq!(mt.ctl_code(&["pane", "notify", "--pane", "1"]), 1);
+}
+
+#[test]
+fn status_text_is_sanitised_and_truncated_to_the_configured_length() {
+    let mt = Instance::start_with(Some("[ctl]\nstatus_max_len = 10\n"));
+    let pane = mt.spawn_sh("sleep 60", &[]);
+    mt.ctl(&[
+        "pane",
+        "status",
+        "set",
+        "--pane",
+        &pane,
+        "a\u{1b}[31mb\nc and a lot more",
+    ]);
+    assert_eq!(status_of(&mt, &pane)["text"], "a[31mb c…");
+}
+
+#[test]
+fn a_status_with_a_ttl_clears_itself() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("sleep 60", &[]);
+    mt.ctl(&[
+        "pane", "status", "set", "--pane", &pane, "--state", "waiting", "--ttl", "400ms", "ok?",
+    ]);
+    assert_eq!(status_of(&mt, &pane)["state"], "waiting");
+    mt.until("the ttl to expire", |mt| status_of(mt, &pane).is_null());
+}
+
+#[test]
+fn a_status_clears_when_the_process_exits() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("sleep 0.6", &["--title", "short"]);
+    mt.ctl(&["pane", "status", "set", "--pane", &pane, "going"]);
+    mt.until("the pane to go away", |mt| {
+        mt.ctl_code(&["pane", "get", "--pane", &pane]) == 3
+    });
+}
+
+#[test]
+fn notify_succeeds_reports_drops_and_is_rate_limited_per_pane() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("sleep 60", &[]);
+    let out = mt.json(&[
+        "pane",
+        "notify",
+        "--pane",
+        &pane,
+        "--level",
+        "attention",
+        "done",
+    ]);
+    assert_eq!(out["panes"][0].to_string(), pane);
+    assert!(out.get("dropped").is_none(), "{out}");
+    // A burst over one connection lands inside a single second: five pass, three are dropped.
+    let mut s = UnixStream::connect(&mt.socket).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let pane_id: u64 = pane.parse().unwrap();
+    let mut dropped = 0;
+    // One notification went out above, so wait for a fresh window before measuring.
+    std::thread::sleep(Duration::from_millis(1100));
+    for i in 0..8 {
+        let req = serde_json::json!({"v":1,"id":i+1,"method":"pane.notify",
+            "params":{"pane":pane_id,"message":"burst"}});
+        writeln!(s, "{req}").unwrap();
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        dropped += v["result"]["dropped"].as_u64().unwrap_or(0);
+    }
+    assert_eq!(dropped, 3);
+}
+
+fn read_json_line(r: &mut impl BufRead) -> Value {
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad line {line:?}: {e}"))
+}
+
+#[test]
+fn events_stream_filtered_json_lines_in_order() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("sleep 60", &[]);
+    let other = mt.spawn_sh("sleep 60", &["--title", "other"]);
+    let mut c = Process::new(assert_cmd::cargo::cargo_bin("microterm"));
+    c.args([
+        "ctl",
+        "events",
+        "--type",
+        "pane.status_changed,pane.notification",
+        "--match",
+        &format!("id:{pane}"),
+    ])
+    .envs(Instance::env(&mt.home))
+    .env_remove("MICROTERM_UNIX_SOCKET")
+    .stdout(Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    // Give the subscription time to register, then script a session.
+    std::thread::sleep(Duration::from_millis(700));
+    mt.ctl(&["pane", "status", "set", "--pane", &other, "ignored"]);
+    mt.ctl(&[
+        "pane", "status", "set", "--pane", &pane, "--state", "working", "go",
+    ]);
+    mt.ctl(&[
+        "pane", "notify", "--pane", &pane, "--level", "error", "--title", "t", "boom",
+    ]);
+    mt.ctl(&["pane", "status", "clear", "--pane", &pane]);
+    let a = read_json_line(&mut out);
+    let b = read_json_line(&mut out);
+    let c3 = read_json_line(&mut out);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(a["type"], "pane.status_changed");
+    assert_eq!(a["pane"].to_string(), pane);
+    assert_eq!(b["type"], "pane.notification");
+    assert_eq!(
+        (b["level"].as_str(), b["message"].as_str()),
+        (Some("error"), Some("boom"))
+    );
+    assert_eq!(b["title"], "t");
+    assert_eq!(c3["type"], "pane.status_changed");
+    assert!(a["ts"].as_str().unwrap().ends_with('Z'));
+}
+
+#[test]
+fn events_snapshot_comes_first_and_exit_is_2_when_the_gui_quits() {
+    let mut mt = Instance::start();
+    let _pane = mt.spawn_sh("sleep 60", &[]);
+    let mut c = Process::new(assert_cmd::cargo::cargo_bin("microterm"));
+    c.args(["ctl", "events", "--snapshot", "--type", "tab.*"])
+        .envs(Instance::env(&mt.home))
+        .env_remove("MICROTERM_UNIX_SOCKET")
+        .stdout(Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let first = read_json_line(&mut out);
+    assert_eq!(first["type"], "snapshot");
+    assert!(first["tree"]["workspaces"].is_array(), "{first}");
+    let _ = mt.child.kill();
+    let _ = mt.child.wait();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(Instant::now() < deadline, "events did not exit");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn events_reject_a_bad_selector_and_command_events_use_dotted_names() {
+    let mt = Instance::start();
+    assert_eq!(mt.ctl_code(&["events", "--match", "bogus:1"]), 1);
+    let mut c = Process::new(assert_cmd::cargo::cargo_bin("microterm"));
+    c.args([
+        "ctl",
+        "events",
+        "--type",
+        "pane.command_finished,pane.exited",
+    ])
+    .envs(Instance::env(&mt.home))
+    .env_remove("MICROTERM_UNIX_SOCKET")
+    .stdout(Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    std::thread::sleep(Duration::from_millis(700));
+    let pane = mt.marked_shell();
+    mt.ctl(&["pane", "run", "--in", &pane, "--", "(exit 7)"]);
+    let ev = read_json_line(&mut out);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(ev["type"], "pane.command_finished");
+    assert_eq!(ev["exit_code"], 7);
 }

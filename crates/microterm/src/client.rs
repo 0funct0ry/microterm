@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mt_proto::{ErrorCode, Event, Incoming, Request, RpcError};
+use mt_proto::{ErrorCode, Event, Incoming, Request, RpcError, SubscribeParams};
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -129,8 +129,13 @@ impl Client {
     }
 
     /// Turns this connection into an event stream.
-    pub fn subscribe(mut self) -> Result<Events, ClientError> {
-        self.call(&Request::Subscribe)?;
+    pub fn subscribe(self) -> Result<Events, ClientError> {
+        self.subscribe_with(SubscribeParams::default())
+    }
+
+    /// [`Client::subscribe`] with event-type / selector filters and an optional snapshot.
+    pub fn subscribe_with(mut self, params: SubscribeParams) -> Result<Events, ClientError> {
+        self.call(&Request::Subscribe(params))?;
         Ok(Events {
             client: self,
             pending: String::new(),

@@ -66,6 +66,8 @@ action = "Disable"          # unbind a default
 | `scrollbar.mode`, `bell.mode`, `paste.confirm_multiline`, `clipboard.osc52`, `mouse.scroll_multiplier` | behaviour |
 | `[[keys]]` | keybindings |
 | `ctl.capture_max_bytes` | cap on the output `pane run` and `pane get-text` return (default 1048576; the tail is kept); read when a request arrives |
+| `ctl.status_max_len` | `pane status` and `pane notify` text is cut to this many characters (default 120); read when a request arrives |
+| `notifications.badge`, `toast`, `desktop` | how `pane notify` surfaces: tab badge, toast (`background`, `always`, `never`) and OS notification (`unfocused`, `always`, `never`); see [Notifications & status](/docs/notifications-and-status/) |
 
 Every other key in the schema is accepted and validated now, and starts working in the release
 that implements its feature.

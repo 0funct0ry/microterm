@@ -12,17 +12,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use mt_proto::{
-    exit, CallerEnv, CommandText, ErrorCode, Event, GetTextParams, MuxSnapshot, PaneInfo,
-    RecordStartParams, ReplayParams, Request, Resource, RunParams, RunResult, Selector,
-    SendTextParams, SpawnParams, Spawned, TabFocusParams, TabInfo, TabRenameParams, Target, Text,
-    WaitParams, WindowInfo, WorkspaceInfo,
+    exit, CallerEnv, CommandText, ErrorCode, Event, GetTextParams, MuxSnapshot, NotifyParams,
+    PaneInfo, RecordStartParams, ReplayParams, Request, Resource, RunParams, RunResult, Selector,
+    SendTextParams, SpawnParams, Spawned, StatusResult, StatusSetParams, SubscribeParams,
+    TabFocusParams, TabInfo, TabRenameParams, Target, Text, WaitParams, WindowInfo, WorkspaceInfo,
 };
 use serde_json::{json, Value};
 
 use crate::cli::RecordArgs;
 use crate::client::{Client, ClientError};
 use crate::ctl::{
-    CtlAction, CtlArgs, PaneCmd, PaneTarget, TabCmd, TabTarget, WindowCmd, WindowTarget,
+    CtlAction, CtlArgs, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget, WindowCmd, WindowTarget,
     WorkspaceCmd,
 };
 
@@ -395,13 +395,16 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                                 p.window.to_string(),
                                 p.domain,
                                 p.process.unwrap_or_default(),
+                                p.status
+                                    .map_or_else(|| "-".into(), |s| s.state.as_str().to_string()),
                                 p.title,
                             ]
                         })
                         .collect();
                     print_table(
                         &[
-                            "FOCUSED", "ID", "TAB", "WINDOW", "DOMAIN", "PROCESS", "TITLE",
+                            "FOCUSED", "ID", "TAB", "WINDOW", "DOMAIN", "PROCESS", "STATUS",
+                            "TITLE",
                         ],
                         rows,
                     );
@@ -424,6 +427,9 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     println!("size\t{}x{}", p.size.cols, p.size.rows);
                     println!("focused\t{}", p.focused);
                     println!("exited\t{}", p.exited);
+                    if let Some(st) = p.status {
+                        println!("status\t{}", status_line(&st));
+                    }
                 }
             }
             PaneCmd::SendText {
@@ -562,6 +568,75 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     print_json(&v);
                 }
             }
+            PaneCmd::Notify {
+                target,
+                title,
+                level,
+                desktop,
+                all,
+                message,
+            } => {
+                let message = message.unwrap_or_default();
+                if message.trim().is_empty() && title.as_deref().unwrap_or("").trim().is_empty() {
+                    return Err(fail(
+                        exit::USAGE,
+                        "nothing to say: give a MESSAGE or --title",
+                    ));
+                }
+                let v = call(Request::PaneNotify(NotifyParams {
+                    target: Target {
+                        all,
+                        ..pane_target(target, env)
+                    },
+                    title,
+                    level,
+                    desktop,
+                    message,
+                }))?;
+                let dropped = v["dropped"].as_u64().unwrap_or(0);
+                if json {
+                    print_json(&v);
+                } else if dropped > 0 {
+                    eprintln!("microterm: {dropped} notification(s) dropped (rate limit)");
+                }
+            }
+            PaneCmd::Status(cmd) => match cmd {
+                StatusCmd::Set {
+                    target,
+                    state,
+                    progress,
+                    ttl,
+                    all,
+                    text,
+                } => quiet(call(Request::PaneStatusSet(StatusSetParams {
+                    target: Target {
+                        all,
+                        ..pane_target(target, env)
+                    },
+                    state,
+                    text,
+                    progress,
+                    ttl_ms: ttl,
+                }))?),
+                StatusCmd::Clear { target, all } => {
+                    quiet(call(Request::PaneStatusClear(Target {
+                        all,
+                        ..pane_target(target, env)
+                    }))?)
+                }
+                StatusCmd::Get(t) => {
+                    let v = call(Request::PaneStatusGet(pane_target(t, env)))?;
+                    if json {
+                        print_json(&v);
+                    } else {
+                        let r: StatusResult = decode(v)?;
+                        match r.status {
+                            Some(st) => println!("{}", status_line(&st)),
+                            None => println!("idle"),
+                        }
+                    }
+                }
+            },
             PaneCmd::Close { target, force, all } => {
                 let t = Target {
                     force,
@@ -571,6 +646,17 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                 quiet(call(Request::PaneClose(t))?);
             }
         },
+        CtlAction::Events {
+            types,
+            expr,
+            snapshot,
+        } => {
+            return events(SubscribeParams {
+                types,
+                expr,
+                snapshot,
+            })
+        }
         CtlAction::Record {
             pane,
             output,
@@ -639,6 +725,47 @@ fn catch_sigint() {
     #[allow(unsafe_code)]
     unsafe {
         libc::signal(libc::SIGINT, on_sigint as libc::sighandler_t);
+    }
+}
+
+/// `state [progress%] [text]`, the plain form of a pane status.
+fn status_line(st: &mt_proto::PaneStatus) -> String {
+    let mut line = st.state.as_str().to_string();
+    if let Some(p) = st.progress {
+        line.push_str(&format!(" {p}%"));
+    }
+    if !st.text.is_empty() {
+        line.push(' ');
+        line.push_str(&st.text);
+    }
+    line
+}
+
+/// `ctl events`: prints one JSON line per event until interrupted. Exits 2 when the GUI quits.
+fn events(params: SubscribeParams) -> Result<(), i32> {
+    let mut events = Client::connect()
+        .and_then(|c| c.subscribe_with(params))
+        .map_err(client_err)?;
+    catch_sigint();
+    let stdout = std::io::stdout();
+    loop {
+        if INTERRUPTED.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match events.next_event() {
+            Ok(Some(ev)) => {
+                let line = ev.stream_json(mt_term::now_ms());
+                let mut out = stdout.lock();
+                // A closed pipe (`| head -1`) ends the stream quietly.
+                if writeln!(out, "{line}").and_then(|()| out.flush()).is_err() {
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+            // The server hung up: the GUI quit.
+            Err(ClientError::Io(_)) => return Err(exit::NO_INSTANCE),
+            Err(e) => return Err(client_err(e)),
+        }
     }
 }
 

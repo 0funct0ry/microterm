@@ -1179,3 +1179,55 @@ fn switching_tabs_ends_copy_mode_and_refreshes_search(cx: &mut TestAppContext) {
         "matches were recomputed for the new tab"
     );
 }
+
+fn pane_of(view: &Entity<AppWindow>, cx: &mut VisualTestContext, tab: usize) -> u64 {
+    view.read_with(cx, |t, _| t.tabs[tab].pane)
+}
+
+#[gpui::test]
+fn focusing_a_tab_clears_its_attention_badge(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    cx.run_until_parked();
+    let (background, shown) = (pane_of(&view, cx, 0), pane_of(&view, cx, 1));
+    cx.update(|_, cx| {
+        let mux = &mut crate::mux_host::host(cx).mux;
+        mux.raise_attention(background, mt_proto::NotifyLevel::Attention);
+        mux.raise_attention(shown, mt_proto::NotifyLevel::Error);
+    });
+    // Clicking (activating) the badged tab clears that badge only.
+    view.update_in(cx, |t, _, cx| t.activate_tab(0, cx));
+    cx.update(|_, cx| {
+        assert_eq!(crate::mux_host::tab_chrome(cx, background).badge, None);
+        assert!(crate::mux_host::tab_chrome(cx, shown).badge.is_some());
+    });
+    view.update_in(cx, |t, _, cx| t.activate_tab(1, cx));
+    cx.update(|_, cx| assert_eq!(crate::mux_host::tab_chrome(cx, shown).badge, None));
+}
+
+#[gpui::test]
+fn the_tab_palette_shows_each_tabs_status(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SpawnTab);
+    cx.run_until_parked();
+    let pane = pane_of(&view, cx, 0);
+    cx.update(|_, cx| {
+        crate::mux_host::host(cx).mux.set_pane_status(
+            pane,
+            mt_proto::StatusState::Waiting,
+            "approve?",
+            None,
+            None,
+            120,
+            0,
+        );
+    });
+    let entries = view.update(cx, |t, cx| t.palette_entries(cx));
+    let tab = entries
+        .iter()
+        .find(|(l, _)| l.starts_with("Go to tab:"))
+        .map(|(_, e)| e.clone())
+        .expect("a tab entry");
+    assert_eq!(tab.detail.as_deref(), Some("tab 1 · waiting: approve?"));
+    assert_eq!(tab.status, Some(crate::components::StatusKind::Warning));
+}

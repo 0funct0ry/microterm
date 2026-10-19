@@ -13,8 +13,8 @@ microterm ctl list
 microterm ctl workspace list | create NAME | switch NAME | rename OLD NEW | delete NAME [--force]
 microterm ctl window    list | new | focus | close
 microterm ctl tab       list | new | focus | rename | close
-microterm ctl pane      list | get | send-text | get-text | run | wait | close
-microterm ctl record | replay | reload-config
+microterm ctl pane      list | get | send-text | get-text | run | wait | notify | status | close
+microterm ctl events | record | replay | reload-config
 ```
 
 Every resource has the same verbs where they make sense: `list`, `get`, `new`, `focus`, `rename`
@@ -93,6 +93,9 @@ microterm ctl pane get-text [--pane ID | --match EXPR] [--start-line N] [--end-l
 microterm ctl pane run [--in TARGET] [--keep] [--detach] [--timeout DUR] [--propagate-exit] -- CMD…
 microterm ctl pane wait [TARGET] [--match REGEX] [--idle DUR] [--exit] [--command-finished]
                         [--timeout DUR] [--new-only]
+microterm ctl pane notify [TARGET] [--title T] [--level info|attention|error] [--desktop] [MESSAGE]
+microterm ctl pane status set [TARGET] [--state S] [--progress N] [--ttl DUR] [TEXT]
+microterm ctl pane status clear|get [TARGET]
 microterm ctl pane close [--pane ID | --match EXPR] [--force] [--all]
 ```
 
@@ -101,8 +104,11 @@ microterm ctl pane close [--pane ID | --match EXPR] [--force] [--all]
 ```json
 {"id":12,"tab":4,"window":2,"workspace":"api","domain":"local","title":"cargo watch",
  "cwd":"/Users/me/src/api","process":"cargo","size":{"cols":120,"rows":34},
- "focused":false,"exited":false,"exit_code":null}
+ "focused":false,"exited":false,"exit_code":null,
+ "status":{"state":"working","text":"running tests","progress":40,"updated_at":"2026-10-18T09:14:03.000Z"}}
 ```
+
+`status` is `null` until something sets one.
 
 `process` is the foreground process when it is not the shell (`null` at an idle prompt, and
 always `null` in SSH panes). A pane is removed from the mux when its process exits, so `exited`
@@ -130,6 +136,9 @@ microterm ctl pane get-text --match 'title:build*' --escapes > styled.txt
 exit or a finished command. They are described in [Run & wait](/docs/run-and-wait/), and the
 shell setup they need for `--in`, `--command-finished` and `--last-command` in
 [Shell integration](/docs/shell-integration/).
+
+`notify`, `status` and the top-level `events` command are described in
+[Notifications & status](/docs/notifications-and-status/).
 
 ```sh
 microterm ctl pane run --detach --title dev -- npm run dev

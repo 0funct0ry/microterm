@@ -6,6 +6,7 @@
 pub mod ctl;
 mod domain;
 mod model;
+pub mod status;
 mod title;
 pub mod wait;
 
@@ -15,4 +16,5 @@ pub use domain::{
 pub use model::{
     Axis, Error, Id, Mux, MuxEvent, Pane, PaneTree, Tab, Window, Workspace, DEFAULT_WORKSPACE,
 };
+pub use status::{sanitize, NotifyLimiter, Status, NOTIFY_BURST};
 pub use title::{format_title, should_confirm_close, ConfirmClose, TitleParts};

@@ -32,6 +32,7 @@ pub struct Config {
     pub copy_mode: CopyMode,
     pub gpu: Gpu,
     pub ctl: Ctl,
+    pub notifications: Notifications,
     pub hyperlink_rules: Vec<HyperlinkRule>,
     pub keys: Vec<KeyEntry>,
     pub launch: Vec<LaunchProfile>,
@@ -66,6 +67,7 @@ impl Default for Config {
             copy_mode: CopyMode::default(),
             gpu: Gpu::default(),
             ctl: Ctl::default(),
+            notifications: Notifications::default(),
             hyperlink_rules: Vec::new(),
             keys: Vec::new(),
             launch: Vec::new(),
@@ -542,12 +544,55 @@ impl Default for Gpu {
 pub struct Ctl {
     /// Cap on the output `pane run` and `pane get-text` return; the tail is kept.
     pub capture_max_bytes: u64,
+    /// `pane status` text is truncated to this many characters.
+    pub status_max_len: u32,
 }
 
 impl Default for Ctl {
     fn default() -> Self {
         Self {
             capture_max_bytes: 1_048_576,
+            status_max_len: 120,
+        }
+    }
+}
+
+/// When a `pane notify` raises a toast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToastMode {
+    /// Only when the pane is not the visible one.
+    Background,
+    Always,
+    Never,
+}
+
+/// When a `pane notify` raises an OS notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DesktopMode {
+    /// Only while no microterm window is focused.
+    Unfocused,
+    Always,
+    Never,
+}
+
+/// `[notifications]`: how `microterm ctl pane notify` surfaces (SPEC §8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Notifications {
+    /// Attention badge on the pane's tab until it is focused.
+    pub badge: bool,
+    pub toast: ToastMode,
+    pub desktop: DesktopMode,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            badge: true,
+            toast: ToastMode::Background,
+            desktop: DesktopMode::Unfocused,
         }
     }
 }

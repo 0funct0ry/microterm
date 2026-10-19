@@ -6,8 +6,8 @@
 
 use mt_proto::selector::{Key, Resource, Selector};
 use mt_proto::{
-    MuxSnapshot, PaneInfo, RpcError, Size, TabInfo, TabNode, Target, WindowInfo, WindowNode,
-    WorkspaceInfo, WorkspaceNode,
+    MuxSnapshot, PaneInfo, PaneStatus, RpcError, Size, TabInfo, TabNode, Target, WindowInfo,
+    WindowNode, WorkspaceInfo, WorkspaceNode,
 };
 
 use crate::domain::DomainKind;
@@ -34,8 +34,6 @@ pub struct Live {
     pub size: (u16, u16),
     pub exited: bool,
     pub exit_code: Option<i32>,
-    /// Pane status state (`idle`, `working`, …); arrives with M10.3.
-    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +51,7 @@ pub struct PaneRow {
     pub active: bool,
     pub exited: bool,
     pub exit_code: Option<i32>,
-    pub status: Option<String>,
+    pub status: Option<PaneStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,7 +192,7 @@ impl Mux {
                         active,
                         exited: l.exited,
                         exit_code: l.exit_code,
-                        status: l.status,
+                        status: p.status.as_ref().map(|s| s.to_wire()),
                     });
                 }
             }
@@ -223,6 +221,7 @@ impl PaneRow {
             focused: self.focused,
             exited: self.exited,
             exit_code: self.exit_code,
+            status: self.status.clone(),
         }
     }
 }
@@ -366,7 +365,12 @@ impl Row for PaneRow {
             Key::Tab => Some(self.tab.to_string()),
             Key::Focused => Some(self.focused.to_string()),
             Key::Active => Some(self.active.to_string()),
-            Key::Status => self.status.clone(),
+            Key::Status => Some(
+                self.status
+                    .as_ref()
+                    .map_or("idle", |s| s.state.as_str())
+                    .to_string(),
+            ),
             Key::Exited => Some(self.exited.to_string()),
         }
     }
@@ -609,7 +613,12 @@ mod tests {
             active: id != 2,
             exited: id == 5,
             exit_code: None,
-            status: (id == 2).then(|| "working".into()),
+            status: (id == 2).then(|| PaneStatus {
+                state: mt_proto::StatusState::Working,
+                text: "running tests".into(),
+                progress: Some(40),
+                updated_at: "2026-10-18T09:14:03.000Z".into(),
+            }),
         }
     }
 
@@ -645,6 +654,7 @@ mod tests {
         assert_eq!(ids("focused:true"), [1]);
         assert_eq!(ids("active:false"), [2]);
         assert_eq!(ids("status:working"), [2]);
+        assert_eq!(ids("status:idle"), [1, 3, 4, 5], "an unset status is idle");
         assert_eq!(ids("exited:true"), [5]);
     }
 

@@ -35,6 +35,9 @@ struct Host {
     env: Vec<(String, String)>,
     confirm_close: ConfirmClose,
     capture_max_bytes: usize,
+    status_max_len: usize,
+    /// `[notifications].badge`: raise the tab badge on `pane notify`.
+    badge: bool,
     runtime: PaneRuntime,
 }
 
@@ -88,6 +91,8 @@ pub fn run(config: Option<PathBuf>) -> i32 {
             .collect(),
         confirm_close: ipc_ops::policy_of(&cfg.confirm_close),
         capture_max_bytes: cfg.ctl.capture_max_bytes.min(usize::MAX as u64) as usize,
+        status_max_len: cfg.ctl.status_max_len as usize,
+        badge: cfg.notifications.badge,
         runtime: PaneRuntime::default(),
     };
     host.mux
@@ -107,6 +112,7 @@ pub fn run(config: Option<PathBuf>) -> i32 {
         }
         host.pump();
         host.poll_pending();
+        host.mux.expire_statuses(mt_term::now_ms());
         std::thread::sleep(Duration::from_millis(10));
     }
     drop(server);
@@ -443,7 +449,39 @@ impl Host {
                 })
             }
             // There is no config file watcher to poke without a GUI.
-            Request::ConfigReload | Request::Subscribe => ok(),
+            Request::ConfigReload | Request::Subscribe(_) => ok(),
+            Request::PaneStatusSet(p) => {
+                let rows = self.rows();
+                ipc_ops::status_set(
+                    &mut self.mux,
+                    &rows,
+                    &p,
+                    self.status_max_len,
+                    mt_term::now_ms(),
+                )
+            }
+            Request::PaneStatusClear(t) => {
+                let rows = self.rows();
+                ipc_ops::status_clear(&mut self.mux, &rows, &t)
+            }
+            Request::PaneStatusGet(t) => ipc_ops::status_get(&self.mux, &self.rows(), &t),
+            Request::PaneNotify(p) => {
+                let rows = self.rows();
+                let (result, delivered) = ipc_ops::notify(
+                    &mut self.mux,
+                    &rows,
+                    &p,
+                    self.status_max_len,
+                    mt_term::now_ms(),
+                )?;
+                // No window, so nothing is ever "in view": badge only; no toast or OS popup.
+                if self.badge {
+                    for d in delivered {
+                        self.mux.raise_attention(d.pane, d.level);
+                    }
+                }
+                Ok(result)
+            }
             Request::PaneRun(_) | Request::PaneWait(_) => Err(RpcError::internal(
                 "pane.run and pane.wait answer later; they go through dispatch()",
             )),

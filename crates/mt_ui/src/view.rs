@@ -402,6 +402,7 @@ impl AppWindow {
                     .tab_id(id)
                     .active(i == self.active_tab)
                     .dirty(tab.dirty)
+                    .chrome(crate::mux_host::tab_chrome(cx, tab.pane))
                     .editing(editing)
                     .draggable()
                     .on_drop_tab({

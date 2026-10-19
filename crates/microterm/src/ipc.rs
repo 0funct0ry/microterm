@@ -14,7 +14,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mt_proto::{Call, EventHub, Request, RpcError};
+use std::collections::HashMap;
+
+use mt_proto::{Call, Event, EventHub, Request, RpcError, Subject, SubscribeParams, Target};
 
 /// How long a request may wait for the mux thread.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -229,16 +231,19 @@ fn serve(
         }
         let reply = match mt_proto::decode_request(&line) {
             Err((id, e)) => mt_proto::encode_response(id, Err(e)),
-            Ok((id, Request::Subscribe)) => {
+            Ok((id, Request::Subscribe(params))) => {
+                if let Some(expr) = &params.expr {
+                    if let Err(e) = mt_proto::Selector::parse(expr) {
+                        out.write_all(mt_proto::encode_response(Some(id), Err(e)).as_bytes())?;
+                        continue;
+                    }
+                }
                 // Register before answering so no event after the answer can be missed.
                 let events = hub.subscribe();
                 out.write_all(
                     mt_proto::encode_response(Some(id), Ok(serde_json::json!({}))).as_bytes(),
                 )?;
-                for ev in events {
-                    out.write_all(mt_proto::encode_event(&ev).as_bytes())?;
-                }
-                return Ok(());
+                return stream_events(&mut out, calls, events, &params);
             }
             Ok((id, request)) => {
                 let long = request.is_long_running();
@@ -260,6 +265,63 @@ fn serve(
         };
         out.write_all(reply.as_bytes())?;
     }
+}
+
+/// Writes the events of a `subscribe` connection, applying its filters (SPEC §12.2/§12.4):
+/// the type filter, then the `--match` selector against the pane/tab/window the event
+/// concerns. Events about nothing in particular (workspaces, domains) never match a selector.
+fn stream_events(
+    out: &mut UnixStream,
+    calls: &async_channel::Sender<Call>,
+    events: mpsc::Receiver<Event>,
+    params: &SubscribeParams,
+) -> io::Result<()> {
+    if params.snapshot {
+        let tree = ask(calls, Request::MuxList).unwrap_or(serde_json::Value::Null);
+        out.write_all(mt_proto::encode_event(&Event::Snapshot { tree }).as_bytes())?;
+    }
+    // Last known answer per subject: a removed pane can no longer be asked about.
+    let mut known: HashMap<(char, u64), bool> = HashMap::new();
+    for ev in events {
+        if !params.wants(ev.type_name()) {
+            continue;
+        }
+        if let Some(expr) = &params.expr {
+            let (kind, id) = match ev.subject() {
+                Subject::Pane(id) => ('p', id),
+                Subject::Tab(id) => ('t', id),
+                Subject::Window(id) => ('w', id),
+                Subject::None => continue,
+            };
+            let hit = if ev.is_removal() {
+                known.get(&(kind, id)).copied().unwrap_or(false)
+            } else {
+                let t = Target::matching(expr.clone());
+                let req = match kind {
+                    'p' => Request::PaneList(t),
+                    't' => Request::TabList(t),
+                    _ => Request::WindowList(t),
+                };
+                let hit = ask(calls, req)
+                    .and_then(|v| v.as_array().cloned())
+                    .is_some_and(|a| a.iter().any(|i| i["id"].as_u64() == Some(id)));
+                known.insert((kind, id), hit);
+                hit
+            };
+            if !hit {
+                continue;
+            }
+        }
+        out.write_all(mt_proto::encode_event(&ev).as_bytes())?;
+    }
+    Ok(())
+}
+
+/// One request to the mux thread, `None` when it failed or timed out.
+fn ask(calls: &async_channel::Sender<Call>, request: Request) -> Option<serde_json::Value> {
+    let (tx, rx) = mpsc::channel();
+    calls.send_blocking(Call::new(request, tx)).ok()?;
+    rx.recv_timeout(REPLY_TIMEOUT).ok()?.ok()
 }
 
 #[cfg(test)]
@@ -355,6 +417,53 @@ mod tests {
             events.next_event().unwrap(),
             Some(Event::PaneRemoved { pane: 3 })
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn subscribe_filters_by_type_and_starts_with_a_snapshot() {
+        let dir = temp("subf");
+        let (guard, hub) = echo_server(&dir);
+        let c = Client::connect_to(guard.path()).unwrap();
+        let mut events = c
+            .subscribe_with(SubscribeParams {
+                types: vec!["pane.removed".into(), "workspace.*".into()],
+                expr: None,
+                snapshot: true,
+            })
+            .unwrap();
+        hub.publish(Event::PaneAdded { pane: 3 });
+        hub.publish(Event::PaneOutput { pane: 3 });
+        hub.publish(Event::WorkspaceAdded { workspace: 9 });
+        hub.publish(Event::PaneRemoved { pane: 3 });
+        assert!(matches!(
+            events.next_event().unwrap(),
+            Some(Event::Snapshot { .. })
+        ));
+        assert_eq!(
+            events.next_event().unwrap(),
+            Some(Event::WorkspaceAdded { workspace: 9 })
+        );
+        assert_eq!(
+            events.next_event().unwrap(),
+            Some(Event::PaneRemoved { pane: 3 })
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn subscribe_rejects_a_bad_selector() {
+        let dir = temp("subbad");
+        let (guard, _hub) = echo_server(&dir);
+        let c = Client::connect_to(guard.path()).unwrap();
+        let err = c
+            .subscribe_with(SubscribeParams {
+                expr: Some("nonsense:x".into()),
+                ..Default::default()
+            })
+            .err()
+            .expect("an error");
+        assert!(matches!(err, crate::client::ClientError::Rpc(_)), "{err:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

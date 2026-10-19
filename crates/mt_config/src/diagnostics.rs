@@ -253,7 +253,14 @@ const ROOT: &[(&str, K)] = &[
         ]),
     ),
     ("gpu", K::Table(&[("prefer", K::Leaf)])),
-    ("ctl", K::Table(&[("capture_max_bytes", K::Leaf)])),
+    (
+        "ctl",
+        K::Table(&[("capture_max_bytes", K::Leaf), ("status_max_len", K::Leaf)]),
+    ),
+    (
+        "notifications",
+        K::Table(&[("badge", K::Leaf), ("toast", K::Leaf), ("desktop", K::Leaf)]),
+    ),
 ];
 
 fn suggest<'a>(unknown: &str, known: &'a [(&'static str, K)]) -> Option<&'a str> {
@@ -463,6 +470,12 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
         err(
             &["ctl", "capture_max_bytes"],
             "ctl.capture_max_bytes must be greater than 0".into(),
+        );
+    }
+    if c.ctl.status_max_len == 0 {
+        err(
+            &["ctl", "status_max_len"],
+            "ctl.status_max_len must be greater than 0".into(),
         );
     }
     if c.text.min_contrast < 1.0 {

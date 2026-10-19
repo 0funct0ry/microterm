@@ -321,6 +321,143 @@ pub struct WaitParams {
     pub new_only: bool,
 }
 
+/// Pane status state (SPEC §12.4). `idle` shows no dot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusState {
+    Idle,
+    #[default]
+    Working,
+    Waiting,
+    Done,
+    Error,
+}
+
+impl StatusState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StatusState::Idle => "idle",
+            StatusState::Working => "working",
+            StatusState::Waiting => "waiting",
+            StatusState::Done => "done",
+            StatusState::Error => "error",
+        }
+    }
+}
+
+impl std::str::FromStr for StatusState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "idle" => StatusState::Idle,
+            "working" => StatusState::Working,
+            "waiting" => StatusState::Waiting,
+            "done" => StatusState::Done,
+            "error" => StatusState::Error,
+            other => {
+                return Err(format!(
+                    "unknown state {other:?} (idle, working, waiting, done, error)"
+                ))
+            }
+        })
+    }
+}
+
+/// `pane notify --level` (SPEC §12.4); the badge colour follows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyLevel {
+    #[default]
+    Info,
+    Attention,
+    Error,
+}
+
+impl NotifyLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotifyLevel::Info => "info",
+            NotifyLevel::Attention => "attention",
+            NotifyLevel::Error => "error",
+        }
+    }
+}
+
+impl std::str::FromStr for NotifyLevel {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "info" => NotifyLevel::Info,
+            "attention" => NotifyLevel::Attention,
+            "error" => NotifyLevel::Error,
+            other => return Err(format!("unknown level {other:?} (info, attention, error)")),
+        })
+    }
+}
+
+/// `pane.status_set` (SPEC §12.4). Without `state` the call means `working`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusSetParams {
+    #[serde(flatten)]
+    pub target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StatusState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// 0–100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    /// The status clears itself after this long.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+}
+
+/// `pane.notify` (SPEC §12.4).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotifyParams {
+    #[serde(flatten)]
+    pub target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub level: NotifyLevel,
+    /// Force an OS notification regardless of `[notifications].desktop`.
+    #[serde(default)]
+    pub desktop: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// `pane.subscribe` filters: event types (`pane.exited`, `workspace.*`), a selector over the
+/// pane/tab/window the event concerns, and an initial snapshot of the tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscribeParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
+    #[serde(default)]
+    pub snapshot: bool,
+}
+
+impl SubscribeParams {
+    /// Whether `name` (a dotted event type) passes the `types` filter.
+    ///
+    /// With no filter every event passes except `pane.output`, which is too noisy to stream by
+    /// default (SPEC §12.4); ask for it by name.
+    pub fn wants(&self, name: &str) -> bool {
+        if self.types.is_empty() {
+            return name != "pane.output";
+        }
+        self.types.iter().any(|t| match t.strip_suffix(".*") {
+            Some(prefix) => name
+                .strip_prefix(prefix)
+                .is_some_and(|r| r.starts_with('.')),
+            None => t == name,
+        })
+    }
+}
+
 /// Default `pane wait` timeout.
 pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 60_000;
 
@@ -400,6 +537,10 @@ pub enum Request {
     PaneGetText(GetTextParams),
     PaneRun(RunParams),
     PaneWait(WaitParams),
+    PaneNotify(NotifyParams),
+    PaneStatusSet(StatusSetParams),
+    PaneStatusClear(Target),
+    PaneStatusGet(Target),
     PaneClose(Target),
     RecordStart(RecordStartParams),
     RecordStop {
@@ -407,7 +548,7 @@ pub enum Request {
     },
     ReplayStart(ReplayParams),
     ConfigReload,
-    Subscribe,
+    Subscribe(SubscribeParams),
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -433,6 +574,10 @@ pub const METHODS: &[&str] = &[
     "pane.get_text",
     "pane.run",
     "pane.wait",
+    "pane.notify",
+    "pane.status_set",
+    "pane.status_clear",
+    "pane.status_get",
     "pane.close",
     "record.start",
     "record.stop",
@@ -465,12 +610,16 @@ impl Request {
             Request::PaneGetText(_) => "pane.get_text",
             Request::PaneRun(_) => "pane.run",
             Request::PaneWait(_) => "pane.wait",
+            Request::PaneNotify(_) => "pane.notify",
+            Request::PaneStatusSet(_) => "pane.status_set",
+            Request::PaneStatusClear(_) => "pane.status_clear",
+            Request::PaneStatusGet(_) => "pane.status_get",
             Request::PaneClose(_) => "pane.close",
             Request::RecordStart(_) => "record.start",
             Request::RecordStop { .. } => "record.stop",
             Request::ReplayStart(_) => "replay.start",
             Request::ConfigReload => "config.reload",
-            Request::Subscribe => "subscribe",
+            Request::Subscribe(_) => "subscribe",
         }
     }
 
@@ -484,10 +633,8 @@ impl Request {
     pub fn params(&self) -> Value {
         let to = |v: &dyn erased::Ser| v.to_value();
         match self {
-            Request::MuxList
-            | Request::WorkspaceList
-            | Request::ConfigReload
-            | Request::Subscribe => json!({}),
+            Request::MuxList | Request::WorkspaceList | Request::ConfigReload => json!({}),
+            Request::Subscribe(p) => to(p),
             Request::WorkspaceCreate { name } | Request::WorkspaceSwitch { name } => {
                 json!({ "name": name })
             }
@@ -500,6 +647,8 @@ impl Request {
             | Request::TabClose(t)
             | Request::PaneList(t)
             | Request::PaneGet(t)
+            | Request::PaneStatusClear(t)
+            | Request::PaneStatusGet(t)
             | Request::PaneClose(t) => to(t),
             Request::WindowNew(p) | Request::TabNew(p) => to(p),
             Request::TabFocus(p) => to(p),
@@ -508,6 +657,8 @@ impl Request {
             Request::PaneGetText(p) => to(p),
             Request::PaneRun(p) => to(p),
             Request::PaneWait(p) => to(p),
+            Request::PaneNotify(p) => to(p),
+            Request::PaneStatusSet(p) => to(p),
             Request::RecordStop { pane } => json!({ "pane": pane }),
             Request::RecordStart(p) => to(p),
             Request::ReplayStart(p) => to(p),
@@ -577,6 +728,10 @@ impl Request {
             "pane.get_text" => Request::PaneGetText(p(method, params)?),
             "pane.run" => Request::PaneRun(p(method, params)?),
             "pane.wait" => Request::PaneWait(p(method, params)?),
+            "pane.notify" => Request::PaneNotify(p(method, params)?),
+            "pane.status_set" => Request::PaneStatusSet(p(method, params)?),
+            "pane.status_clear" => Request::PaneStatusClear(p(method, params)?),
+            "pane.status_get" => Request::PaneStatusGet(p(method, params)?),
             "pane.close" => Request::PaneClose(p(method, params)?),
             "record.start" => Request::RecordStart(p(method, params)?),
             "record.stop" => Request::RecordStop {
@@ -584,7 +739,7 @@ impl Request {
             },
             "replay.start" => Request::ReplayStart(p(method, params)?),
             "config.reload" => Request::ConfigReload,
-            "subscribe" => Request::Subscribe,
+            "subscribe" => Request::Subscribe(p(method, params)?),
             other => return Err(RpcError::bad_request(format!("unknown method {other:?}"))),
         })
     }
@@ -627,6 +782,38 @@ pub struct PaneInfo {
     pub focused: bool,
     pub exited: bool,
     pub exit_code: Option<i32>,
+    /// `null` until something sets a status (`pane status set`).
+    #[serde(default)]
+    pub status: Option<PaneStatus>,
+}
+
+/// A pane's status as reported by `pane list|get` and `pane status get` (SPEC §12.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneStatus {
+    pub state: StatusState,
+    pub text: String,
+    pub progress: Option<u8>,
+    pub updated_at: String,
+}
+
+/// `pane status get`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusResult {
+    pub pane: u64,
+    pub status: Option<PaneStatus>,
+}
+
+/// Result of the acting verbs `pane status set|clear` and `pane notify`: the panes affected;
+/// `dropped` counts notifications swallowed by the per-pane rate limit.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActResult {
+    pub panes: Vec<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dropped: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `tab list`.
@@ -808,6 +995,21 @@ pub enum Event {
     TitleChanged {
         pane: u64,
     },
+    CwdChanged {
+        pane: u64,
+    },
+    /// `pane status set|clear` or a TTL expiry changed the pane's status.
+    StatusChanged {
+        pane: u64,
+    },
+    /// `pane notify` (after the rate limit).
+    Notification {
+        pane: u64,
+        level: NotifyLevel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        message: String,
+    },
     /// The pane's process ended (`None` when killed by a signal).
     PaneExited {
         pane: u64,
@@ -838,6 +1040,12 @@ pub enum Event {
     WindowRemoved {
         window: u64,
     },
+    WorkspaceAdded {
+        workspace: u64,
+    },
+    WorkspaceRenamed {
+        workspace: u64,
+    },
     WorkspaceSwitched {
         from: u64,
         to: u64,
@@ -855,6 +1063,93 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// First line of a `subscribe` with `snapshot`: the whole tree (the `mux.list` result).
+    Snapshot {
+        tree: Value,
+    },
+}
+
+/// What an event concerns, for `ctl events --match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Subject {
+    Pane(u64),
+    Tab(u64),
+    Window(u64),
+    None,
+}
+
+impl Event {
+    /// The dotted name used by `ctl events --type` (SPEC §12.4).
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Event::PaneAdded { .. } => "pane.added",
+            Event::PaneRemoved { .. } => "pane.removed",
+            Event::PaneOutput { .. } => "pane.output",
+            Event::TitleChanged { .. } => "pane.title_changed",
+            Event::CwdChanged { .. } => "pane.cwd_changed",
+            Event::StatusChanged { .. } => "pane.status_changed",
+            Event::Notification { .. } => "pane.notification",
+            Event::PaneExited { .. } => "pane.exited",
+            Event::CommandFinished { .. } => "pane.command_finished",
+            Event::TabAdded { .. } => "tab.added",
+            Event::TabRemoved { .. } => "tab.removed",
+            Event::TabMoved { .. } => "tab.moved",
+            Event::WindowAdded { .. } => "window.added",
+            Event::WindowRemoved { .. } => "window.removed",
+            Event::WorkspaceAdded { .. } => "workspace.added",
+            Event::WorkspaceRenamed { .. } => "workspace.renamed",
+            Event::WorkspaceSwitched { .. } => "workspace.switched",
+            Event::WorkspaceRemoved { .. } => "workspace.removed",
+            Event::DomainStateChanged { .. } => "domain.state_changed",
+            Event::Snapshot { .. } => "snapshot",
+        }
+    }
+
+    pub fn subject(&self) -> Subject {
+        match self {
+            Event::PaneAdded { pane }
+            | Event::PaneRemoved { pane }
+            | Event::PaneOutput { pane }
+            | Event::TitleChanged { pane }
+            | Event::CwdChanged { pane }
+            | Event::StatusChanged { pane }
+            | Event::Notification { pane, .. }
+            | Event::PaneExited { pane, .. }
+            | Event::CommandFinished { pane, .. } => Subject::Pane(*pane),
+            Event::TabAdded { tab, .. }
+            | Event::TabRemoved { tab, .. }
+            | Event::TabMoved { tab, .. } => Subject::Tab(*tab),
+            Event::WindowAdded { window } | Event::WindowRemoved { window } => {
+                Subject::Window(*window)
+            }
+            _ => Subject::None,
+        }
+    }
+
+    /// Whether the subject is gone once this event fires (it can no longer be matched live).
+    pub fn is_removal(&self) -> bool {
+        matches!(
+            self,
+            Event::PaneRemoved { .. }
+                | Event::PaneExited { .. }
+                | Event::TabRemoved { .. }
+                | Event::WindowRemoved { .. }
+        )
+    }
+
+    /// The `ctl events` line: `{"type":"pane.command_finished","pane":12,…,"ts":"…"}`.
+    pub fn stream_json(&self, ts_ms: u64) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or(Value::Null);
+        if let Value::Object(m) = &mut v {
+            m.remove("event");
+            let mut out = serde_json::Map::new();
+            out.insert("type".into(), json!(self.type_name()));
+            out.extend(std::mem::take(m));
+            out.insert("ts".into(), json!(iso8601_utc(ts_ms)));
+            return Value::Object(out);
+        }
+        v
+    }
 }
 
 // ---- envelopes and line codec -------------------------------------------------------------
@@ -1117,6 +1412,22 @@ mod tests {
                 timeout_ms: Some(1000),
                 new_only: true,
             }),
+            Request::PaneNotify(NotifyParams {
+                target: Target::pane(3),
+                title: Some("t".into()),
+                level: NotifyLevel::Attention,
+                desktop: true,
+                message: "done".into(),
+            }),
+            Request::PaneStatusSet(StatusSetParams {
+                target: Target::pane(3),
+                state: Some(StatusState::Waiting),
+                text: Some("approve?".into()),
+                progress: Some(40),
+                ttl_ms: Some(30_000),
+            }),
+            Request::PaneStatusClear(Target::pane(3)),
+            Request::PaneStatusGet(Target::pane(3)),
             Request::PaneClose(t),
             Request::RecordStart(RecordStartParams {
                 pane: 1,
@@ -1130,7 +1441,11 @@ mod tests {
                 new_window: true,
             }),
             Request::ConfigReload,
-            Request::Subscribe,
+            Request::Subscribe(SubscribeParams {
+                types: vec!["pane.*".into()],
+                expr: Some("title:x*".into()),
+                snapshot: true,
+            }),
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -1147,7 +1462,8 @@ mod tests {
             "mux.list workspace.list workspace.create workspace.switch workspace.rename \
              workspace.delete window.list window.new window.focus window.close tab.list tab.new \
              tab.focus tab.rename tab.close pane.list pane.get pane.send_text pane.get_text \
-             pane.run pane.wait pane.close record.start record.stop replay.start config.reload subscribe"
+             pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
+             pane.close record.start record.stop replay.start config.reload subscribe"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(
@@ -1155,6 +1471,61 @@ mod tests {
                 "{old} is gone"
             );
         }
+    }
+
+    #[test]
+    fn event_types_use_dotted_names_and_filters() {
+        let all = SubscribeParams::default();
+        assert!(all.wants("pane.exited"));
+        let f = SubscribeParams {
+            types: vec!["pane.command_finished".into(), "workspace.*".into()],
+            ..Default::default()
+        };
+        assert!(f.wants("pane.command_finished"));
+        assert!(f.wants("workspace.switched"));
+        assert!(!all.wants("pane.output"), "pane.output is opt-in");
+        assert!(SubscribeParams {
+            types: vec!["pane.output".into()],
+            ..Default::default()
+        }
+        .wants("pane.output"));
+        assert!(!f.wants("pane.exited"));
+        assert!(!f.wants("workspacex.added"));
+        let ev = Event::CommandFinished {
+            pane: 12,
+            exit_code: Some(1),
+        };
+        assert_eq!(ev.type_name(), "pane.command_finished");
+        assert_eq!(ev.subject(), Subject::Pane(12));
+        assert_eq!(
+            ev.stream_json(0),
+            json!({"type":"pane.command_finished","pane":12,"exit_code":1,
+                   "ts":"1970-01-01T00:00:00.000Z"})
+        );
+        let n = Event::Notification {
+            pane: 2,
+            level: NotifyLevel::Error,
+            title: None,
+            message: "x".into(),
+        };
+        assert_eq!(n.stream_json(0)["type"], "pane.notification");
+        assert_eq!(n.stream_json(0)["level"], "error");
+        assert!(Event::PaneExited {
+            pane: 1,
+            status: None
+        }
+        .is_removal());
+    }
+
+    #[test]
+    fn status_state_and_level_parse() {
+        assert_eq!("waiting".parse::<StatusState>(), Ok(StatusState::Waiting));
+        assert!("busy".parse::<StatusState>().is_err());
+        assert_eq!(
+            "attention".parse::<NotifyLevel>(),
+            Ok(NotifyLevel::Attention)
+        );
+        assert!("loud".parse::<NotifyLevel>().is_err());
     }
 
     #[test]

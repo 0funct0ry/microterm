@@ -9,6 +9,8 @@ pub enum StatusKind {
     Error,
     Idle,
     Accent,
+    Warning,
+    Success,
 }
 
 /// The coloured dot used for domain state and dirty-tab indicators.
@@ -33,6 +35,8 @@ impl RenderOnce for StatusDot {
             StatusKind::Error => t.error,
             StatusKind::Idle => t.text_placeholder,
             StatusKind::Accent => t.accent,
+            StatusKind::Warning => t.warning,
+            StatusKind::Success => t.success,
         };
         gpui::div()
             .flex_none()

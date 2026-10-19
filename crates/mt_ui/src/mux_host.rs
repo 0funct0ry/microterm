@@ -37,6 +37,8 @@ pub struct MuxHost {
     pub(crate) ssh: SshHub,
     /// Pane exits and the `pane.run` / `pane.wait` calls still waiting.
     pub(crate) runtime: PaneRuntime,
+    /// OS notifications for `pane notify`; tests swap in a fake.
+    pub(crate) notifier: Arc<dyn crate::notifier::Notifier>,
 }
 
 impl Global for MuxHost {}
@@ -52,6 +54,7 @@ impl MuxHost {
             socket: None,
             ssh: SshHub::default(),
             runtime: PaneRuntime::default(),
+            notifier: crate::notifier::system(),
         }
     }
 
@@ -624,6 +627,105 @@ fn replay(cx: &mut App, p: &mt_proto::ReplayParams) -> Reply {
     )
 }
 
+/// `[ctl].status_max_len`: status and notification text is cut to this many characters.
+fn status_max_len(cx: &App) -> usize {
+    cx.global::<Settings>().config.ctl.status_max_len as usize
+}
+
+/// Repaints every open window (tab status dots, badges, progress lines).
+pub(crate) fn refresh_windows(cx: &mut App) {
+    let handles: Vec<_> = host(cx).open.values().copied().collect();
+    for h in handles {
+        let _ = h.update(cx, |_, _, cx| cx.notify());
+    }
+}
+
+/// Whether the user is looking at `pane` right now: its tab is the active tab of a window that
+/// is shown and has OS focus.
+fn pane_in_view(cx: &mut App, pane: Id) -> bool {
+    let Some((window, index)) = host(cx).mux.locate_pane(pane) else {
+        return false;
+    };
+    let active = host(cx)
+        .mux
+        .window(window)
+        .is_some_and(|w| w.active == index);
+    let handle = host(cx).open.get(&window).copied();
+    active
+        && handle.is_some_and(|h| {
+            h.update(cx, |_, win, _| win.is_window_active())
+                .unwrap_or(false)
+        })
+}
+
+/// Whether any microterm window has OS focus.
+fn app_focused(cx: &mut App) -> bool {
+    let handles: Vec<_> = host(cx).open.values().copied().collect();
+    handles.into_iter().any(|h| {
+        h.update(cx, |_, win, _| win.is_window_active())
+            .unwrap_or(false)
+    })
+}
+
+/// Surfaces a notification that got through the rate limit according to `[notifications]`:
+/// attention badge, toast and OS notification (SPEC §12.4). `--desktop` forces the last one.
+fn deliver(cx: &mut App, d: ipc_ops::Delivered) {
+    use mt_config::{DesktopMode, ToastMode};
+    use mt_proto::NotifyLevel;
+
+    use crate::components::ToastKind;
+
+    let cfg = cx.global::<Settings>().config.notifications.clone();
+    let in_view = pane_in_view(cx, d.pane);
+    if cfg.badge && !in_view {
+        host(cx).mux.raise_attention(d.pane, d.level);
+        refresh_windows(cx);
+    }
+    let text = match &d.title {
+        Some(t) if !d.message.is_empty() => format!("{t}: {}", d.message),
+        Some(t) => t.clone(),
+        None => d.message.clone(),
+    };
+    let toast = match cfg.toast {
+        ToastMode::Always => true,
+        ToastMode::Background => !in_view,
+        ToastMode::Never => false,
+    };
+    if toast && !text.is_empty() {
+        let kind = match d.level {
+            NotifyLevel::Info => ToastKind::Info,
+            NotifyLevel::Attention => ToastKind::Warning,
+            NotifyLevel::Error => ToastKind::Error,
+        };
+        toast_all(cx, kind, text.clone());
+    }
+    let desktop = d.desktop
+        || match cfg.desktop {
+            DesktopMode::Always => true,
+            DesktopMode::Unfocused => !app_focused(cx),
+            DesktopMode::Never => false,
+        };
+    if desktop {
+        let summary = d.title.clone().unwrap_or_else(|| "microterm".into());
+        let body = if d.title.is_some() {
+            d.message.clone()
+        } else {
+            text
+        };
+        host(cx).notifier.clone().notify(&summary, &body);
+    }
+}
+
+/// The status dot, progress line, tooltip and badge of `pane`'s tab.
+pub(crate) fn tab_chrome(cx: &App, pane: Id) -> crate::tab_chrome::TabChrome {
+    let Some(h) = cx.try_global::<MuxHost>() else {
+        return Default::default();
+    };
+    h.mux.pane(pane).map_or_else(Default::default, |p| {
+        crate::tab_chrome::tab_chrome(p.status.as_ref(), p.attention)
+    })
+}
+
 /// `[ctl].capture_max_bytes`.
 fn capture_cap(cx: &App) -> usize {
     cx.global::<Settings>()
@@ -660,6 +762,10 @@ fn with_runtime<R>(cx: &mut App, f: impl FnOnce(&mut PaneRuntime, &mut GuiAccess
 /// Answers the pending `pane.run` / `pane.wait` calls whose condition now holds. Called a few
 /// times a second.
 pub fn poll_pending(cx: &mut App) {
+    // Statuses set with `--ttl` clear themselves (a crashed agent leaves no stale marker).
+    if !host(cx).mux.expire_statuses(mt_term::now_ms()).is_empty() {
+        refresh_windows(cx);
+    }
     if !host(cx).runtime.has_pending() {
         return;
     }
@@ -780,6 +886,33 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
             let term = pane_terminal(cx, panes[0])?;
             ipc_ops::get_text(&term, &p, capture_cap(cx))
         }
+        Request::PaneStatusSet(p) => {
+            let rows = rows(cx);
+            let max = status_max_len(cx);
+            let r = ipc_ops::status_set(&mut host(cx).mux, &rows, &p, max, mt_term::now_ms())?;
+            refresh_windows(cx);
+            Ok(r)
+        }
+        Request::PaneStatusClear(t) => {
+            let rows = rows(cx);
+            let r = ipc_ops::status_clear(&mut host(cx).mux, &rows, &t)?;
+            refresh_windows(cx);
+            Ok(r)
+        }
+        Request::PaneStatusGet(t) => {
+            let rows = rows(cx);
+            ipc_ops::status_get(&host(cx).mux, &rows, &t)
+        }
+        Request::PaneNotify(p) => {
+            let rows = rows(cx);
+            let max = status_max_len(cx);
+            let (result, delivered) =
+                ipc_ops::notify(&mut host(cx).mux, &rows, &p, max, mt_term::now_ms())?;
+            for d in delivered {
+                deliver(cx, d);
+            }
+            Ok(result)
+        }
         Request::PaneRun(_) | Request::PaneWait(_) => Err(RpcError::internal(
             "pane.run and pane.wait answer later; they go through dispatch()",
         )),
@@ -832,7 +965,7 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
             Ok(json!({}))
         }
         // Streaming is the server's business; it never forwards `subscribe`.
-        Request::Subscribe => Ok(json!({})),
+        Request::Subscribe(_) => Ok(json!({})),
     }
 }
 
@@ -1144,5 +1277,175 @@ mod tests {
             .code,
             mt_proto::ErrorCode::NotFound
         );
+    }
+
+    fn edit_config(cx: &mut App, f: impl FnOnce(&mut mt_config::Config)) {
+        f(Arc::make_mut(&mut cx.global_mut::<Settings>().config));
+    }
+
+    fn fake_notifier(cx: &mut TestAppContext) -> Arc<crate::notifier::FakeNotifier> {
+        let fake = Arc::new(crate::notifier::FakeNotifier::default());
+        let f = fake.clone();
+        cx.update(|cx| host(cx).notifier = f);
+        fake
+    }
+
+    /// Two tabs in the default workspace: `(background pane, active pane)`.
+    fn two_tabs(cx: &mut TestAppContext) -> (Spawned, Spawned) {
+        cx.update(|cx| show_workspace(cx, "default", true, None).unwrap());
+        let a = spawned(call(cx, Request::TabNew(Default::default())).unwrap());
+        let b = spawned(call(cx, Request::TabNew(Default::default())).unwrap());
+        (a, b)
+    }
+
+    fn chrome_of(cx: &mut TestAppContext, pane: u64) -> crate::tab_chrome::TabChrome {
+        cx.update(|cx| tab_chrome(cx, pane))
+    }
+
+    #[gpui::test]
+    fn status_set_and_clear_drive_the_tab_chrome(cx: &mut TestAppContext) {
+        init(cx);
+        let (a, _b) = two_tabs(cx);
+        call(
+            cx,
+            Request::PaneStatusSet(mt_proto::StatusSetParams {
+                target: Target::pane(a.pane),
+                state: Some(mt_proto::StatusState::Working),
+                text: Some("running tests".into()),
+                progress: Some(40),
+                ttl_ms: None,
+            }),
+        )
+        .unwrap();
+        let c = chrome_of(cx, a.pane);
+        assert_eq!(c.dot, Some(crate::components::StatusKind::Accent));
+        assert_eq!(c.progress, Some(40));
+        assert_eq!(c.tooltip.as_deref(), Some("working 40%: running tests"));
+        let got: mt_proto::StatusResult =
+            serde_json::from_value(call(cx, Request::PaneStatusGet(Target::pane(a.pane))).unwrap())
+                .unwrap();
+        assert_eq!(got.status.unwrap().text, "running tests");
+        call(cx, Request::PaneStatusClear(Target::pane(a.pane))).unwrap();
+        assert_eq!(chrome_of(cx, a.pane), Default::default());
+        // Acting verbs never use the focused pane.
+        let e = call(
+            cx,
+            Request::PaneStatusSet(mt_proto::StatusSetParams::default()),
+        )
+        .unwrap_err();
+        assert_eq!(e.code, mt_proto::ErrorCode::BadRequest);
+    }
+
+    #[gpui::test]
+    fn ttl_expiry_clears_a_status_from_the_poll_loop(cx: &mut TestAppContext) {
+        init(cx);
+        let (a, _b) = two_tabs(cx);
+        call(
+            cx,
+            Request::PaneStatusSet(mt_proto::StatusSetParams {
+                target: Target::pane(a.pane),
+                state: Some(mt_proto::StatusState::Waiting),
+                ttl_ms: Some(1),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        assert!(chrome_of(cx, a.pane).dot.is_some());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        cx.update(poll_pending);
+        assert_eq!(chrome_of(cx, a.pane), Default::default());
+    }
+
+    fn notify(cx: &mut TestAppContext, pane: u64, desktop: bool) -> mt_proto::ActResult {
+        serde_json::from_value(
+            call(
+                cx,
+                Request::PaneNotify(mt_proto::NotifyParams {
+                    target: Target::pane(pane),
+                    level: mt_proto::NotifyLevel::Attention,
+                    desktop,
+                    message: "done".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[gpui::test]
+    fn notify_badges_a_background_tab_and_honours_the_desktop_setting(cx: &mut TestAppContext) {
+        use mt_config::DesktopMode;
+        init(cx);
+        let fake = fake_notifier(cx);
+        let (a, _b) = two_tabs(cx);
+        cx.update(|cx| edit_config(cx, |c| c.notifications.desktop = DesktopMode::Never));
+        notify(cx, a.pane, false);
+        assert_eq!(
+            chrome_of(cx, a.pane).badge,
+            Some(crate::components::StatusKind::Warning)
+        );
+        assert!(fake.sent.lock().unwrap().is_empty(), "desktop = never");
+        notify(cx, a.pane, true);
+        assert_eq!(fake.sent.lock().unwrap().len(), 1, "--desktop forces it");
+        cx.update(|cx| edit_config(cx, |c| c.notifications.desktop = DesktopMode::Always));
+        notify(cx, a.pane, false);
+        let sent = fake.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1], ("microterm".to_string(), "done".to_string()));
+    }
+
+    #[gpui::test]
+    fn notify_badge_can_be_switched_off_and_never_downgrades(cx: &mut TestAppContext) {
+        init(cx);
+        let _ = fake_notifier(cx);
+        let (a, _b) = two_tabs(cx);
+        cx.update(|cx| edit_config(cx, |c| c.notifications.badge = false));
+        notify(cx, a.pane, false);
+        assert_eq!(chrome_of(cx, a.pane).badge, None);
+        cx.update(|cx| edit_config(cx, |c| c.notifications.badge = true));
+        call(
+            cx,
+            Request::PaneNotify(mt_proto::NotifyParams {
+                target: Target::pane(a.pane),
+                level: mt_proto::NotifyLevel::Error,
+                message: "bad".into(),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        notify(cx, a.pane, false); // attention after error keeps the error colour
+        assert_eq!(
+            chrome_of(cx, a.pane).badge,
+            Some(crate::components::StatusKind::Error)
+        );
+    }
+
+    #[gpui::test]
+    fn notify_is_rate_limited_to_five_per_second_per_pane(cx: &mut TestAppContext) {
+        init(cx);
+        let _ = fake_notifier(cx);
+        let (a, _b) = two_tabs(cx);
+        let dropped: u32 = (0..8).map(|_| notify(cx, a.pane, false).dropped).sum();
+        assert_eq!(dropped, 3);
+    }
+
+    #[gpui::test]
+    fn notification_text_is_sanitised_and_cut_to_the_configured_length(cx: &mut TestAppContext) {
+        init(cx);
+        let fake = fake_notifier(cx);
+        let (a, _b) = two_tabs(cx);
+        cx.update(|cx| edit_config(cx, |c| c.ctl.status_max_len = 8));
+        call(
+            cx,
+            Request::PaneNotify(mt_proto::NotifyParams {
+                target: Target::pane(a.pane),
+                desktop: true,
+                message: "a\u{1b}]0;x\u{7}bcdefghijkl".into(),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        assert_eq!(fake.sent.lock().unwrap()[0].1, "a]0;xbc…");
     }
 }

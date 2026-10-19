@@ -51,7 +51,7 @@ JSON value for scripts. Errors go to stderr, as a JSON object with `--json`. See
 | `microterm shell-integration bash\|zsh\|fish` | prints the shell snippet that emits OSC 133 marks (see [Shell integration](/docs/shell-integration/)) |
 | `microterm --workspace NAME`, `--cwd`, `-e CMD` | start the GUI, or open a window in the running instance |
 
-See [`microterm ctl`](/docs/ctl/) for every command, [Run & wait](/docs/run-and-wait/) for `pane run`
+See [`microterm ctl`](/docs/ctl/) for every command, [Notifications & status](/docs/notifications-and-status/) for `pane notify`, `pane status` and `events`, [Run & wait](/docs/run-and-wait/) for `pane run`
 and `pane wait`, and [Recording & replay](/docs/recording-and-replay/).
 
 ## Shell completions

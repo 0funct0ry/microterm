@@ -47,7 +47,7 @@ regex as `\x2c`.
 | `workspace` | window, tab, pane | workspace name |
 | `window`, `tab` | tab, pane (`tab` only pane) | parent ID |
 | `focused` / `active` | pane, tab, window | `true` / `false` |
-| `status` | pane | status state (arrives with pane status) |
+| `status` | pane | status state: `idle` (also no status), `working`, `waiting`, `done`, `error`; see [Notifications & status](/docs/notifications-and-status/) |
 | `exited` | pane | `true` / `false` |
 
 A key that does not apply to the resource is a usage error (exit 1), never an empty match. A

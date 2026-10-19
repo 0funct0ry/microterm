@@ -116,6 +116,12 @@ prefer = "high_performance"      # "high_performance" | "low_power" (restart req
 
 [ctl]
 capture_max_bytes = 1048576      # cap on output returned by `pane run` / `pane get-text` (tail kept)
+status_max_len = 120             # `pane status` text is truncated to this many characters
+
+[notifications]                  # for `ctl pane notify`
+badge = true                     # attention badge on the tab until it is focused
+toast = "background"             # "background" | "always" | "never"
+desktop = "unfocused"            # "unfocused" | "always" | "never" (OS notification)
 "##;
 
 #[cfg(test)]

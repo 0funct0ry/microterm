@@ -14,7 +14,7 @@ A one-character prefix picks a provider:
 |---|---|---|---|
 | `>` (default) | Actions | `new tab` | Runs **New tab** |
 | `@` | Workspaces | `@infra` | **Switch to workspace: infra** |
-| `#` | Tabs | `#cargo` | **Go to tab: cargo watch** |
+| `#` | Tabs | `#cargo` | **Go to tab: cargo watch**, with its [status](/docs/notifications-and-status/) (dot and text) when one is set |
 | `~` | Themes | `~tokyo` | **Theme: Tokyo Night**, previewed live |
 
 Moving the selection over a theme previews it; `Esc` restores the previous theme, `Enter` keeps it.

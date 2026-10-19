@@ -34,6 +34,7 @@ export default defineConfig({
             { label: 'microterm ctl', slug: 'docs/ctl' },
             { label: 'Selectors & targeting', slug: 'docs/selectors-and-targeting' },
             { label: 'Run & wait', slug: 'docs/run-and-wait' },
+            { label: 'Notifications & status', slug: 'docs/notifications-and-status' },
             { label: 'Shell integration', slug: 'docs/shell-integration' },
             { label: 'Recording & replay', slug: 'docs/recording-and-replay' },
           ],

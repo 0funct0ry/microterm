@@ -214,3 +214,25 @@ fn ctl_capture_cap_defaults_and_validates() {
         l.warnings
     );
 }
+
+#[test]
+fn notifications_and_status_len_default_and_validate() {
+    use mt_config::{DesktopMode, ToastMode};
+    let c = Config::default();
+    assert_eq!(c.ctl.status_max_len, 120);
+    assert!(c.notifications.badge);
+    assert_eq!(c.notifications.toast, ToastMode::Background);
+    assert_eq!(c.notifications.desktop, DesktopMode::Unfocused);
+    let cfg = parse_str(
+        "[ctl]\nstatus_max_len = 10\n[notifications]\nbadge = false\ntoast = \"always\"\ndesktop = \"never\"\n",
+    )
+    .unwrap();
+    assert_eq!(cfg.config.ctl.status_max_len, 10);
+    assert!(!cfg.config.notifications.badge);
+    assert_eq!(cfg.config.notifications.toast, ToastMode::Always);
+    assert_eq!(cfg.config.notifications.desktop, DesktopMode::Never);
+    let e = parse_str("[ctl]\nstatus_max_len = 0\n").unwrap_err();
+    assert!(format!("{e:?}").contains("ctl.status_max_len"), "{e:?}");
+    let l = parse_str("[notifications]\nbadg = true\n").unwrap();
+    assert!(!l.warnings.is_empty());
+}

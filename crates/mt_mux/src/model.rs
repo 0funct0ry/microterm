@@ -2,9 +2,12 @@
 
 use std::path::PathBuf;
 
+use mt_proto::{NotifyLevel, StatusState};
+
 use crate::domain::{
     Domain, DomainId, DomainKind, DomainState, LocalDomain, SshDomain, LOCAL_DOMAIN_ID,
 };
+use crate::status::{sanitize, NotifyLimiter, Status};
 
 pub type Id = u64;
 
@@ -25,6 +28,10 @@ pub struct Pane {
     pub remote_pane_id: Option<u64>,
     pub title: String,
     pub cwd: Option<PathBuf>,
+    /// Set by `ctl pane status`; cleared on exit and TTL expiry (SPEC §12.4).
+    pub status: Option<Status>,
+    /// Attention badge raised by `ctl pane notify`, cleared when the pane is focused.
+    pub attention: Option<NotifyLevel>,
 }
 
 /// `Split` exists in the type from day one (SPEC D4) but is unreachable until M11.
@@ -116,6 +123,20 @@ pub enum MuxEvent {
     TitleChanged {
         pane: Id,
     },
+    CwdChanged {
+        pane: Id,
+    },
+    /// The pane's status was set, changed, cleared or expired.
+    StatusChanged {
+        pane: Id,
+    },
+    /// `ctl pane notify` got through the rate limit.
+    Notification {
+        pane: Id,
+        level: NotifyLevel,
+        title: Option<String>,
+        message: String,
+    },
     /// The pane's process ended (`None` status: killed by a signal).
     PaneExited {
         pane: Id,
@@ -145,6 +166,12 @@ pub enum MuxEvent {
     },
     WindowRemoved {
         window: Id,
+    },
+    WorkspaceAdded {
+        workspace: Id,
+    },
+    WorkspaceRenamed {
+        workspace: Id,
     },
     WorkspaceSwitched {
         from: Id,
@@ -201,6 +228,7 @@ pub struct Mux {
     /// [`Mux::focused_window`].
     focused_window: Option<Id>,
     listeners: Vec<Listener>,
+    limiter: NotifyLimiter,
 }
 
 impl Default for Mux {
@@ -223,6 +251,7 @@ impl Mux {
             active_workspace: 0,
             focused_window: None,
             listeners: Vec::new(),
+            limiter: NotifyLimiter::default(),
         };
         let id = mux.alloc();
         mux.workspaces.push(Workspace {
@@ -279,6 +308,7 @@ impl Mux {
             id,
             name: name.into(),
         });
+        self.emit(MuxEvent::WorkspaceAdded { workspace: id });
         Ok(id)
     }
 
@@ -299,6 +329,7 @@ impl Mux {
             return Err(Error::ProtectedWorkspace(ws.name.clone()));
         }
         ws.name = name.into();
+        self.emit(MuxEvent::WorkspaceRenamed { workspace: id });
         Ok(())
     }
 
@@ -571,6 +602,8 @@ impl Mux {
             remote_pane_id: None,
             title: String::new(),
             cwd,
+            status: None,
+            attention: None,
         };
         let tab = Tab {
             id: tab_id,
@@ -698,7 +731,10 @@ impl Mux {
 
     pub fn set_pane_cwd(&mut self, pane: Id, cwd: PathBuf) {
         if let Some(p) = self.pane_mut(pane) {
-            p.cwd = Some(cwd);
+            if p.cwd.as_ref() != Some(&cwd) {
+                p.cwd = Some(cwd);
+                self.emit(MuxEvent::CwdChanged { pane });
+            }
         }
     }
 
@@ -707,7 +743,145 @@ impl Mux {
     }
 
     pub fn notify_exited(&mut self, pane: Id, status: Option<i32>) {
+        // A dead process cannot be "working": clear before announcing the exit.
+        self.clear_pane_status(pane);
         self.emit(MuxEvent::PaneExited { pane, status });
+    }
+
+    // ---- status, attention and notifications (M10.3) ----
+
+    pub fn pane(&self, pane: Id) -> Option<&Pane> {
+        self.windows
+            .iter()
+            .flat_map(|w| w.tabs.iter())
+            .flat_map(|t| t.tree.panes())
+            .find(|p| p.id == pane)
+    }
+
+    /// Sets the pane's status. `text` is sanitised and cut to `max_len` characters, `progress` is
+    /// clamped to 100. Emits `StatusChanged` only when state, text or progress changed (a TTL
+    /// refresh alone is silent). Returns `false` for an unknown pane.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_pane_status(
+        &mut self,
+        pane: Id,
+        state: StatusState,
+        text: &str,
+        progress: Option<u8>,
+        ttl_ms: Option<u64>,
+        max_len: usize,
+        now_ms: u64,
+    ) -> bool {
+        let new = Status {
+            state,
+            text: sanitize(text, max_len),
+            progress: progress.map(|p| p.min(100)),
+            updated_at_ms: now_ms,
+            ttl_deadline_ms: ttl_ms.map(|t| now_ms.saturating_add(t)),
+        };
+        let Some(p) = self.pane_mut(pane) else {
+            return false;
+        };
+        let changed = match &p.status {
+            Some(old) => {
+                (old.state, &old.text, old.progress) != (new.state, &new.text, new.progress)
+            }
+            None => true,
+        };
+        p.status = Some(new);
+        if changed {
+            self.emit(MuxEvent::StatusChanged { pane });
+        }
+        true
+    }
+
+    /// Clears the status. Returns whether there was one.
+    pub fn clear_pane_status(&mut self, pane: Id) -> bool {
+        let had = self
+            .pane_mut(pane)
+            .is_some_and(|p| p.status.take().is_some());
+        if had {
+            self.emit(MuxEvent::StatusChanged { pane });
+        }
+        had
+    }
+
+    /// Clears every status whose TTL has passed; returns those panes.
+    pub fn expire_statuses(&mut self, now_ms: u64) -> Vec<Id> {
+        let due: Vec<Id> = self
+            .windows
+            .iter()
+            .flat_map(|w| w.tabs.iter())
+            .flat_map(|t| t.tree.panes())
+            .filter(|p| {
+                p.status
+                    .as_ref()
+                    .and_then(|s| s.ttl_deadline_ms)
+                    .is_some_and(|d| d <= now_ms)
+            })
+            .map(|p| p.id)
+            .collect();
+        for &pane in &due {
+            self.clear_pane_status(pane);
+        }
+        due
+    }
+
+    /// Earliest TTL deadline, so a host can sleep until then.
+    pub fn next_status_deadline(&self) -> Option<u64> {
+        self.windows
+            .iter()
+            .flat_map(|w| w.tabs.iter())
+            .flat_map(|t| t.tree.panes())
+            .filter_map(|p| p.status.as_ref().and_then(|s| s.ttl_deadline_ms))
+            .min()
+    }
+
+    /// Raises the attention badge on `pane`; a higher level is never downgraded.
+    pub fn raise_attention(&mut self, pane: Id, level: NotifyLevel) {
+        if let Some(p) = self.pane_mut(pane) {
+            let rank = |l: NotifyLevel| match l {
+                NotifyLevel::Info => 0,
+                NotifyLevel::Attention => 1,
+                NotifyLevel::Error => 2,
+            };
+            if p.attention.is_none_or(|cur| rank(level) > rank(cur)) {
+                p.attention = Some(level);
+            }
+        }
+    }
+
+    /// Clears the badge; returns whether one was showing.
+    pub fn clear_attention(&mut self, pane: Id) -> bool {
+        self.pane_mut(pane)
+            .is_some_and(|p| p.attention.take().is_some())
+    }
+
+    /// Runs `pane notify` through the per-pane rate limit. On success emits `Notification` and
+    /// returns `true`; otherwise the notification is dropped and counted.
+    pub fn notify_pane(
+        &mut self,
+        pane: Id,
+        level: NotifyLevel,
+        title: Option<String>,
+        message: String,
+        now_ms: u64,
+    ) -> bool {
+        if !self.limiter.allow(pane, now_ms) {
+            return false;
+        }
+        self.emit(MuxEvent::Notification {
+            pane,
+            level,
+            title,
+            message,
+        });
+        true
+    }
+
+    /// Notifications for `pane` dropped by the rate limit so far.
+    pub fn notifications_dropped(&self, pane: Id) -> u32 {
+        self.limiter.dropped(pane)
     }
 
     pub fn notify_command_finished(&mut self, pane: Id, exit_code: Option<i32>) {
@@ -1072,7 +1246,7 @@ mod tests {
         let log = recorded(&mut mux);
         let w = mux.spawn_window(None);
         let (t, p) = mux.spawn_tab(w, None, None).unwrap();
-        mux.create_workspace("x").unwrap();
+        let x = mux.create_workspace("x").unwrap();
         mux.switch_workspace("x").unwrap();
         mux.close_tab(w, t).unwrap();
         mux.close_window(w).unwrap();
@@ -1084,6 +1258,7 @@ mod tests {
                 MuxEvent::WindowAdded { window: w },
                 MuxEvent::PaneAdded { pane: p },
                 MuxEvent::TabAdded { window: w, tab: t },
+                MuxEvent::WorkspaceAdded { workspace: x },
                 MuxEvent::WorkspaceSwitched { from, to },
                 MuxEvent::PaneRemoved { pane: p },
                 MuxEvent::TabRemoved { window: w, tab: t },
@@ -1108,9 +1283,149 @@ mod tests {
             Some(std::path::Path::new("/tmp"))
         );
         assert_eq!(tab.title_override.as_deref(), Some("api"));
-        assert_eq!(log.lock().unwrap().len(), 2);
+        assert_eq!(
+            log.lock().unwrap().len(),
+            3,
+            "title, cwd, and nothing for the repeat"
+        );
         mux.rename_tab(w, tabs[0], Some("  ".into())).unwrap();
         assert_eq!(mux.window(w).unwrap().tabs[0].title_override, None);
         assert_eq!(mux.locate_pane(pane), Some((w, 0)));
+    }
+
+    fn first_pane(mux: &Mux) -> Id {
+        mux.windows()[0].tabs[0].pane().id
+    }
+
+    #[test]
+    fn status_state_machine_with_ttl_on_a_fake_clock() {
+        let (mut mux, _, _) = mux_with_tabs(1);
+        let log = recorded(&mut mux);
+        let p = first_pane(&mux);
+        assert!(mux.set_pane_status(
+            p,
+            StatusState::Working,
+            "build",
+            Some(40),
+            Some(30_000),
+            120,
+            1_000
+        ));
+        let st = mux.pane(p).unwrap().status.clone().unwrap();
+        assert_eq!(
+            (st.state, st.progress, st.ttl_deadline_ms),
+            (StatusState::Working, Some(40), Some(31_000))
+        );
+        // Same visible content, only the TTL moves: no new event.
+        assert!(mux.set_pane_status(
+            p,
+            StatusState::Working,
+            "build",
+            Some(40),
+            Some(30_000),
+            120,
+            5_000
+        ));
+        assert_eq!(mux.next_status_deadline(), Some(35_000));
+        assert!(mux.expire_statuses(34_999).is_empty());
+        assert_eq!(mux.expire_statuses(35_000), vec![p]);
+        assert!(mux.pane(p).unwrap().status.is_none());
+        let n = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, MuxEvent::StatusChanged { .. }))
+            .count();
+        assert_eq!(n, 2, "set + expiry; the TTL refresh was silent");
+    }
+
+    #[test]
+    fn status_text_is_sanitised_and_progress_clamped() {
+        let (mut mux, _, _) = mux_with_tabs(1);
+        let p = first_pane(&mux);
+        mux.set_pane_status(
+            p,
+            StatusState::Waiting,
+            "a\x1b[2Jb\nc and more text",
+            Some(250),
+            None,
+            10,
+            0,
+        );
+        let st = mux.pane(p).unwrap().status.clone().unwrap();
+        assert_eq!(st.text, "a[2Jb c a…");
+        assert_eq!(st.progress, Some(100));
+        assert!(!mux.set_pane_status(9999, StatusState::Done, "", None, None, 10, 0));
+    }
+
+    #[test]
+    fn exit_clears_status_before_announcing_it() {
+        let (mut mux, _, _) = mux_with_tabs(1);
+        let p = first_pane(&mux);
+        mux.set_pane_status(p, StatusState::Working, "x", None, None, 120, 0);
+        let log = recorded(&mut mux);
+        mux.notify_exited(p, Some(0));
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                MuxEvent::StatusChanged { pane: p },
+                MuxEvent::PaneExited {
+                    pane: p,
+                    status: Some(0)
+                }
+            ]
+        );
+        assert!(!mux.clear_pane_status(p), "already cleared");
+    }
+
+    #[test]
+    fn attention_keeps_the_highest_level_until_cleared() {
+        let (mut mux, _, _) = mux_with_tabs(1);
+        let p = first_pane(&mux);
+        mux.raise_attention(p, NotifyLevel::Attention);
+        mux.raise_attention(p, NotifyLevel::Info);
+        assert_eq!(mux.pane(p).unwrap().attention, Some(NotifyLevel::Attention));
+        mux.raise_attention(p, NotifyLevel::Error);
+        assert_eq!(mux.pane(p).unwrap().attention, Some(NotifyLevel::Error));
+        assert!(mux.clear_attention(p));
+        assert!(!mux.clear_attention(p));
+    }
+
+    #[test]
+    fn notifications_are_rate_limited_per_pane_and_emit_events() {
+        let (mut mux, _, _) = mux_with_tabs(2);
+        let log = recorded(&mut mux);
+        let p = first_pane(&mux);
+        let sent = (0..8)
+            .filter(|_| mux.notify_pane(p, NotifyLevel::Info, None, "hi".into(), 100))
+            .count();
+        assert_eq!(sent, 5);
+        assert_eq!(mux.notifications_dropped(p), 3);
+        let n = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, MuxEvent::Notification { .. }))
+            .count();
+        assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn cwd_and_workspace_changes_emit_events() {
+        let (mut mux, _, _) = mux_with_tabs(1);
+        let p = first_pane(&mux);
+        let log = recorded(&mut mux);
+        mux.set_pane_cwd(p, "/tmp".into());
+        mux.set_pane_cwd(p, "/tmp".into());
+        let w = mux.create_workspace("api").unwrap();
+        mux.rename_workspace(w, "api2").unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                MuxEvent::CwdChanged { pane: p },
+                MuxEvent::WorkspaceAdded { workspace: w },
+                MuxEvent::WorkspaceRenamed { workspace: w },
+            ]
+        );
     }
 }

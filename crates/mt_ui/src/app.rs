@@ -256,6 +256,7 @@ impl AppWindow {
         // The window the user is in is the one `ctl` treats as focused.
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
+                this.clear_active_attention(cx);
                 let id = this.mux_window;
                 let host = mux_host::host(cx);
                 if host
@@ -398,6 +399,11 @@ impl AppWindow {
         }
         drop(old);
         self.active_tab = active.min(self.tabs.len().saturating_sub(1));
+        // `tab focus` over IPC, a closed tab or a workspace switch can bring a badged tab into
+        // view without a click.
+        if window.is_window_active() {
+            self.clear_active_attention(cx);
+        }
 
         let mut failed = Vec::new();
         for i in 0..self.tabs.len() {
@@ -1186,7 +1192,7 @@ impl AppWindow {
     }
 
     /// Every palette provider's rows: actions, workspaces, tabs, themes (SPEC §10.1).
-    fn palette_entries(&self, cx: &mut Context<Self>) -> Vec<(String, Entry)> {
+    pub(crate) fn palette_entries(&self, cx: &mut Context<Self>) -> Vec<(String, Entry)> {
         let mut items: Vec<(String, Entry)> = Vec::new();
         let quick_select_on = self.cfg.quick_select.enabled;
         for (i, def) in ACTIONS
@@ -1215,7 +1221,12 @@ impl AppWindow {
             let mut e = Entry::new(Target::Tab(i), format!("tab:{}", tab.title));
             e.group = group::TABS;
             e.icon = Some(IconName::Terminal);
-            e.detail = Some(format!("tab {}", i + 1));
+            let chrome = crate::mux_host::tab_chrome(cx, tab.pane);
+            e.detail = Some(match &chrome.tooltip {
+                Some(t) => format!("tab {} · {t}", i + 1),
+                None => format!("tab {}", i + 1),
+            });
+            e.status = chrome.dot.or(chrome.badge);
             items.push((format!("Go to tab: {}", tab.title), e));
         }
         let current = *cx.global::<Theme>();
@@ -1626,7 +1637,17 @@ impl AppWindow {
         let _ = mux_host::host(cx).mux.activate_tab(self.mux_window, index);
         self.active_tab = index;
         self.entered_tab();
+        self.clear_active_attention(cx);
         cx.notify();
+    }
+
+    /// The pane the user is now looking at no longer needs to call for attention.
+    fn clear_active_attention(&mut self, cx: &mut Context<Self>) {
+        if let Some(pane) = self.tabs.get(self.active_tab).map(|t| t.pane) {
+            if mux_host::host(cx).mux.clear_attention(pane) {
+                cx.notify();
+            }
+        }
     }
 
     /// Before the active tab changes: copy mode and quick select belong to one pane's buffer,

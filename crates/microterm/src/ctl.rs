@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
+use mt_proto::{NotifyLevel, StatusState};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -54,9 +55,35 @@ EXAMPLES:
     #[command(subcommand)]
     Tab(TabCmd),
 
-    /// Panes: list, get, send-text, get-text, close.
+    /// Panes: list, get, send-text, get-text, run, wait, notify, status, close.
     #[command(subcommand)]
     Pane(PaneCmd),
+
+    /// Stream mux events as JSON lines until interrupted.
+    ///
+    /// One object per line: {"type":"pane.command_finished","pane":12,"exit_code":1,"ts":"…"}.
+    /// --type takes dotted names (workspace.*, window.*, tab.*, pane.added, pane.removed,
+    /// pane.title_changed, pane.cwd_changed, pane.exited, pane.command_finished,
+    /// pane.status_changed, pane.notification, domain.state_changed); --match keeps events whose
+    /// pane, tab or window the selector matches; --snapshot first prints the current tree as
+    /// {"type":"snapshot","tree":{…}}. pane.output is not streamed (use `pane wait`). Exits 2
+    /// when the GUI quits.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl events --type pane.command_finished,pane.notification
+  microterm ctl events --match 'title:build*' --snapshot
+  microterm ctl events --type 'pane.status_changed' | jq -r '.pane'")]
+    Events {
+        /// Comma-separated event types; a trailing `.*` matches a whole family.
+        #[arg(long = "type", value_name = "T", value_delimiter = ',')]
+        types: Vec<String>,
+        /// Selector for the pane, tab or window an event concerns.
+        #[arg(long = "match", value_name = "EXPR")]
+        expr: Option<String>,
+        /// Print the current tree first.
+        #[arg(long)]
+        snapshot: bool,
+    },
 
     /// Record a running pane to an asciicast v2 file.
     ///
@@ -101,6 +128,49 @@ EXAMPLES:
 
     /// Reload the config file now.
     ReloadConfig,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StatusCmd {
+    /// Set the status (default: $MICROTERM_PANE, never the focused pane).
+    ///
+    /// States: idle (no dot), working (accent), waiting (warning: "needs a human"), done
+    /// (success), error. Text is stripped of control characters and cut to ctl.status_max_len.
+    /// With --ttl the status clears itself, so a crashed agent leaves no stale marker. A status
+    /// also clears when the pane's process exits.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl pane status set --state working --progress 40 'running tests'
+  microterm ctl pane status set --state waiting --ttl 30s 'approve the deploy?'")]
+    Set {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// idle, working, waiting, done or error (default: working).
+        #[arg(long, value_name = "STATE")]
+        state: Option<StatusState>,
+        /// 0-100; draws a progress line along the tab's bottom edge.
+        #[arg(long, value_name = "PCT", value_parser = clap::value_parser!(u8).range(0..=100))]
+        progress: Option<u8>,
+        /// Clear the status after DUR (e.g. 30s, 5m).
+        #[arg(long, value_name = "DUR", value_parser = parse_duration_ms)]
+        ttl: Option<u64>,
+        /// Set the status of every pane the selector matches.
+        #[arg(long)]
+        all: bool,
+        text: Option<String>,
+    },
+    /// Remove the status.
+    Clear {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Clear every pane the selector matches.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Print the status (default: $MICROTERM_PANE, else the focused pane).
+    ///
+    /// With --json: {"pane":12,"status":{"state","text","progress","updated_at"}|null}.
+    Get(PaneTarget),
 }
 
 /// How a verb names its item: an explicit ID or a selector.
@@ -440,6 +510,35 @@ EXAMPLES:
         #[arg(long)]
         new_only: bool,
     },
+    /// Tell the human something: attention badge, toast and OS notification.
+    ///
+    /// Raises a badge on the pane's tab (colour by level) until the pane is focused, and per
+    /// [notifications] shows a toast when the pane is not visible and an OS notification when
+    /// microterm is unfocused; --desktop forces the latter. Limited to 5 per second per pane;
+    /// extras are dropped and counted. Defaults to $MICROTERM_PANE, never the focused pane.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl pane notify --level attention 'tests done'
+  microterm ctl pane notify --title build --level error --desktop 'failed'")]
+    Notify {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long)]
+        title: Option<String>,
+        /// info (accent badge), attention (warning) or error.
+        #[arg(long, value_name = "LEVEL", default_value = "info")]
+        level: NotifyLevel,
+        /// Always raise an OS notification.
+        #[arg(long)]
+        desktop: bool,
+        /// Notify every pane the selector matches.
+        #[arg(long)]
+        all: bool,
+        message: Option<String>,
+    },
+    /// Show what a process is doing on its tab: status dot, progress line and tooltip.
+    #[command(subcommand)]
+    Status(StatusCmd),
     /// Close a pane; closing a tab's last pane closes the tab, a window's last tab the window.
     ///
     /// Exits 8 without closing anything when confirm_close would ask, unless --force is given.

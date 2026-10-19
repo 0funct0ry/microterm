@@ -146,6 +146,11 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
     d.mark(old.gpu != new.gpu, "gpu", &[RestartRequired]);
     // Read when a request arrives; nothing to rebuild.
     d.mark(old.ctl != new.ctl, "ctl", &[Repaint]);
+    d.mark(
+        old.notifications != new.notifications,
+        "notifications",
+        &[Repaint],
+    );
     d
 }
 

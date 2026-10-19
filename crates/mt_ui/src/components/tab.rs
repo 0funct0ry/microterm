@@ -5,10 +5,11 @@ use gpui::{
     SharedString, Window,
 };
 
-use super::{theme, IconButton, StatusDot, StatusKind};
+use super::{theme, IconButton, StatusDot, StatusKind, Tooltip};
 use crate::{
     assets::IconName,
     metrics::{TAB_BAR_HEIGHT, TAB_MAX_WIDTH, TAB_MIN_WIDTH},
+    tab_chrome::TabChrome,
 };
 
 type MouseHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
@@ -49,6 +50,7 @@ pub struct Tab {
     title: SharedString,
     active: bool,
     dirty: bool,
+    chrome: TabChrome,
     /// Inline rename: shows this text with a caret instead of the title.
     editing: Option<SharedString>,
     drag: bool,
@@ -67,6 +69,7 @@ impl Tab {
             title: title.into(),
             active: false,
             dirty: false,
+            chrome: TabChrome::default(),
             editing: None,
             drag: false,
             on_drop: None,
@@ -91,6 +94,12 @@ impl Tab {
     /// Shows the dot for "a foreground process other than the shell is running".
     pub fn dirty(mut self, dirty: bool) -> Self {
         self.dirty = dirty;
+        self
+    }
+
+    /// Status dot, progress line, tooltip and attention badge (`ctl pane status|notify`).
+    pub fn chrome(mut self, chrome: TabChrome) -> Self {
+        self.chrome = chrome;
         self
     }
 
@@ -160,6 +169,8 @@ impl RenderOnce for Tab {
         let drop = self.on_drop;
         let drag_over = t.element_hover;
         let editing = self.editing.clone();
+        let chrome = self.chrome;
+        let progress_color = chrome.dot.map_or(t.accent, |k| kind_color(&t, k));
         gpui::div()
             .id(self.id)
             .group(group.clone())
@@ -183,8 +194,14 @@ impl RenderOnce for Tab {
                     .border_b_1()
                     .hover(move |s| s.bg(hover))
             })
-            .when(self.dirty, |el| {
+            // A status dot replaces the dirty dot: both are "something is running here".
+            .when_some(chrome.dot, |el, kind| el.child(StatusDot::new(kind)))
+            .when(self.dirty && chrome.dot.is_none(), |el| {
                 el.child(StatusDot::new(StatusKind::Accent))
+            })
+            .when_some(chrome.tooltip.clone(), |el, text| {
+                let text = SharedString::from(text);
+                el.tooltip(move |_, cx| cx.new(|_| Tooltip::new(text.clone())).into())
             })
             .child(match editing {
                 Some(text) => gpui::div()
@@ -201,6 +218,18 @@ impl RenderOnce for Tab {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .child(self.title),
+            })
+            .when_some(chrome.badge, |el, kind| el.child(StatusDot::new(kind)))
+            .when_some(chrome.progress, |el, pct| {
+                el.child(
+                    gpui::div()
+                        .absolute()
+                        .left_0()
+                        .bottom_0()
+                        .h(px(2.))
+                        .w(gpui::relative(f32::from(pct.min(100)) / 100.))
+                        .bg(progress_color),
+                )
             })
             .when(self.drag, |el| {
                 el.on_drag(drag_payload.clone(), |dragged, _, _, cx| {
@@ -232,6 +261,16 @@ impl RenderOnce for Tab {
             .when_some(right, |el, handler| {
                 el.on_mouse_down(MouseButton::Right, move |e, w, c| handler(e, w, c))
             })
+    }
+}
+
+fn kind_color(t: &crate::theme::Theme, kind: StatusKind) -> gpui::Hsla {
+    match kind {
+        StatusKind::Connected | StatusKind::Success => t.success,
+        StatusKind::Reconnecting | StatusKind::Warning => t.warning,
+        StatusKind::Error => t.error,
+        StatusKind::Idle => t.text_placeholder,
+        StatusKind::Accent => t.accent,
     }
 }
 

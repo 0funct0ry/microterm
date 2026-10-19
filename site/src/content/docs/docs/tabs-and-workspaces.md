@@ -18,6 +18,7 @@ microterm organises terminals as **workspace → window → tab**. Every tab is 
 `MoveTabRelative`, `RenameTab`, `CloseWindow`, `SpawnTabInDomain` and the workspace actions have no
 default keys; bind them under `[[keys]]` or run them from the command palette.
 
+- A **status dot**, a thin **progress line** along the bottom edge and an **attention badge** appear on a tab when a process uses `ctl pane status` or `ctl pane notify`; the status text is in the tab's tooltip. See [Notifications & status](/docs/notifications-and-status/).
 - **Reorder** tabs by dragging them; `MoveTabRelative(1)` / `(-1)` moves the active tab.
 - **Rename** with the tab's right-click menu or `RenameTab`. Type the name, `Enter` to keep it,
   `Esc` to cancel. A renamed tab keeps its name; clear the text to go back to the automatic title.

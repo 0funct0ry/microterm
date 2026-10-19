@@ -26,6 +26,19 @@ pub fn event_of(e: &MuxEvent) -> Event {
         MuxEvent::PaneRemoved { pane } => Event::PaneRemoved { pane },
         MuxEvent::PaneOutput { pane } => Event::PaneOutput { pane },
         MuxEvent::TitleChanged { pane } => Event::TitleChanged { pane },
+        MuxEvent::CwdChanged { pane } => Event::CwdChanged { pane },
+        MuxEvent::StatusChanged { pane } => Event::StatusChanged { pane },
+        MuxEvent::Notification {
+            pane,
+            level,
+            ref title,
+            ref message,
+        } => Event::Notification {
+            pane,
+            level,
+            title: title.clone(),
+            message: message.clone(),
+        },
         MuxEvent::PaneExited { pane, status } => Event::PaneExited { pane, status },
         MuxEvent::CommandFinished { pane, exit_code } => Event::CommandFinished { pane, exit_code },
         MuxEvent::TabAdded { window, tab } => Event::TabAdded { window, tab },
@@ -43,6 +56,8 @@ pub fn event_of(e: &MuxEvent) -> Event {
         },
         MuxEvent::WindowAdded { window } => Event::WindowAdded { window },
         MuxEvent::WindowRemoved { window } => Event::WindowRemoved { window },
+        MuxEvent::WorkspaceAdded { workspace } => Event::WorkspaceAdded { workspace },
+        MuxEvent::WorkspaceRenamed { workspace } => Event::WorkspaceRenamed { workspace },
         MuxEvent::WorkspaceSwitched { from, to } => Event::WorkspaceSwitched { from, to },
         MuxEvent::WorkspaceRemoved { workspace } => Event::WorkspaceRemoved { workspace },
         MuxEvent::DomainStateChanged { domain, ref state } => Event::DomainStateChanged {
@@ -167,6 +182,99 @@ pub fn read_only(rows: &Rows, req: &Request) -> Option<Result<Value, RpcError>> 
 /// The panes a `pane.*` request addresses.
 pub fn resolve_panes(rows: &Rows, t: &Target, verb: Verb) -> Result<Vec<Id>, RpcError> {
     ctl::resolve(t, &rows.panes, rows.focused_pane, verb)
+}
+
+/// One notification that got through the rate limit, for the host to surface (badge, toast, OS).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delivered {
+    pub pane: Id,
+    pub level: mt_proto::NotifyLevel,
+    pub title: Option<String>,
+    pub message: String,
+    pub desktop: bool,
+}
+
+/// `pane.status_set`: sanitises, applies and returns the affected panes.
+pub fn status_set(
+    mux: &mut Mux,
+    rows: &Rows,
+    p: &mt_proto::StatusSetParams,
+    max_len: usize,
+    now_ms: u64,
+) -> Result<Value, RpcError> {
+    if p.progress.is_some_and(|n| n > 100) {
+        return Err(RpcError::bad_request(
+            "--progress must be between 0 and 100",
+        ));
+    }
+    let panes = resolve_panes(rows, &p.target, Verb::Acting { all_allowed: true })?;
+    for &pane in &panes {
+        mux.set_pane_status(
+            pane,
+            p.state.unwrap_or_default(),
+            p.text.as_deref().unwrap_or(""),
+            p.progress,
+            p.ttl_ms,
+            max_len,
+            now_ms,
+        );
+    }
+    to_json(&mt_proto::ActResult { panes, dropped: 0 })
+}
+
+/// `pane.status_clear`.
+pub fn status_clear(mux: &mut Mux, rows: &Rows, t: &Target) -> Result<Value, RpcError> {
+    let panes = resolve_panes(rows, t, Verb::Acting { all_allowed: true })?;
+    for &pane in &panes {
+        mux.clear_pane_status(pane);
+    }
+    to_json(&mt_proto::ActResult { panes, dropped: 0 })
+}
+
+/// `pane.status_get`: reads from the live mux, so a status that just expired is gone.
+pub fn status_get(mux: &Mux, rows: &Rows, t: &Target) -> Result<Value, RpcError> {
+    let pane = ctl::resolve_one(t, &rows.panes, rows.focused_pane, Verb::ReadOnly)?;
+    to_json(&mt_proto::StatusResult {
+        pane,
+        status: mux
+            .pane(pane)
+            .and_then(|p| p.status.as_ref())
+            .map(|s| s.to_wire()),
+    })
+}
+
+/// `pane.notify`: runs each addressed pane through the rate limit, emits `Notification` events
+/// and returns what the host should surface. The result counts rate-limited drops.
+pub fn notify(
+    mux: &mut Mux,
+    rows: &Rows,
+    p: &mt_proto::NotifyParams,
+    max_len: usize,
+    now_ms: u64,
+) -> Result<(Value, Vec<Delivered>), RpcError> {
+    let panes = resolve_panes(rows, &p.target, Verb::Acting { all_allowed: true })?;
+    let message = mt_mux::sanitize(&p.message, max_len);
+    let title = p
+        .title
+        .as_deref()
+        .map(|t| mt_mux::sanitize(t, max_len))
+        .filter(|t| !t.is_empty());
+    let (mut delivered, mut dropped) = (Vec::new(), 0);
+    for &pane in &panes {
+        if mux.notify_pane(pane, p.level, title.clone(), message.clone(), now_ms) {
+            delivered.push(Delivered {
+                pane,
+                level: p.level,
+                title: title.clone(),
+                message: message.clone(),
+                desktop: p.desktop,
+            });
+        } else {
+            dropped += 1;
+        }
+    }
+    let result = to_json(&mt_proto::ActResult { panes, dropped })?;
+    Ok((result, delivered))
 }
 
 /// What a scripted close will remove (SPEC §12.3).
