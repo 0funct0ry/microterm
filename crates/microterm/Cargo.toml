@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "microterm"
+path = "src/lib.rs"
+
 [[bin]]
 name = "microterm"
 path = "src/main.rs"

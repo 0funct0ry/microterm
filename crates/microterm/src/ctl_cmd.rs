@@ -162,6 +162,12 @@ fn print_spawned(s: &Spawned) {
 pub fn run(args: CtlArgs) -> i32 {
     let json = args.json;
     JSON_ERRORS.store(json, Ordering::Relaxed);
+    // These two need no running instance (or connect on demand).
+    match &args.action {
+        CtlAction::Skill(cmd) => return microterm::agent::run_skill(cmd, json),
+        CtlAction::Mcp => return crate::mcp::run(),
+        _ => {}
+    }
     let mut c = match Client::connect() {
         Ok(c) => c,
         Err(e) => return client_err(e),
@@ -710,6 +716,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
             }
         }
         CtlAction::ReloadConfig => quiet(call(Request::ConfigReload)?),
+        CtlAction::Skill(_) | CtlAction::Mcp => unreachable!("handled in run()"),
     }
     Ok(())
 }

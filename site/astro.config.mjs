@@ -37,6 +37,7 @@ export default defineConfig({
             { label: 'Notifications & status', slug: 'docs/notifications-and-status' },
             { label: 'Shell integration', slug: 'docs/shell-integration' },
             { label: 'Recording & replay', slug: 'docs/recording-and-replay' },
+            { label: 'Agents & automation', slug: 'docs/agents-and-automation' },
           ],
         },
         {
@@ -52,6 +53,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'Actions', slug: 'docs/reference/actions' },
+            { label: 'Agent skill', slug: 'docs/reference/agent-skill' },
             { label: 'Environment variables', slug: 'docs/reference/environment-variables' },
             { label: 'Exit codes', slug: 'docs/reference/exit-codes' },
           ],

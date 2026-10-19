@@ -8,3 +8,4 @@ publish = false
 [dependencies]
 mt_theme = { path = "../mt_theme" }
 mt_ui = { path = "../mt_ui" }
+microterm = { path = "../microterm" }

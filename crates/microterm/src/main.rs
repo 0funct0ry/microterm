@@ -1,16 +1,18 @@
 mod cli;
 mod client;
 mod commands;
-mod ctl;
 mod ctl_cmd;
 mod headless;
 mod ipc;
+mod mcp;
 mod shell_integration;
 
 use std::sync::Arc;
 
 use clap::Parser;
 use mt_proto::SpawnParams;
+
+use microterm::ctl;
 
 use crate::cli::{Cli, Command};
 

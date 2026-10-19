@@ -14,7 +14,7 @@ microterm ctl workspace list | create NAME | switch NAME | rename OLD NEW | dele
 microterm ctl window    list | new | focus | close
 microterm ctl tab       list | new | focus | rename | close
 microterm ctl pane      list | get | send-text | get-text | run | wait | notify | status | close
-microterm ctl events | record | replay | reload-config
+microterm ctl events | record | replay | reload-config | skill | mcp
 ```
 
 Every resource has the same verbs where they make sense: `list`, `get`, `new`, `focus`, `rename`
@@ -183,3 +183,22 @@ microterm ctl reload-config
 ```
 
 Re-reads the config file immediately, as if it had just changed on disk.
+
+## skill
+
+```sh
+microterm ctl skill install|uninstall|show [--agent claude|codex|antigravity|generic|all]
+                                           [--scope user|project] [--dir PATH] [--print]
+```
+
+Installs agent-facing instructions for `ctl`. Needs no running instance. See
+[Agents & automation](/docs/agents-and-automation/).
+
+## mcp
+
+```sh
+microterm ctl mcp
+```
+
+Runs an MCP server on stdio that exposes `ctl` as tools. See
+[Agents & automation](/docs/agents-and-automation/).

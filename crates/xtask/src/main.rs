@@ -18,10 +18,16 @@ fn main() -> ExitCode {
 /// nothing and fails when a committed page is stale (CI).
 fn gen_docs(check: bool) -> ExitCode {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pages = [(
-        mt_ui::actions::REFERENCE_DOC_PATH,
-        mt_ui::actions::reference_markdown(),
-    )];
+    let pages = [
+        (
+            mt_ui::actions::REFERENCE_DOC_PATH,
+            mt_ui::actions::reference_markdown(),
+        ),
+        (
+            microterm::agent::render::REFERENCE_DOC_PATH,
+            microterm::agent::render::reference_markdown(),
+        ),
+    ];
     let mut stale = 0;
     for (rel, content) in pages {
         let path = root.join(rel);

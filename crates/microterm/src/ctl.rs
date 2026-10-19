@@ -128,6 +128,57 @@ EXAMPLES:
 
     /// Reload the config file now.
     ReloadConfig,
+
+    /// Install, remove or print the agent skill for Claude Code, Codex and others.
+    ///
+    /// Writes instructions that teach a coding agent to drive microterm with `ctl`: a skill
+    /// directory for Claude Code, or a managed block (between `<!-- microterm:begin -->` and
+    /// `<!-- microterm:end -->`) in AGENTS.md. Idempotent; content it did not write is never
+    /// touched; every file written or removed is printed. Needs no running microterm.
+    #[command(subcommand)]
+    Skill(SkillCmd),
+
+    /// Run an MCP server on stdio that exposes ctl as tools.
+    ///
+    /// For harnesses that prefer tools to shell commands. Register it as the command
+    /// `microterm ctl mcp`. It talks to the running GUI over the IPC socket; tool results are the
+    /// same JSON as `--json`. Stdout carries only the protocol.
+    #[command(after_help = "\
+EXAMPLES:
+  claude mcp add microterm -- microterm ctl mcp
+  # Codex, in ~/.codex/config.toml:
+  #   [mcp_servers.microterm]
+  #   command = \"microterm\"
+  #   args = [\"ctl\", \"mcp\"]")]
+    Mcp,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SkillCmd {
+    /// Write the skill (or its managed block) for the chosen agent(s).
+    Install(SkillOpts),
+    /// Remove exactly what `install` wrote.
+    Uninstall(SkillOpts),
+    /// Print the rendered skill without writing anything.
+    Show(SkillOpts),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SkillOpts {
+    /// Which agent to write for. antigravity currently falls back to generic (AGENTS.md).
+    #[arg(long, value_enum, default_value_t = crate::agent::Agent::Claude)]
+    pub agent: crate::agent::Agent,
+    /// user (your home directory) or project (the current directory). Default: user for
+    /// claude and codex, project for generic and antigravity.
+    #[arg(long, value_enum)]
+    pub scope: Option<crate::agent::Scope>,
+    /// Use this directory instead of the scope's: the skills directory for claude, the
+    /// directory holding AGENTS.md for the others.
+    #[arg(long, value_name = "PATH")]
+    pub dir: Option<PathBuf>,
+    /// Print what would be written instead of writing it.
+    #[arg(long)]
+    pub print: bool,
 }
 
 #[derive(Subcommand, Debug)]

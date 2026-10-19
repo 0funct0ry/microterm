@@ -22,6 +22,7 @@ pub const MAX_LINE: usize = 1024 * 1024;
 
 pub mod mux;
 pub mod selector;
+pub mod tools;
 
 pub use selector::{Resource, Selector};
 

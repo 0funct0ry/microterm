@@ -1557,3 +1557,277 @@ fn events_reject_a_bad_selector_and_command_events_use_dotted_names() {
     assert_eq!(ev["type"], "pane.command_finished");
     assert_eq!(ev["exit_code"], 7);
 }
+
+// ---- M10.4: agent integration -------------------------------------------------------------
+
+/// A `microterm ctl mcp` child talking newline-delimited JSON-RPC.
+struct Mcp {
+    child: Child,
+    out: BufReader<std::process::ChildStdout>,
+    next: u64,
+}
+
+impl Mcp {
+    fn start(inst: &Instance) -> Mcp {
+        let mut child = Process::new(assert_cmd::cargo::cargo_bin("microterm"))
+            .args(["ctl", "mcp"])
+            .envs(Instance::env(&inst.home))
+            .env_remove("MICROTERM_UNIX_SOCKET")
+            .env_remove("MICROTERM_PANE")
+            .env_remove("MICROTERM_TAB")
+            .env_remove("MICROTERM_WINDOW")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        Mcp {
+            child,
+            out,
+            next: 1,
+        }
+    }
+
+    fn rpc(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next;
+        self.next += 1;
+        let msg = serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{msg}").unwrap();
+        stdin.flush().unwrap();
+        let mut line = String::new();
+        self.out.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["id"], id);
+        v
+    }
+
+    /// `tools/call`, returning `(isError, parsed text)`.
+    fn tool(&mut self, name: &str, args: Value) -> (bool, Value) {
+        let r = self.rpc(
+            "tools/call",
+            serde_json::json!({"name":name,"arguments":args}),
+        );
+        let res = &r["result"];
+        let text = res["content"][0]["text"].as_str().unwrap();
+        (
+            res["isError"].as_bool().unwrap(),
+            serde_json::from_str(text).unwrap(),
+        )
+    }
+}
+
+impl Drop for Mcp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn mcp_initialize_list_and_tools_match_ctl_json() {
+    let inst = Instance::start();
+    let mut m = Mcp::start(&inst);
+    let init = m.rpc("initialize", serde_json::json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}));
+    assert_eq!(init["result"]["serverInfo"]["name"], "microterm");
+    let list = m.rpc("tools/list", serde_json::json!({}));
+    let names: Vec<_> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names.len(), 12);
+    assert!(names.contains(&"microterm_pane_run".to_string()));
+
+    // microterm_list == ctl list --json
+    let (err, via_mcp) = m.tool("microterm_list", serde_json::json!({}));
+    assert!(!err);
+    assert_eq!(via_mcp, inst.list());
+
+    // tab_new, pane_read and send_text round-trip like the CLI.
+    let (err, spawned) = m.tool(
+        "microterm_tab_new",
+        serde_json::json!({"title":"mcp","command":["sh","-c","echo hello-mcp; sleep 60"]}),
+    );
+    assert!(!err, "{spawned}");
+    let pane = spawned["pane"].as_u64().unwrap();
+    let ps = pane.to_string();
+    inst.wait_text(&ps, "hello-mcp");
+    let (err, text) = m.tool("microterm_pane_read", serde_json::json!({"pane": pane}));
+    assert!(!err);
+    assert_eq!(text, inst.json(&["pane", "get-text", "--pane", &ps]));
+
+    // status_set / pane list parity
+    let (err, _) = m.tool(
+        "microterm_status_set",
+        serde_json::json!({"pane":pane,"state":"waiting","text":"approve?"}),
+    );
+    assert!(!err);
+    let (_, got) = m.tool(
+        "microterm_status_set",
+        serde_json::json!({"pane":pane,"state":"done"}),
+    );
+    let cli = inst.json(&["pane", "status", "set", "--pane", &ps, "--state", "done"]);
+    assert_eq!(got, cli);
+
+    // pane_run in spawn mode returns the same shape as ctl pane run --json.
+    let (err, run) = m.tool(
+        "microterm_pane_run",
+        serde_json::json!({"command":["sh","-c","echo from-run; exit 3"]}),
+    );
+    assert!(!err, "{run}");
+    assert_eq!(run["exit_code"], 3);
+    assert!(run["output"].as_str().unwrap().contains("from-run"));
+    let cli_run: Value = serde_json::from_str(&inst.ctl(&[
+        "pane",
+        "run",
+        "--json",
+        "--",
+        "sh",
+        "-c",
+        "echo from-run; exit 3",
+    ]))
+    .unwrap();
+    assert_eq!(cli_run["exit_code"], run["exit_code"]);
+
+    // Errors are tool errors carrying the ctl error object and exit code.
+    let (err, e) = m.tool("microterm_pane_read", serde_json::json!({"pane": 99999}));
+    assert!(err);
+    assert_eq!(e["error"]["code"], "not_found");
+    assert_eq!(e["exit_code"], 3);
+    let (err, e) = m.tool("microterm_pane_send_text", serde_json::json!({"text":"x"}));
+    assert!(
+        err,
+        "send_text without a target must not fall back to focus: {e}"
+    );
+    let (err, e) = m.tool("microterm_pane_read", serde_json::json!({"bogus": 1}));
+    assert!(err);
+    assert_eq!(e["error"]["code"], "bad_request");
+
+    // close needs --force semantics only when the policy would prompt; closing works.
+    let (err, _) = m.tool(
+        "microterm_pane_close",
+        serde_json::json!({"pane":pane,"force":true}),
+    );
+    assert!(!err);
+}
+
+#[test]
+fn mcp_events_next_long_polls() {
+    let inst = Instance::start();
+    let mut m = Mcp::start(&inst);
+    // Empty within the timeout.
+    let t0 = Instant::now();
+    let (err, v) = m.tool(
+        "microterm_events_next",
+        serde_json::json!({"types":["pane.exited"],"timeout_ms":300}),
+    );
+    assert!(!err);
+    assert_eq!(v, serde_json::json!([]));
+    assert!(t0.elapsed() >= Duration::from_millis(250));
+    // Then an event arrives; the subscription is kept between calls.
+    let (_, _) = m.tool(
+        "microterm_tab_new",
+        serde_json::json!({"command":["sh","-c","exit 0"]}),
+    );
+    let (_, v) = m.tool(
+        "microterm_events_next",
+        serde_json::json!({"types":["pane.exited"],"timeout_ms":10000,"max":1}),
+    );
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "{v}");
+    assert_eq!(arr[0]["type"], "pane.exited");
+}
+
+#[test]
+fn mcp_without_a_running_instance_reports_a_tool_error() {
+    let home = format!("/tmp/mte-noinst-{}", std::process::id());
+    std::fs::create_dir_all(format!("{home}/run")).unwrap();
+    let mut child = Process::new(assert_cmd::cargo::cargo_bin("microterm"))
+        .args(["ctl", "mcp"])
+        .envs(Instance::env(&home))
+        .env_remove("MICROTERM_UNIX_SOCKET")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.as_mut().unwrap(), r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"microterm_list","arguments":{{}}}}}}"#).unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let v: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(v["result"]["isError"], true);
+    drop(child.stdin.take());
+    assert!(
+        child.wait().unwrap().success(),
+        "EOF on stdin ends the server cleanly"
+    );
+}
+
+fn skill_cmd(home: &std::path::Path, cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::cargo_bin("microterm")
+        .unwrap()
+        .args(["ctl", "skill"])
+        .args(args)
+        .env("HOME", home)
+        .env_remove("CODEX_HOME")
+        .current_dir(cwd)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn skill_install_show_uninstall_end_to_end() {
+    let base = std::path::PathBuf::from(format!("/tmp/mte-skill-{}", std::process::id()));
+    let (home, proj) = (base.join("home"), base.join("proj"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&proj).unwrap();
+    // Works with no running instance.
+    let out = skill_cmd(&home, &proj, &["install", "--agent", "claude"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let path = home.join(".claude/skills/microterm-ctl/SKILL.md");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("wrote {}", path.display())));
+    let again = skill_cmd(&home, &proj, &["install", "--agent", "claude"]);
+    assert!(String::from_utf8_lossy(&again.stdout).starts_with("unchanged "));
+
+    // show == what was installed
+    let shown = skill_cmd(&home, &proj, &["show", "--agent", "claude"]);
+    assert_eq!(
+        String::from_utf8(shown.stdout).unwrap(),
+        std::fs::read_to_string(&path).unwrap()
+    );
+
+    // --print writes nothing
+    let p = skill_cmd(&home, &proj, &["install", "--agent", "generic", "--print"]);
+    assert!(String::from_utf8_lossy(&p.stdout).starts_with("would write "));
+    assert!(!proj.join("AGENTS.md").exists());
+
+    // AGENTS.md keeps foreign content and round-trips
+    std::fs::write(proj.join("AGENTS.md"), "# mine\n").unwrap();
+    let out = skill_cmd(&home, &proj, &["install", "--agent", "generic", "--json"]);
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["files"][0]["action"], "wrote");
+    skill_cmd(&home, &proj, &["uninstall", "--agent", "generic"]);
+    assert_eq!(
+        std::fs::read_to_string(proj.join("AGENTS.md")).unwrap(),
+        "# mine\n"
+    );
+    let out = skill_cmd(&home, &proj, &["uninstall", "--agent", "claude"]);
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("removed "));
+    assert!(!path.exists());
+
+    // generic + user scope is a usage error (exit 1)
+    let bad = skill_cmd(
+        &home,
+        &proj,
+        &["install", "--agent", "generic", "--scope", "user"],
+    );
+    assert_eq!(bad.status.code(), Some(1));
+    let _ = std::fs::remove_dir_all(&base);
+}
