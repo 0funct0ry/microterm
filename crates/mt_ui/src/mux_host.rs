@@ -18,6 +18,7 @@ use mt_term::Terminal;
 use serde_json::{json, Value};
 
 use crate::ipc_ops::{self, Recorders};
+use crate::ipc_pending::{CallCtx, PaneAccess, PaneRuntime};
 use crate::{app::AppWindow, app::TabView, settings::Settings, ssh_host::SshHub};
 
 pub struct MuxHost {
@@ -34,6 +35,8 @@ pub struct MuxHost {
     pub(crate) socket: Option<PathBuf>,
     /// SSH domain connections.
     pub(crate) ssh: SshHub,
+    /// Pane exits and the `pane.run` / `pane.wait` calls still waiting.
+    pub(crate) runtime: PaneRuntime,
 }
 
 impl Global for MuxHost {}
@@ -48,6 +51,7 @@ impl MuxHost {
             recorders: Recorders::default(),
             socket: None,
             ssh: SshHub::default(),
+            runtime: PaneRuntime::default(),
         }
     }
 
@@ -378,9 +382,8 @@ fn rows(cx: &mut App) -> Rows {
     let live: HashMap<Id, Live> = panes
         .into_iter()
         .map(|p| {
-            let l = terminal(cx, p)
-                .map(|t| ipc_ops::live_of(&t))
-                .unwrap_or_default();
+            let term = terminal(cx, p);
+            let l = ipc_ops::live_with_exit(term.as_deref(), host(cx).runtime.exit_of(p));
             (p, l)
         })
         .collect();
@@ -482,6 +485,7 @@ fn kill_pane(cx: &mut App, pane: Id) -> Reply {
     let term = terminal(cx, pane);
     let h = host(cx);
     h.recorders.finish(pane, term.as_deref());
+    h.runtime.forget(pane);
     h.pending.remove(&pane);
     let (window, tab, closed) = h
         .mux
@@ -620,7 +624,117 @@ fn replay(cx: &mut App, p: &mt_proto::ReplayParams) -> Reply {
     )
 }
 
-/// Executes one IPC request on the GPUI main thread (SPEC §12.2).
+/// `[ctl].capture_max_bytes`.
+fn capture_cap(cx: &App) -> usize {
+    cx.global::<Settings>()
+        .config
+        .ctl
+        .capture_max_bytes
+        .min(usize::MAX as u64) as usize
+}
+
+/// The mux as the pending `pane.run` / `pane.wait` calls see it.
+struct GuiAccess<'a>(&'a mut App);
+
+impl PaneAccess for GuiAccess<'_> {
+    fn exists(&mut self, pane: Id) -> bool {
+        host(self.0).mux.locate_pane(pane).is_some()
+    }
+    fn terminal(&mut self, pane: Id) -> Option<Arc<Terminal>> {
+        terminal(self.0, pane)
+    }
+}
+
+/// Runs `f` on the runtime with a [`GuiAccess`]; the runtime is moved out of the host meanwhile
+/// so that access can borrow the app.
+fn with_runtime<R>(cx: &mut App, f: impl FnOnce(&mut PaneRuntime, &mut GuiAccess) -> R) -> R {
+    let mut rt = std::mem::take(&mut host(cx).runtime);
+    let r = f(&mut rt, &mut GuiAccess(cx));
+    let h = host(cx);
+    // Exits recorded while the runtime was out (none today) would be lost; keep the newest.
+    let newer = std::mem::replace(&mut h.runtime, rt);
+    drop(newer);
+    r
+}
+
+/// Answers the pending `pane.run` / `pane.wait` calls whose condition now holds. Called a few
+/// times a second.
+pub fn poll_pending(cx: &mut App) {
+    if !host(cx).runtime.has_pending() {
+        return;
+    }
+    with_runtime(cx, |rt, access| rt.poll(access));
+}
+
+/// What to do after a pane's process ended: records the exit and reports whether the tab must
+/// stay (`pane run --keep`).
+pub(crate) fn on_pane_exit(cx: &mut App, pane: Id, term: &Terminal, status: Option<i32>) -> bool {
+    let h = host(cx);
+    h.mux.notify_exited(pane, status);
+    h.runtime.on_exit(pane, Some(term), status)
+}
+
+pub(crate) fn on_command_finished(cx: &mut App, pane: Id, exit_code: Option<i32>) {
+    host(cx).mux.notify_command_finished(pane, exit_code);
+}
+
+/// `pane.run`: a new tab (spawn mode) or a line typed into an existing shell (`--in`).
+fn run(cx: &mut App, p: mt_proto::RunParams, ctx: CallCtx) -> Option<Reply> {
+    let cap = capture_cap(cx);
+    if let Some(target) = p.in_pane.clone() {
+        let pane =
+            match ipc_ops::resolve_panes(&rows(cx), &target, Verb::Acting { all_allowed: false }) {
+                Ok(v) => v[0],
+                Err(e) => return Some(Err(e)),
+            };
+        return with_runtime(cx, |rt, access| rt.begin_run_in(access, pane, &p, cap, ctx));
+    }
+    if p.spawn.command.as_ref().is_none_or(|c| c.is_empty()) {
+        return Some(Err(RpcError::bad_request("run needs a command after `--`")));
+    }
+    let spawned = match spawn(cx, &p.spawn) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
+    };
+    let Ok(s) = serde_json::from_value::<Spawned>(spawned) else {
+        return Some(Err(RpcError::internal("bad spawn result")));
+    };
+    host(cx).runtime.mark_run(s.pane, p.keep, !p.detach);
+    with_runtime(cx, |rt, _| rt.begin_run_spawn(s.pane, s.tab, &p, cap, ctx))
+}
+
+/// `pane.wait`.
+fn wait(cx: &mut App, p: mt_proto::WaitParams, ctx: CallCtx) -> Option<Reply> {
+    let pane = match ipc_ops::resolve_panes(&rows(cx), &p.target, Verb::ReadOnly) {
+        Ok(v) => v[0],
+        Err(e) => return Some(Err(e)),
+    };
+    with_runtime(cx, |rt, access| rt.begin_wait(access, pane, &p, ctx))
+}
+
+/// Executes one IPC call on the GPUI main thread and sends its answer, now or (for `pane.run`
+/// and `pane.wait`) when it is ready.
+pub fn dispatch(cx: &mut App, call: mt_proto::Call) {
+    let mt_proto::Call {
+        request,
+        reply,
+        cancel,
+    } = call;
+    let ctx = CallCtx {
+        reply: reply.clone(),
+        cancel,
+    };
+    let answer = match request {
+        Request::PaneRun(p) => run(cx, p, ctx),
+        Request::PaneWait(p) => wait(cx, p, ctx),
+        other => Some(handle_call(cx, other)),
+    };
+    if let Some(a) = answer {
+        let _ = reply.send(a);
+    }
+}
+
+/// Executes one non-deferred IPC request on the GPUI main thread (SPEC §12.2).
 pub fn handle_call(cx: &mut App, request: Request) -> Reply {
     match request {
         Request::MuxList
@@ -664,8 +778,11 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         Request::PaneGetText(p) => {
             let panes = ipc_ops::resolve_panes(&rows(cx), &p.target, Verb::ReadOnly)?;
             let term = pane_terminal(cx, panes[0])?;
-            to_json(&ipc_ops::get_text(&term, &p)?)
+            ipc_ops::get_text(&term, &p, capture_cap(cx))
         }
+        Request::PaneRun(_) | Request::PaneWait(_) => Err(RpcError::internal(
+            "pane.run and pane.wait answer later; they go through dispatch()",
+        )),
         Request::PaneClose(_) | Request::TabClose(_) | Request::WindowClose(_) => {
             close(cx, &request)
         }
@@ -899,6 +1016,7 @@ mod tests {
                     start_line: None,
                     end_line: None,
                     escapes: false,
+                    last_command: None,
                 })
             )
             .unwrap_err()

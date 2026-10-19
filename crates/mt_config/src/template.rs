@@ -113,6 +113,9 @@ modifier = "cmd"                 # "cmd" | "ctrl" | "none"
 
 [gpu]
 prefer = "high_performance"      # "high_performance" | "low_power" (restart required)
+
+[ctl]
+capture_max_bytes = 1048576      # cap on output returned by `pane run` / `pane get-text` (tail kept)
 "##;
 
 #[cfg(test)]

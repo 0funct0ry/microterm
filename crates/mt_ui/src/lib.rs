@@ -9,6 +9,7 @@ pub mod components;
 pub mod copy_mode;
 mod gpu_check;
 pub mod ipc_ops;
+pub mod ipc_pending;
 pub mod keychips;
 pub mod ls_fonts;
 pub mod metrics;
@@ -125,13 +126,20 @@ pub fn run(opts: RunOptions) {
             if let Some(calls) = opts.ipc.as_ref().map(|i| i.calls.clone()) {
                 cx.spawn(async move |cx| {
                     while let Ok(call) = calls.recv().await {
-                        let ok = cx.update(|cx| {
-                            let result = mux_host::handle_call(cx, call.request);
-                            let _ = call.reply.send(result);
-                        });
+                        let ok = cx.update(|cx| mux_host::dispatch(cx, call));
                         if ok.is_err() {
                             break;
                         }
+                    }
+                })
+                .detach();
+                // `pane.run` / `pane.wait` answer when their condition holds.
+                cx.spawn(async move |cx| loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                    if cx.update(mux_host::poll_pending).is_err() {
+                        break;
                     }
                 })
                 .detach();

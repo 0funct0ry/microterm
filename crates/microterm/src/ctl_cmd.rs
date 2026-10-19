@@ -3,7 +3,8 @@
 //! Every command prints its result on stdout (`--json`: the raw IPC `result`) and errors on
 //! stderr (`--json`: `{"error":{"code","message","candidates"?}}`), and returns the exit codes
 //! of SPEC §12.3: 0 ok, 1 usage, 2 no running instance, 3 target not found, 4 protocol/version
-//! mismatch, 5 ambiguous target, 8 confirmation required.
+//! mismatch, 5 ambiguous target, 6 timeout, 7 needs shell integration, 8 confirmation required,
+//! 9 pane busy.
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
@@ -11,9 +12,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use mt_proto::{
-    exit, CallerEnv, ErrorCode, Event, GetTextParams, MuxSnapshot, PaneInfo, RecordStartParams,
-    ReplayParams, Request, Resource, SendTextParams, SpawnParams, Spawned, TabFocusParams, TabInfo,
-    TabRenameParams, Target, Text, WindowInfo, WorkspaceInfo,
+    exit, CallerEnv, CommandText, ErrorCode, Event, GetTextParams, MuxSnapshot, PaneInfo,
+    RecordStartParams, ReplayParams, Request, Resource, RunParams, RunResult, Selector,
+    SendTextParams, SpawnParams, Spawned, TabFocusParams, TabInfo, TabRenameParams, Target, Text,
+    WaitParams, WindowInfo, WorkspaceInfo,
 };
 use serde_json::{json, Value};
 
@@ -32,6 +34,9 @@ fn fail(code: i32, msg: impl std::fmt::Display) -> i32 {
             exit::NO_INSTANCE => "no_instance",
             exit::NOT_FOUND => "not_found",
             exit::VERSION_MISMATCH => "version_mismatch",
+            exit::TIMEOUT => "timeout",
+            exit::NEEDS_SHELL_INTEGRATION => "needs_shell_integration",
+            exit::BUSY => "busy",
             _ => "bad_request",
         };
         eprintln!(
@@ -451,19 +456,110 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                 start_line,
                 end_line,
                 escapes,
+                last_command,
             } => {
                 let v = call(Request::PaneGetText(GetTextParams {
                     target: pane_target(target, env),
                     start_line,
                     end_line,
                     escapes,
+                    last_command,
                 }))?;
                 if json {
                     print_json(&v);
+                } else if last_command.is_some() {
+                    let t: CommandText = decode(v)?;
+                    let _ = std::io::stdout().lock().write_all(t.text.as_bytes());
                 } else {
                     let t: Text = decode(v)?;
                     let mut out = std::io::stdout().lock();
                     let _ = out.write_all(t.text.as_bytes());
+                }
+            }
+            PaneCmd::Run {
+                window,
+                new_window,
+                workspace,
+                domain,
+                cwd,
+                title,
+                keep,
+                detach,
+                timeout,
+                propagate_exit,
+                in_pane,
+                command,
+            } => {
+                let mut params = RunParams {
+                    keep,
+                    detach,
+                    timeout_ms: timeout,
+                    ..Default::default()
+                };
+                match in_pane {
+                    Some(t) => {
+                        params.in_pane = Some(in_target(&t, env));
+                        params.line = Some(command.join(" "));
+                    }
+                    None => {
+                        params.spawn = SpawnParams {
+                            window,
+                            new_window,
+                            workspace,
+                            domain,
+                            cwd: cwd.as_deref().map(abs),
+                            title,
+                            command: Some(command),
+                            ..Default::default()
+                        };
+                    }
+                }
+                let v = call(Request::PaneRun(params))?;
+                let r: RunResult = decode(v.clone())?;
+                if json {
+                    print_json(&v);
+                } else if detach {
+                    println!("pane={} tab={}", r.pane, r.tab.unwrap_or_default());
+                } else if let Some(o) = &r.output {
+                    let _ = std::io::stdout().lock().write_all(o.as_bytes());
+                }
+                if r.timed_out {
+                    return Err(exit::TIMEOUT);
+                }
+                if propagate_exit {
+                    return propagated(&r);
+                }
+            }
+            PaneCmd::Wait {
+                target,
+                pane,
+                select,
+                matches,
+                text,
+                idle,
+                exit: wait_exit,
+                command_finished,
+                timeout,
+                new_only,
+            } => {
+                let params = wait_params(
+                    WaitArgs {
+                        target,
+                        pane,
+                        select,
+                        matches,
+                        text,
+                        idle,
+                        exit: wait_exit,
+                        command_finished,
+                        timeout,
+                        new_only,
+                    },
+                    env,
+                );
+                let v = call(Request::PaneWait(params))?;
+                if json {
+                    print_json(&v);
                 }
             }
             PaneCmd::Close { target, force, all } => {
@@ -684,4 +780,172 @@ pub fn completions(shell: crate::cli::Shell) -> i32 {
     let mut cmd = crate::cli::Cli::command();
     clap_complete::generate(shell, &mut cmd, "microterm", &mut std::io::stdout());
     exit::OK
+}
+
+/// A `pane run --in` TARGET: a pane id, a selector, or (empty) the caller's own pane.
+fn in_target(t: &str, env: CallerEnv) -> Target {
+    let t = t.trim();
+    match t.parse::<u64>() {
+        Ok(id) => Target::pane(id),
+        Err(_) if t.is_empty() => Target::default().with_env(Resource::Pane, env),
+        Err(_) => Target::matching(t),
+    }
+}
+
+/// The exit status `--propagate-exit` asks for: the command's own, except that statuses which
+/// would read as ctl's own exit codes (1-9) become 1.
+fn propagated(r: &RunResult) -> Result<(), i32> {
+    let code = match (r.exit_code, r.signal) {
+        (Some(c), _) => c,
+        (None, Some(sig)) => 128 + sig,
+        (None, None) => 1,
+    };
+    match code {
+        0 => Ok(()),
+        1..=9 => Err(1),
+        c => Err(c.clamp(10, 255)),
+    }
+}
+
+/// The flags of `pane wait`, before they are sorted into a target and conditions.
+struct WaitArgs {
+    target: Option<String>,
+    pane: Option<u64>,
+    select: Option<String>,
+    matches: Vec<String>,
+    text: Vec<String>,
+    idle: Option<u64>,
+    exit: bool,
+    command_finished: bool,
+    timeout: Option<u64>,
+    new_only: bool,
+}
+
+/// `--match` values that read as pane selectors choose the pane; the others are regexes.
+fn wait_params(a: WaitArgs, env: CallerEnv) -> WaitParams {
+    let mut selectors: Vec<String> = a.select.into_iter().collect();
+    let mut regexes = a.text;
+    let mut pane = a.pane;
+    if let Some(t) = a.target {
+        match t.trim().parse::<u64>() {
+            Ok(id) => pane = pane.or(Some(id)),
+            Err(_) => selectors.push(t),
+        }
+    }
+    for m in a.matches {
+        if Selector::is_pane_selector(&m) {
+            selectors.push(m);
+        } else {
+            regexes.push(m);
+        }
+    }
+    let target = Target {
+        pane,
+        expr: (!selectors.is_empty()).then(|| selectors.join(",")),
+        ..Default::default()
+    }
+    .with_env(Resource::Pane, env);
+    WaitParams {
+        target,
+        matches: regexes,
+        idle_ms: a.idle,
+        exit: a.exit,
+        command_finished: a.command_finished,
+        timeout_ms: a.timeout,
+        new_only: a.new_only,
+    }
+}
+
+#[cfg(test)]
+mod wait_arg_tests {
+    use super::*;
+
+    fn args(matches: &[&str]) -> WaitArgs {
+        WaitArgs {
+            target: None,
+            pane: None,
+            select: None,
+            matches: matches.iter().map(|s| s.to_string()).collect(),
+            text: vec![],
+            idle: None,
+            exit: false,
+            command_finished: false,
+            timeout: None,
+            new_only: false,
+        }
+    }
+
+    #[test]
+    fn match_values_are_sorted_into_selector_and_regexes() {
+        let p = wait_params(
+            args(&["title:dev", "ready on", "cwd:~/x"]),
+            CallerEnv::default(),
+        );
+        assert_eq!(p.target.expr.as_deref(), Some("title:dev,cwd:~/x"));
+        assert_eq!(p.matches, vec!["ready on".to_string()]);
+    }
+
+    #[test]
+    fn explicit_text_is_never_a_selector_and_the_caller_pane_is_the_default() {
+        let mut a = args(&[]);
+        a.text = vec!["title:dev".into()];
+        let env = CallerEnv {
+            pane: Some(7),
+            ..Default::default()
+        };
+        let p = wait_params(a, env);
+        assert_eq!(p.matches, vec!["title:dev".to_string()]);
+        assert_eq!(p.target.pane, Some(7));
+        assert!(p.target.expr.is_none());
+        // An explicit selector beats the environment.
+        let p = wait_params(args(&["title:dev"]), env);
+        assert_eq!(p.target.pane, None);
+    }
+
+    #[test]
+    fn positional_target_is_an_id_or_a_selector() {
+        let mut a = args(&[]);
+        a.target = Some("12".into());
+        assert_eq!(wait_params(a, CallerEnv::default()).target.pane, Some(12));
+        let mut a = args(&[]);
+        a.target = Some("title:x*".into());
+        assert_eq!(
+            wait_params(a, CallerEnv::default()).target.expr.as_deref(),
+            Some("title:x*")
+        );
+    }
+
+    #[test]
+    fn propagated_status_avoids_the_ctl_exit_codes() {
+        let r = |c, s| RunResult {
+            pane: 1,
+            tab: None,
+            exit_code: c,
+            signal: s,
+            duration_ms: None,
+            output: None,
+            truncated: false,
+            timed_out: false,
+        };
+        assert_eq!(propagated(&r(Some(0), None)), Ok(()));
+        assert_eq!(propagated(&r(Some(1), None)), Err(1));
+        assert_eq!(
+            propagated(&r(Some(6), None)),
+            Err(1),
+            "collides with timeout"
+        );
+        assert_eq!(propagated(&r(Some(42), None)), Err(42));
+        assert_eq!(propagated(&r(None, Some(9)),), Err(137));
+    }
+
+    #[test]
+    fn in_targets_accept_ids_selectors_and_the_environment() {
+        let env = CallerEnv {
+            pane: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(in_target("12", env).pane, Some(12));
+        assert_eq!(in_target("title:x", env).expr.as_deref(), Some("title:x"));
+        assert_eq!(in_target("", env).pane, Some(3));
+    }
 }

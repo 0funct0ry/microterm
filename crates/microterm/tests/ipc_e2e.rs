@@ -835,6 +835,8 @@ fn completions_for_all_shells() {
             "pane",
             "send-text",
             "get-text",
+            "run",
+            "wait",
             "close",
             "focus",
             "rename",
@@ -850,8 +852,454 @@ fn completions_for_all_shells() {
                 assert!(s.contains(flag), "{shell} completions miss --{flag}");
             }
         }
+        if shell != "fish" {
+            for flag in [
+                "last-command",
+                "propagate-exit",
+                "command-finished",
+                "new-only",
+                "detach",
+            ] {
+                assert!(s.contains(flag), "{shell} completions miss --{flag}");
+            }
+        }
         for gone in ["activate-tab", "set-tab-title", "kill-pane"] {
             assert!(!s.contains(gone), "{shell} completions still have {gone:?}");
         }
     }
+}
+
+// ---- M10.2: run, wait and last-command output ------------------------------------------------
+
+/// A shell stand-in that emits OSC 133 around every line it evaluates.
+const MARKED_SHELL: &str = r#"printf '\033]133;A\007$ \033]133;B\007'
+while IFS= read -r line; do
+  printf '\033]133;C\007'
+  eval "$line"
+  st=$?
+  printf '\033]133;D;%d\007' "$st"
+  printf '\033]133;A\007$ \033]133;B\007'
+done"#;
+
+impl Instance {
+    /// A pane running [`MARKED_SHELL`], ready at its first prompt.
+    fn marked_shell(&self) -> String {
+        let pane = self.spawn_sh(MARKED_SHELL, &[]);
+        self.wait_text(&pane, "$");
+        pane
+    }
+
+    fn ctl_json_code(&self, args: &[&str]) -> (i32, Value, String) {
+        // `--json` goes first: after `--` it would belong to the command.
+        let mut a = vec!["ctl", "--json"];
+        a.extend_from_slice(args);
+        let out = self.cmd(&a).output().unwrap();
+        (
+            out.status.code().unwrap(),
+            serde_json::from_slice(&out.stdout).unwrap_or(Value::Null),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+}
+
+#[test]
+fn run_spawn_returns_output_and_status_and_closes_the_tab() {
+    let mt = Instance::start();
+    let (code, v, _) = mt.ctl_json_code(&["pane", "run", "--", "sh", "-c", "echo out; exit 4"]);
+    assert_eq!(code, 0, "ctl exits 0 when the command ran");
+    assert_eq!(v["exit_code"], 4);
+    assert_eq!(v["output"], "out\n");
+    assert_eq!(v["truncated"], false);
+    assert!(v["duration_ms"].as_u64().is_some());
+    assert!(v["pane"].is_u64() && v["tab"].is_u64());
+    mt.until("the tab to close", |m| {
+        m.json(&["pane", "list"]).as_array().unwrap().is_empty()
+    });
+    // Plain output prints just the text.
+    assert_eq!(mt.ctl(&["pane", "run", "--", "echo", "plain"]), "plain\n");
+}
+
+#[test]
+fn run_propagate_exit_remaps_codes_that_collide_with_ctl() {
+    let mt = Instance::start();
+    let run = |status: &str| {
+        mt.ctl_code(&[
+            "pane",
+            "run",
+            "--propagate-exit",
+            "--",
+            "sh",
+            "-c",
+            &format!("exit {status}"),
+        ])
+    };
+    assert_eq!(run("0"), 0);
+    assert_eq!(run("42"), 42);
+    assert_eq!(run("3"), 1, "3 would read as 'target not found'");
+    assert_eq!(run("6"), 1, "6 would read as 'timeout'");
+}
+
+#[test]
+fn run_keep_leaves_the_exited_pane_with_a_notice() {
+    let mt = Instance::start();
+    let (code, v, _) = mt.ctl_json_code(&[
+        "pane",
+        "run",
+        "--keep",
+        "--",
+        "sh",
+        "-c",
+        "echo done; exit 2",
+    ]);
+    assert_eq!(code, 0);
+    let pane = v["pane"].to_string();
+    assert_eq!(v["exit_code"], 2);
+    let info = mt.json(&["pane", "get", "--pane", &pane]);
+    assert_eq!(info["exited"], true);
+    assert_eq!(info["exit_code"], 2);
+    let t = mt.text(&pane, &[]);
+    assert!(
+        t.contains("done") && t.contains("[process exited with status 2]"),
+        "{t}"
+    );
+    assert_eq!(
+        mt.ctl_code(&["pane", "list", "--match", "exited:true"]),
+        0,
+        "the exited: selector finds it"
+    );
+    mt.ctl(&["pane", "close", "--pane", &pane, "--force"]);
+}
+
+#[test]
+fn run_detach_then_wait_for_exit_and_match() {
+    let mt = Instance::start();
+    let (code, v, _) = mt.ctl_json_code(&[
+        "pane",
+        "run",
+        "--detach",
+        "--title",
+        "dev",
+        "--",
+        "sh",
+        "-c",
+        "sleep 0.3; echo ready on 3000; sleep 0.3; exit 5",
+    ]);
+    assert_eq!(code, 0);
+    assert!(v.get("exit_code").is_none() && v["tab"].is_u64());
+    let pane = v["pane"].to_string();
+    // `--match title:dev` picks the pane, `--match 'ready on (\d+)'` is the regex.
+    let (code, w, err) = mt.ctl_json_code(&[
+        "pane",
+        "wait",
+        "--match",
+        "title:dev",
+        "--match",
+        r"ready on (\d+)",
+        "--timeout",
+        "20s",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(w["reason"], "match");
+    assert_eq!(w["match"]["groups"][0], "3000");
+    assert!(w["waited_ms"].is_u64());
+    // The tab closes when the process exits, but --exit still reports how it ended.
+    let (code, w, err) = mt.ctl_json_code(&[
+        "pane",
+        "wait",
+        "--pane",
+        &pane,
+        "--exit",
+        "--timeout",
+        "20s",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        (w["reason"].as_str(), w["exit_code"].as_i64()),
+        (Some("exit"), Some(5))
+    );
+}
+
+#[test]
+fn wait_exit_codes_timeout_gone_and_needs_integration() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("echo hi; sleep 60", &[]);
+    mt.wait_text(&pane, "hi");
+    // 6: timeout, the pane lives on.
+    let (code, _, err) = mt.ctl_json_code(&[
+        "pane",
+        "wait",
+        "--pane",
+        &pane,
+        "--match",
+        "never",
+        "--timeout",
+        "300ms",
+    ]);
+    assert_eq!(code, 6);
+    assert!(err.contains("\"timeout\""), "{err}");
+    assert_eq!(mt.ctl_code(&["pane", "get", "--pane", &pane]), 0);
+    // Existing text matches at once; --new-only does not take it.
+    assert_eq!(
+        mt.ctl_code(&["pane", "wait", "--pane", &pane, "--match", "hi"]),
+        0
+    );
+    assert_eq!(
+        mt.ctl_code(&[
+            "pane",
+            "wait",
+            "--pane",
+            &pane,
+            "--match",
+            "hi",
+            "--new-only",
+            "--timeout",
+            "300ms"
+        ]),
+        6
+    );
+    // 7: --command-finished needs marks.
+    assert_eq!(
+        mt.ctl_code(&["pane", "wait", "--pane", &pane, "--command-finished"]),
+        7
+    );
+    // idle
+    let (code, w, _) = mt.ctl_json_code(&["pane", "wait", "--pane", &pane, "--idle", "300ms"]);
+    assert_eq!((code, w["reason"].as_str()), (0, Some("idle")));
+    // 1: no condition.
+    assert_eq!(mt.ctl_code(&["pane", "wait", "--pane", &pane]), 1);
+    // 3: the pane goes away while waiting (without --exit).
+    let quick = mt.spawn_sh("sleep 0.5", &[]);
+    assert_eq!(
+        mt.ctl_code(&[
+            "pane",
+            "wait",
+            "--pane",
+            &quick,
+            "--match",
+            "x",
+            "--timeout",
+            "20s"
+        ]),
+        3
+    );
+    // 3: no such pane.
+    assert_eq!(mt.ctl_code(&["pane", "wait", "--pane", "999", "--exit"]), 3);
+}
+
+#[test]
+fn run_in_returns_exactly_the_commands_output() {
+    let mt = Instance::start();
+    let pane = mt.marked_shell();
+    let (code, v, err) = mt.ctl_json_code(&[
+        "pane", "run", "--in", &pane, "--", "echo", "hello;", "echo", "world",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(v["output"], "hello\nworld\n");
+    assert_eq!(v["exit_code"], 0);
+    let (_, v, _) =
+        mt.ctl_json_code(&["pane", "run", "--in", &pane, "--", "echo bad >&2; (exit 3)"]);
+    assert_eq!(
+        (v["exit_code"].as_i64(), v["output"].as_str()),
+        (Some(3), Some("bad\n"))
+    );
+    // The last command is available afterwards, with its text and status.
+    let (code, v, _) = mt.ctl_json_code(&["pane", "get-text", "--pane", &pane, "--last-command"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["command"], "echo bad >&2; (exit 3)");
+    assert_eq!(
+        (v["exit_code"].as_i64(), v["text"].as_str()),
+        (Some(3), Some("bad\n"))
+    );
+    assert!(v["finished_at"].as_str().unwrap().ends_with('Z'));
+    // N-th most recent, plain output, and an N that is too large.
+    assert_eq!(
+        mt.ctl(&["pane", "get-text", "--pane", &pane, "--last-command", "2"]),
+        "hello\nworld\n"
+    );
+    assert_eq!(
+        mt.ctl_code(&["pane", "get-text", "--pane", &pane, "--last-command", "9"]),
+        3
+    );
+    // Exclusive with line ranges.
+    assert_eq!(
+        mt.ctl_code(&[
+            "pane",
+            "get-text",
+            "--pane",
+            &pane,
+            "--last-command",
+            "--start-line",
+            "0"
+        ]),
+        1
+    );
+}
+
+#[test]
+fn run_in_and_last_command_need_shell_integration_and_an_idle_shell() {
+    let mt = Instance::start();
+    let plain = mt.spawn_sh("sleep 60", &[]);
+    assert_eq!(mt.ctl_code(&["pane", "run", "--in", &plain, "--", "ls"]), 7);
+    assert_eq!(
+        mt.ctl_code(&["pane", "get-text", "--pane", &plain, "--last-command"]),
+        7
+    );
+
+    let pane = mt.marked_shell();
+    // A timeout returns what was printed so far, exits 6 and leaves the command running.
+    let (code, v, _) = mt.ctl_json_code(&[
+        "pane",
+        "run",
+        "--in",
+        &pane,
+        "--timeout",
+        "400ms",
+        "--",
+        "echo started; sleep 30",
+    ]);
+    assert_eq!(code, 6);
+    assert_eq!(v["timed_out"], true);
+    assert!(v["output"].as_str().unwrap().contains("started"));
+    // 9: busy.
+    assert_eq!(
+        mt.ctl_code(&["pane", "run", "--in", &pane, "--", "echo", "no"]),
+        9
+    );
+    // 7: nothing finished yet in a fresh integrated pane.
+    let fresh = mt.marked_shell();
+    assert_eq!(
+        mt.ctl_code(&["pane", "get-text", "--pane", &fresh, "--last-command"]),
+        3
+    );
+}
+
+#[test]
+fn wait_command_finished_in_an_integrated_pane() {
+    let mt = Instance::start();
+    let pane = mt.marked_shell();
+    mt.ctl(&[
+        "pane",
+        "send-text",
+        "--pane",
+        &pane,
+        "--no-paste",
+        "sleep 0.4; (exit 9)\r",
+    ]);
+    let (code, w, err) = mt.ctl_json_code(&[
+        "pane",
+        "wait",
+        "--pane",
+        &pane,
+        "--command-finished",
+        "--timeout",
+        "20s",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(w["reason"], "command_finished");
+    let (_, v, _) = mt.ctl_json_code(&["pane", "get-text", "--pane", &pane, "--last-command"]);
+    assert_eq!(v["exit_code"], 9);
+}
+
+#[test]
+fn a_disconnecting_client_cancels_its_wait_not_the_command() {
+    let mt = Instance::start();
+    let pane = mt.marked_shell();
+    let mut c = Process::new(assert_cmd::cargo::cargo_bin("microterm"))
+        .args([
+            "ctl",
+            "pane",
+            "run",
+            "--in",
+            &pane,
+            "--",
+            "echo a; sleep 0.8; echo b",
+        ])
+        .envs(Instance::env(&mt.home))
+        .env_remove("MICROTERM_UNIX_SOCKET")
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    mt.until("the command to start", |m| {
+        m.text(&pane, &[]).contains("a\n")
+    });
+    c.kill().unwrap();
+    let _ = c.wait();
+    mt.until("the command to finish on its own", |m| {
+        m.ctl_code(&["pane", "get-text", "--pane", &pane, "--last-command"]) == 0
+    });
+    assert_eq!(
+        mt.ctl(&["pane", "get-text", "--pane", &pane, "--last-command"]),
+        "a\nb\n"
+    );
+}
+
+#[test]
+fn output_is_capped_at_ctl_capture_max_bytes_keeping_the_tail() {
+    let mt = Instance::start_with(Some("[ctl]\ncapture_max_bytes = 24\n"));
+    let (code, v, _) = mt.ctl_json_code(&["pane", "run", "--", "seq", "1", "300"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["truncated"], true);
+    let out = v["output"].as_str().unwrap();
+    assert!(out.len() <= 24 && out.ends_with("299\n300\n"), "{out:?}");
+    let pane = mt.marked_shell();
+    let (_, v, _) = mt.ctl_json_code(&["pane", "run", "--in", &pane, "--", "seq 1 300"]);
+    assert_eq!(v["truncated"], true);
+    let (_, t, _) = mt.ctl_json_code(&["pane", "get-text", "--pane", &pane, "--last-command"]);
+    assert_eq!(t["truncated"], true);
+    assert!(t["text"].as_str().unwrap().ends_with("300\n"));
+}
+
+#[test]
+fn command_and_exit_events_are_streamed() {
+    let mt = Instance::start();
+    let mut s = UnixStream::connect(&mt.socket).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.write_all(b"{\"v\":1,\"id\":1,\"method\":\"subscribe\"}\n")
+        .unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut line = String::new();
+    r.read_line(&mut line).unwrap();
+    let pane = mt.marked_shell();
+    mt.ctl(&["pane", "run", "--in", &pane, "--", "(exit 7)"]);
+    let mut finished = None;
+    for _ in 0..200 {
+        line.clear();
+        r.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if v["event"]["event"] == "command_finished" {
+            finished = Some(v["event"].clone());
+            break;
+        }
+    }
+    let f = finished.expect("a command_finished event");
+    assert_eq!(
+        (f["pane"].to_string(), f["exit_code"].as_i64()),
+        (pane.clone(), Some(7))
+    );
+    // And a pane_exited event when a process ends.
+    mt.ctl(&["pane", "run", "--detach", "--", "sh", "-c", "exit 2"]);
+    let mut exited = None;
+    for _ in 0..200 {
+        line.clear();
+        r.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        if v["event"]["event"] == "pane_exited" {
+            exited = Some(v["event"].clone());
+            break;
+        }
+    }
+    assert_eq!(exited.expect("a pane_exited event")["status"], 2);
+}
+
+#[test]
+fn pane_list_reports_exit_state_and_size() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh("sleep 60", &[]);
+    let list = mt.json(&["pane", "list"]);
+    let p = &list.as_array().unwrap()[0];
+    assert_eq!(p["id"].to_string(), pane);
+    assert_eq!(
+        (p["exited"].as_bool(), p["exit_code"].is_null()),
+        (Some(false), true)
+    );
 }

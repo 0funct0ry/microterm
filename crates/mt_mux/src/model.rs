@@ -116,6 +116,16 @@ pub enum MuxEvent {
     TitleChanged {
         pane: Id,
     },
+    /// The pane's process ended (`None` status: killed by a signal).
+    PaneExited {
+        pane: Id,
+        status: Option<i32>,
+    },
+    /// OSC 133 `D`: a command finished.
+    CommandFinished {
+        pane: Id,
+        exit_code: Option<i32>,
+    },
     TabAdded {
         window: Id,
         tab: Id,
@@ -694,6 +704,14 @@ impl Mux {
 
     pub fn notify_output(&mut self, pane: Id) {
         self.emit(MuxEvent::PaneOutput { pane });
+    }
+
+    pub fn notify_exited(&mut self, pane: Id, status: Option<i32>) {
+        self.emit(MuxEvent::PaneExited { pane, status });
+    }
+
+    pub fn notify_command_finished(&mut self, pane: Id, exit_code: Option<i32>) {
+        self.emit(MuxEvent::CommandFinished { pane, exit_code });
     }
 
     /// `(window id, tab index)` of the tab with id `tab`.

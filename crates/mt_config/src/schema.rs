@@ -31,6 +31,7 @@ pub struct Config {
     pub hyperlinks: Hyperlinks,
     pub copy_mode: CopyMode,
     pub gpu: Gpu,
+    pub ctl: Ctl,
     pub hyperlink_rules: Vec<HyperlinkRule>,
     pub keys: Vec<KeyEntry>,
     pub launch: Vec<LaunchProfile>,
@@ -64,6 +65,7 @@ impl Default for Config {
             hyperlinks: Hyperlinks::default(),
             copy_mode: CopyMode::default(),
             gpu: Gpu::default(),
+            ctl: Ctl::default(),
             hyperlink_rules: Vec::new(),
             keys: Vec::new(),
             launch: Vec::new(),
@@ -530,6 +532,22 @@ impl Default for Gpu {
     fn default() -> Self {
         Self {
             prefer: GpuPreference::HighPerformance,
+        }
+    }
+}
+
+/// `[ctl]`: limits for `microterm ctl` (SPEC §8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Ctl {
+    /// Cap on the output `pane run` and `pane get-text` return; the tail is kept.
+    pub capture_max_bytes: u64,
+}
+
+impl Default for Ctl {
+    fn default() -> Self {
+        Self {
+            capture_max_bytes: 1_048_576,
         }
     }
 }

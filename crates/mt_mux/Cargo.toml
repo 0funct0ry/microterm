@@ -8,3 +8,4 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 mt_proto = { path = "../mt_proto" }
+regex = { workspace = true }

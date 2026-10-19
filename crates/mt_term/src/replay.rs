@@ -10,16 +10,60 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape as EngineShape, Rgb};
 
+use crate::commands::{CommandTracker, Mark, ReplayMark};
 use crate::sgr::Style;
 use crate::snapshot::{Cell, CellFlags};
 
-fn push_row(out: &mut String, cur: &mut Style, row: &[Cell], keep_trailing: bool) {
+/// Writes a mark the way a shell with integration would; `D` is tagged so that the receiver
+/// restores the command without counting it as newly finished.
+fn push_mark(out: &mut String, m: &Mark) {
+    match m {
+        Mark::PromptStart { .. } => out.push_str("\x1b]133;A\x07"),
+        Mark::InputStart => out.push_str("\x1b]133;B\x07"),
+        Mark::OutputStart => out.push_str("\x1b]133;C\x07"),
+        Mark::Finished(code) => {
+            let _ = match code {
+                Some(c) => write!(out, "\x1b]133;D;{c};replay\x07"),
+                None => write!(out, "\x1b]133;D;;replay\x07"),
+            };
+        }
+        Mark::Cwd(p) => push_cwd(out, p),
+        Mark::Reset | Mark::Restored(_) => {}
+    }
+}
+
+fn push_cwd(out: &mut String, path: &str) {
+    out.push_str("\x1b]7;file://");
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out.push('\x07');
+}
+
+/// Prints one grid row. `marks` are the marks anchored on it, by column; each is written when
+/// the cursor stands on its column.
+fn push_row(
+    out: &mut String,
+    cur: &mut Style,
+    row: &[Cell],
+    keep_trailing: bool,
+    marks: &[&ReplayMark],
+) {
     let end = if keep_trailing {
         row.len()
     } else {
         row.iter().rposition(|c| !c.is_blank()).map_or(0, |i| i + 1)
     };
-    for c in &row[..end] {
+    let mut mi = 0;
+    for (i, c) in row[..end].iter().enumerate() {
+        while mi < marks.len() && marks[mi].col <= i {
+            push_mark(out, &marks[mi].mark);
+            mi += 1;
+        }
         if c.flags.has(CellFlags::WIDE_SPACER) {
             continue;
         }
@@ -37,6 +81,15 @@ fn push_row(out: &mut String, cur: &mut Style, row: &[Cell], keep_trailing: bool
             out.extend(z.iter());
         }
     }
+    // Marks past the printed text: move the cursor there without touching cells.
+    let mut at = end;
+    for m in &marks[mi..] {
+        if m.col > at {
+            let _ = write!(out, "\x1b[{}G", m.col + 1);
+            at = m.col;
+        }
+        push_mark(out, &m.mark);
+    }
 }
 
 fn dec(out: &mut String, mode: u16, on: bool) {
@@ -48,6 +101,7 @@ pub(crate) fn synthesize<T>(
     title: Option<&str>,
     sgr_pixels: bool,
     max_history: usize,
+    tracker: &CommandTracker,
 ) -> Vec<u8> {
     let mode = *term.mode();
     let alt = mode.contains(TermMode::ALT_SCREEN);
@@ -55,6 +109,14 @@ pub(crate) fn synthesize<T>(
     let rows = grid.screen_lines();
     let hist = if alt { 0 } else { grid.history_size() };
     let first = hist.saturating_sub(max_history);
+    // Command marks of the main screen; the hidden main grid behind an alternate screen is
+    // not replayed, so neither are its marks.
+    let marks = if alt {
+        Vec::new()
+    } else {
+        tracker.replay_marks(first)
+    };
+    let mut next_mark = 0;
 
     let mut out = String::new();
     out.push_str("\x1bc"); // RIS: clears screen, scrollback and modes.
@@ -106,7 +168,13 @@ pub(crate) fn synthesize<T>(
     while line <= last_line {
         let cells = line_cells(line);
         let wrapped = cells[cols - 1].flags.has(CellFlags::WRAPLINE);
-        push_row(&mut out, &mut cur, &cells, wrapped);
+        let abs = (hist as i32 + line) as usize;
+        let from = next_mark;
+        while next_mark < marks.len() && marks[next_mark].line <= abs {
+            next_mark += 1;
+        }
+        let row_marks: Vec<&ReplayMark> = marks[from..next_mark].iter().collect();
+        push_row(&mut out, &mut cur, &cells, wrapped, &row_marks);
         if line < last_line && !wrapped {
             if !cur.is_default() {
                 out.push_str("\x1b[0m");
@@ -117,6 +185,9 @@ pub(crate) fn synthesize<T>(
         line += 1;
     }
     out.push_str("\x1b[0m");
+    if let Some(cwd) = tracker.cwd() {
+        push_cwd(&mut out, cwd);
+    }
 
     // Cursor, then modes (origin mode last: CUP must be absolute).
     let cp = grid.cursor.point;
@@ -231,9 +302,99 @@ mod tests {
                 assert_eq!(la.wrapped, lb.wrapped, "wrap flag row {l}");
             }
         }
+        // Command records survive too (up to the history the replay carried).
+        assert_eq!(a.has_marks(), b.has_marks(), "has marks");
+        assert_eq!(a.busy(), b.busy(), "busy");
+        assert_eq!(a.prompt_marks(), b.prompt_marks(), "prompt lines");
+        assert_eq!(a.commands_len(), b.commands_len(), "retained commands");
+        for n in 1..=a.commands_len() + 1 {
+            let key = |c: Option<crate::CommandInfo>| {
+                c.map(|c| (c.command, c.output, c.exit_code, c.cwd, c.truncated))
+            };
+            assert_eq!(
+                key(a.last_command(n)),
+                key(b.last_command(n)),
+                "command {n}"
+            );
+        }
+        assert_eq!(a.running_output(), b.running_output(), "running output");
+        // Replayed commands are restored, not newly finished.
+        assert_eq!(b.commands_finished(), 0);
         // Replaying twice is idempotent.
         let again = b.replay_bytes(scrollback);
         assert_eq!(replay, again, "replay of a replay differs");
+    }
+
+    fn cmd(cwd: Option<&str>, text: &str, out: &str, status: i32) -> Vec<u8> {
+        let mut s = String::new();
+        if let Some(c) = cwd {
+            s += &format!("\x1b]7;file://{c}\x07");
+        }
+        s += &format!(
+            "\x1b]133;A\x07$ \x1b]133;B\x07{text}\r\n\x1b]133;C\x07{out}\x1b]133;D;{status}\x07"
+        );
+        s.into_bytes()
+    }
+
+    #[test]
+    fn marks_round_trip_with_commands_cwd_and_status() {
+        let mut input = cmd(Some("/tmp/a%20b"), "echo hi", "hi\r\n", 0);
+        input.extend(cmd(None, "false", "", 1));
+        input.extend(cmd(Some("/srv"), "ls", "a\r\nb\r\n", 0));
+        input.extend(b"\x1b]133;A\x07$ ");
+        round_trip(&input, 30, 6, 100);
+    }
+
+    #[test]
+    fn marks_round_trip_across_scrollback_and_wrapping() {
+        let mut input = Vec::new();
+        for i in 0..40 {
+            let long = "w".repeat(70);
+            input.extend(cmd(
+                Some("/w"),
+                &format!("cmd{i}"),
+                &format!("{long}\r\n{i}\r\n"),
+                i % 3,
+            ));
+        }
+        round_trip(&input, 30, 6, 1000);
+    }
+
+    #[test]
+    fn marks_round_trip_with_a_running_command_and_wide_text() {
+        let mut input = cmd(Some("/x"), "echo 漢字", "漢字\r\n", 0);
+        input.extend(
+            b"\x1b]133;A\x07$ \x1b]133;B\x07sleep\r\n\x1b]133;C\x07partial output".to_vec(),
+        );
+        round_trip(&input, 40, 6, 100);
+    }
+
+    #[test]
+    fn marks_older_than_the_replayed_history_are_left_out() {
+        let mut a = Emulator::new(30, 4, 1000);
+        for i in 0..20 {
+            a.advance(&cmd(None, &format!("c{i}"), &format!("o{i}\r\n"), 0));
+        }
+        let replay = a.replay_bytes(10);
+        let mut b = Emulator::new(30, 4, 1000);
+        b.advance(&replay);
+        assert!(b.history_size() <= 10);
+        let n = b.commands_len();
+        assert!((1..20).contains(&n), "{n}");
+        assert_eq!(b.last_command(1).unwrap().command, "c19");
+        assert_eq!(b.last_command(1).unwrap().output, "o19\n");
+        assert_eq!(b.last_command(n).unwrap().output, format!("o{}\n", 20 - n));
+    }
+
+    #[test]
+    fn a_reset_in_the_stream_forgets_old_commands() {
+        let mut a = Emulator::new(30, 4, 100);
+        a.advance(&cmd(None, "old", "x\r\n", 0));
+        a.advance(b"\x1bc");
+        assert!(a.last_command(1).is_none());
+        a.advance(&cmd(None, "new", "y\r\n", 0));
+        assert_eq!(a.last_command(1).unwrap().command, "new");
+        assert_eq!(a.commands_len(), 1);
     }
 
     #[test]

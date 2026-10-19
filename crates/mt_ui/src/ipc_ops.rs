@@ -14,8 +14,8 @@ use std::time::Instant;
 use mt_mux::ctl::{self, Live, PaneRow, Row, Rows, TabRow, Verb, WindowRow};
 use mt_mux::{ConfirmClose, Id, Mux, MuxEvent, SpawnSpec};
 use mt_proto::{
-    Event, GetTextParams, Request, RpcError, SendTextParams, SpawnParams, TabFocusParams, Target,
-    Text,
+    CommandText, Event, GetTextParams, Request, RpcError, SendTextParams, SpawnParams,
+    TabFocusParams, Target, Text,
 };
 use mt_term::Terminal;
 use serde_json::Value;
@@ -26,6 +26,8 @@ pub fn event_of(e: &MuxEvent) -> Event {
         MuxEvent::PaneRemoved { pane } => Event::PaneRemoved { pane },
         MuxEvent::PaneOutput { pane } => Event::PaneOutput { pane },
         MuxEvent::TitleChanged { pane } => Event::TitleChanged { pane },
+        MuxEvent::PaneExited { pane, status } => Event::PaneExited { pane, status },
+        MuxEvent::CommandFinished { pane, exit_code } => Event::CommandFinished { pane, exit_code },
         MuxEvent::TabAdded { window, tab } => Event::TabAdded { window, tab },
         MuxEvent::TabRemoved { window, tab } => Event::TabRemoved { window, tab },
         MuxEvent::TabMoved {
@@ -104,6 +106,20 @@ pub fn live_of(term: &Terminal) -> Live {
         size: (cols as u16, rows as u16),
         ..Default::default()
     }
+}
+
+/// [`live_of`] plus how the pane's process ended, for panes kept open by `run --keep`.
+pub fn live_with_exit(
+    term: Option<&Terminal>,
+    exit: Option<&crate::ipc_pending::ExitRecord>,
+) -> Live {
+    let mut live = term.map(live_of).unwrap_or_default();
+    if let Some(e) = exit {
+        live.exited = true;
+        live.exit_code = e.status;
+        live.process = None;
+    }
+    live
 }
 
 pub fn policy_of(c: &mt_config::ConfirmClose) -> ConfirmClose {
@@ -326,9 +342,41 @@ pub fn resolve_window(rows: &Rows, t: &Target) -> Result<Id, RpcError> {
 }
 
 /// `pane.get_text`: rows `start_line..=end_line`, where line `0` is the top visible row and
-/// negative numbers reach into scrollback. Soft-wrapped rows are joined; trailing blank lines
-/// are dropped.
-pub fn get_text(term: &Terminal, p: &GetTextParams) -> Result<Text, RpcError> {
+/// negative numbers reach into scrollback, or with `last_command` the output of the N-th most
+/// recent finished command. Soft-wrapped rows are joined; trailing blank lines are dropped.
+/// The result is capped at `cap` bytes, keeping the tail.
+pub fn get_text(term: &Terminal, p: &GetTextParams, cap: usize) -> Result<Value, RpcError> {
+    if let Some(n) = p.last_command {
+        if p.start_line.is_some() || p.end_line.is_some() {
+            return Err(RpcError::bad_request(
+                "--last-command cannot be combined with --start-line/--end-line",
+            ));
+        }
+        if p.escapes {
+            return Err(RpcError::bad_request(
+                "--last-command cannot be combined with --escapes",
+            ));
+        }
+        if !term.has_marks() {
+            return Err(RpcError::needs_shell_integration(
+                "no OSC 133 marks seen in this pane; add `eval \"$(microterm shell-integration \
+                 <shell>)\"` to the shell's rc file",
+            ));
+        }
+        let n = n.max(1) as usize;
+        let info = term.last_command(n).ok_or_else(|| {
+            RpcError::not_found(format!("the pane has no finished command number {n}"))
+        })?;
+        let (text, cut) = mt_mux::wait::cap_tail(info.output, cap);
+        return to_json(&CommandText {
+            command: info.command,
+            exit_code: info.exit_code,
+            cwd: info.cwd,
+            text,
+            finished_at: mt_proto::iso8601_utc(info.finished_ms),
+            truncated: info.truncated || cut,
+        });
+    }
     let history = term.history_size() as i64;
     let (_, rows) = term.size();
     let start = p.start_line.unwrap_or(0);
@@ -362,7 +410,8 @@ pub fn get_text(term: &Terminal, p: &GetTextParams) -> Result<Text, RpcError> {
     if !out.is_empty() {
         out.push('\n');
     }
-    Ok(Text { text: out })
+    let (text, truncated) = mt_mux::wait::cap_tail(out, cap);
+    to_json(&Text { text, truncated })
 }
 
 /// `pane.send_text`: pasted (bracketed when the program asked for it) unless `paste` is off,

@@ -4191,6 +4191,7 @@ name = "mt_mux"
 version = "0.1.0"
 dependencies = [
  "mt_proto",
+ "regex",
  "thiserror 2.0.21",
 ]
 

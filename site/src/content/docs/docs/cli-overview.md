@@ -48,9 +48,11 @@ JSON value for scripts. Errors go to stderr, as a JSON object with `--json`. See
 |---------|------|
 | `microterm completions bash\|zsh\|fish` | prints a shell completion script |
 | `microterm record -o FILE.cast -- CMD` | runs CMD in a new tab and records it |
+| `microterm shell-integration bash\|zsh\|fish` | prints the shell snippet that emits OSC 133 marks (see [Shell integration](/docs/shell-integration/)) |
 | `microterm --workspace NAME`, `--cwd`, `-e CMD` | start the GUI, or open a window in the running instance |
 
-See [`microterm ctl`](/docs/ctl/) for every command and [Recording & replay](/docs/recording-and-replay/).
+See [`microterm ctl`](/docs/ctl/) for every command, [Run & wait](/docs/run-and-wait/) for `pane run`
+and `pane wait`, and [Recording & replay](/docs/recording-and-replay/).
 
 ## Shell completions
 

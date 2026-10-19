@@ -65,6 +65,7 @@ action = "Disable"          # unbind a default
 | `tab_bar.position`, `hide_if_single` | tab bar placement and visibility |
 | `scrollbar.mode`, `bell.mode`, `paste.confirm_multiline`, `clipboard.osc52`, `mouse.scroll_multiplier` | behaviour |
 | `[[keys]]` | keybindings |
+| `ctl.capture_max_bytes` | cap on the output `pane run` and `pane get-text` return (default 1048576; the tail is kept); read when a request arrives |
 
 Every other key in the schema is accepted and validated now, and starts working in the release
 that implements its feature.

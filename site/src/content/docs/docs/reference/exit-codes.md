@@ -11,11 +11,18 @@ description: What the microterm command line returns.
 | `3` | target not found: unknown pane, tab, window, workspace or file |
 | `4` | protocol or version mismatch: the running instance speaks another major protocol version |
 | `5` | ambiguous target: several items matched and `--all` was not given; the error lists the candidates |
+| `6` | timeout: `pane wait` or `pane run --timeout` ran out of time; the command keeps running |
+| `7` | needs [shell integration](/docs/shell-integration/): no OSC 133 marks seen in that pane (`pane run --in`, `pane wait --command-finished`, `pane get-text --last-command`) |
 | `8` | confirmation required: `confirm_close` would ask before closing, and `--force` was not given; nothing was closed |
+| `9` | pane busy: `pane run --in` while a command is already running in that pane; nothing was typed |
 
 The codes map from the `code` of an IPC error: `bad_request` and `internal` are `1`, `not_found`
-is `3`, `version_mismatch` is `4`, `ambiguous` is `5` and `confirm_required` is `8`. `--help` and `--version` exit `0`.
+is `3`, `version_mismatch` is `4`, `ambiguous` is `5`, `timeout` is `6`, `needs_shell_integration` is `7`,
+`confirm_required` is `8` and `busy` is `9`. `--help` and `--version` exit `0`.
 
 `window close`, `tab close`, `pane close` and `workspace delete` never block on a dialog: they
-either honour `--force` or fail with `8`, so scripts and agents cannot hang. Codes `6`, `7` and
-`9` are reserved for `run` and `wait`.
+either honour `--force` or fail with `8`, so scripts and agents cannot hang.
+
+`pane wait` also exits `3` when the pane closes while it waits (unless it waits for `--exit`).
+`pane run --propagate-exit` returns the command's own status instead of `0`; statuses that would
+collide with the codes above become `1`. See [Run & wait](/docs/run-and-wait/).

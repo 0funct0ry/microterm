@@ -9,6 +9,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -157,6 +158,57 @@ pub(crate) fn start_in(
     Ok(ServerGuard { path })
 }
 
+/// How often a pending long-running request checks that its client is still there.
+const LIVENESS_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Waits for the host's answer to `pane.run` / `pane.wait`, which has no deadline of its own
+/// here (the host enforces `--timeout`). Returns `None` when the client disconnected first;
+/// `cancel` is then set so the host stops waiting (a command it started keeps running).
+fn wait_long(
+    rx: &mpsc::Receiver<Result<serde_json::Value, RpcError>>,
+    cancel: &AtomicBool,
+    stream: &UnixStream,
+) -> Option<Result<serde_json::Value, RpcError>> {
+    loop {
+        match rx.recv_timeout(LIVENESS_INTERVAL) {
+            Ok(r) => return Some(r),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if peer_closed(stream) {
+                    cancel.store(true, Ordering::Relaxed);
+                    return None;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Some(Err(RpcError::internal("the application is shutting down")))
+            }
+        }
+    }
+}
+
+/// Whether the other end hung up (a zero-length read without consuming anything).
+#[allow(unsafe_code)]
+fn peer_closed(stream: &UnixStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut byte = 0u8;
+    // SAFETY: a one-byte non-blocking peek on a valid socket fd.
+    let n = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    match n {
+        0 => true,
+        n if n > 0 => false,
+        _ => !matches!(
+            io::Error::last_os_error().kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ),
+    }
+}
+
 fn serve(
     stream: UnixStream,
     calls: &async_channel::Sender<Call>,
@@ -189,9 +241,16 @@ fn serve(
                 return Ok(());
             }
             Ok((id, request)) => {
+                let long = request.is_long_running();
                 let (tx, rx) = mpsc::channel();
-                let result = match calls.send_blocking(Call { request, reply: tx }) {
+                let call = Call::new(request, tx);
+                let cancel = call.cancel.clone();
+                let result = match calls.send_blocking(call) {
                     Err(_) => Err(RpcError::internal("the application is shutting down")),
+                    Ok(()) if long => match wait_long(&rx, &cancel, &out) {
+                        Some(r) => r,
+                        None => return Ok(()), // the client left; the host drops the call
+                    },
                     Ok(()) => rx
                         .recv_timeout(REPLY_TIMEOUT)
                         .unwrap_or_else(|_| Err(RpcError::internal("request timed out"))),

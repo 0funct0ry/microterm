@@ -213,6 +213,15 @@ impl Selector {
         Ok(Selector { clauses })
     }
 
+    /// Whether `expr` reads as a pane selector (`title:dev`, `cwd:~/x,!exited:true`) rather than
+    /// a regular expression: it parses and every key applies to a pane. `pane wait` uses this
+    /// to tell its two kinds of `--match` apart.
+    pub fn is_pane_selector(expr: &str) -> bool {
+        Selector::parse(expr)
+            .and_then(|s| s.check(Resource::Pane))
+            .is_ok()
+    }
+
     /// Fails with a usage error when a clause uses a key that does not apply to `resource`.
     pub fn check(&self, resource: Resource) -> Result<(), RpcError> {
         for c in &self.clauses {
@@ -243,6 +252,16 @@ mod tests {
         assert!(!s.clauses[0].negate && s.clauses[1].negate);
         assert!(s.clauses[0].pattern.is_match("cargo watch -x test"));
         assert!(!s.clauses[0].pattern.is_match("sudo cargo watch"));
+    }
+
+    #[test]
+    fn selectors_are_told_apart_from_regexes() {
+        assert!(Selector::is_pane_selector("title:dev"));
+        assert!(Selector::is_pane_selector("cwd:~/x,!exited:true"));
+        assert!(!Selector::is_pane_selector("ready on"));
+        assert!(!Selector::is_pane_selector("error: failed"), "unknown key");
+        assert!(!Selector::is_pane_selector("^\\d+ passed"));
+        assert!(!Selector::is_pane_selector("title:re:("), "bad regex");
     }
 
     #[test]

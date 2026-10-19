@@ -1,12 +1,10 @@
 //! Terminal → UI events, with coalesced wakeups (SPEC §3.4).
 
-use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::{EventLoopSender, Msg};
 use alacritty_terminal::term::Osc52;
 use alacritty_terminal::vte::ansi::Rgb as EngineRgb;
 
@@ -60,6 +58,8 @@ pub enum TermEvent {
     CursorBlinkingChange,
     /// The child exited with this status code (`None` if killed by a signal).
     ChildExit(Option<i32>),
+    /// OSC 133 `D`: a command finished with this status (`None` when the shell sent none).
+    CommandFinished(Option<i32>),
 }
 
 impl std::fmt::Debug for TermEvent {
@@ -73,6 +73,7 @@ impl std::fmt::Debug for TermEvent {
             Self::ClipboardLoad(k, _) => write!(f, "ClipboardLoad({k:?})"),
             Self::CursorBlinkingChange => write!(f, "CursorBlinkingChange"),
             Self::ChildExit(c) => write!(f, "ChildExit({c:?})"),
+            Self::CommandFinished(c) => write!(f, "CommandFinished({c:?})"),
         }
     }
 }
@@ -151,6 +152,8 @@ pub(crate) struct Shared {
     policy: Mutex<Osc52Policy>,
     /// Last OSC 0/2 title, kept for VT replay (`None` after a reset).
     title: Mutex<Option<String>>,
+    /// Signal that killed the child (`0` = none), set just before `ChildExit`.
+    pub(crate) exit_signal: std::sync::atomic::AtomicI32,
 }
 
 impl Shared {
@@ -170,6 +173,7 @@ impl Shared {
             size: Mutex::new(size),
             policy: Mutex::new(policy),
             title: Mutex::new(None),
+            exit_signal: std::sync::atomic::AtomicI32::new(0),
         })
     }
 
@@ -179,12 +183,6 @@ impl Shared {
 
     pub(crate) fn set_policy(&self, policy: Osc52Policy) {
         *self.policy.lock().unwrap() = policy;
-    }
-
-    pub(crate) fn set_pty(&self, sender: EventLoopSender) {
-        self.set_sink(Box::new(move |bytes| {
-            let _ = sender.send(Msg::Input(Cow::Owned(bytes)));
-        }));
     }
 
     pub(crate) fn set_sink(&self, sink: Box<dyn Fn(Vec<u8>) + Send + Sync>) {

@@ -328,6 +328,117 @@ EXAMPLES:
         /// Re-encode colours and styles as SGR escapes.
         #[arg(long)]
         escapes: bool,
+        /// Print the output of the N-th most recent finished command (default 1), cut out
+        /// with the shell's OSC 133 marks. Needs shell integration (exit 7 without it).
+        #[arg(
+            long,
+            value_name = "N",
+            num_args = 0..=1,
+            default_missing_value = "1",
+            conflicts_with_all = ["start_line", "end_line", "escapes"]
+        )]
+        last_command: Option<u32>,
+    },
+    /// Run a command and return its output and exit status.
+    ///
+    /// Without --in a new tab runs the command directly (argv; use `-- sh -c '…'` for shell
+    /// syntax) and the call returns when it exits; the tab closes unless --keep is given.
+    /// With --in, the command line is typed into an existing shell pane that has shell
+    /// integration (exit 7 without it, 9 while a command is running) and the output is exactly
+    /// what that command printed. A timeout (exit 6) never kills the command.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl pane run --json -- cargo test
+  microterm ctl pane run --detach --title dev -- npm run dev
+  microterm ctl pane run --in 12 -- git status --short
+  microterm ctl pane run --propagate-exit -- make check")]
+    Run {
+        /// Window for the new tab.
+        #[arg(long, value_name = "ID", conflicts_with = "new_window")]
+        window: Option<u64>,
+        /// Open a new window for the tab.
+        #[arg(long)]
+        new_window: bool,
+        #[arg(long, value_name = "NAME")]
+        workspace: Option<String>,
+        /// An `[[ssh_domains]]` name (or `ssh:HOST`); default: local.
+        #[arg(long, value_name = "NAME")]
+        domain: Option<String>,
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<PathBuf>,
+        #[arg(long, value_name = "TITLE")]
+        title: Option<String>,
+        /// Keep the tab after the process exits, showing `[process exited with status N]`.
+        #[arg(long)]
+        keep: bool,
+        /// Return `{pane, tab}` at once; follow with `pane wait`.
+        #[arg(long)]
+        detach: bool,
+        /// Give up waiting after DUR (500ms, 2s, 5m); the command keeps running (exit 6).
+        #[arg(long, value_name = "DUR", value_parser = parse_duration_ms)]
+        timeout: Option<u64>,
+        /// Exit with the command's own status instead of 0 (statuses that collide with the
+        /// codes of `microterm ctl` become 1; the real value stays in --json).
+        #[arg(long)]
+        propagate_exit: bool,
+        /// Type the command line into this shell pane (an id or a selector; default:
+        /// $MICROTERM_PANE) instead of opening a tab.
+        #[arg(
+            long = "in",
+            value_name = "TARGET",
+            num_args = 0..=1,
+            default_missing_value = "",
+            conflicts_with_all = ["window", "new_window", "workspace", "domain", "cwd", "title", "keep", "detach"]
+        )]
+        in_pane: Option<String>,
+        /// The command and its arguments, after `--`.
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Wait until a pane output, idle, exit or finished-command condition holds.
+    ///
+    /// Conditions may be combined; the first to hold wins. `--match` takes a regular
+    /// expression over the pane's rendered text (soft wraps joined, scrollback and screen, then
+    /// new output) -- or, when the value reads as a pane selector such as `title:dev`, picks
+    /// the pane (as TARGET, `--pane` and `--select` do). Use `--text` for a regular expression
+    /// that looks like a selector. Exit 6 on timeout (default 60s), 3 when the pane closes
+    /// first, 7 when --command-finished needs shell integration the pane does not have.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl pane wait --match title:dev --match 'ready on' --timeout 120s
+  microterm ctl pane wait --pane 12 --command-finished
+  microterm ctl pane wait --idle 2s --new-only --match 'error|warning'
+  microterm ctl pane wait --exit --json")]
+    Wait {
+        /// Pane id or selector (default: $MICROTERM_PANE, else the focused pane).
+        #[arg(value_name = "TARGET")]
+        target: Option<String>,
+        #[arg(long, value_name = "ID")]
+        pane: Option<u64>,
+        /// A selector for the pane.
+        #[arg(long, value_name = "EXPR")]
+        select: Option<String>,
+        /// A regular expression to wait for (or, if it reads as a selector, the pane).
+        #[arg(long = "match", value_name = "REGEX")]
+        matches: Vec<String>,
+        /// A regular expression to wait for, never read as a selector.
+        #[arg(long, value_name = "REGEX")]
+        text: Vec<String>,
+        /// No PTY output for DUR.
+        #[arg(long, value_name = "DUR", value_parser = parse_duration_ms)]
+        idle: Option<u64>,
+        /// The pane's process has exited.
+        #[arg(long)]
+        exit: bool,
+        /// The next command finishes (OSC 133 `D`).
+        #[arg(long)]
+        command_finished: bool,
+        /// Give up after DUR (default 60s).
+        #[arg(long, value_name = "DUR", value_parser = parse_duration_ms)]
+        timeout: Option<u64>,
+        /// Ignore what is already on screen or in scrollback.
+        #[arg(long)]
+        new_only: bool,
     },
     /// Close a pane; closing a tab's last pane closes the tab, a window's last tab the window.
     ///
@@ -342,4 +453,46 @@ EXAMPLES:
         #[arg(long)]
         all: bool,
     },
+}
+
+/// `500ms`, `2s`, `5m` or `1h`; a bare number is seconds.
+pub fn parse_duration_ms(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let split = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num
+        .parse()
+        .map_err(|_| format!("{s:?} is not a duration (try 500ms, 2s or 5m)"))?;
+    let factor = match unit {
+        "ms" => 1.0,
+        "" | "s" => 1_000.0,
+        "m" => 60_000.0,
+        "h" => 3_600_000.0,
+        _ => {
+            return Err(format!(
+                "unknown duration unit {unit:?} in {s:?} (ms, s, m, h)"
+            ))
+        }
+    };
+    Ok((n * factor).round() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_parse_with_units() {
+        assert_eq!(parse_duration_ms("500ms"), Ok(500));
+        assert_eq!(parse_duration_ms("2s"), Ok(2_000));
+        assert_eq!(parse_duration_ms("5m"), Ok(300_000));
+        assert_eq!(parse_duration_ms("1.5s"), Ok(1_500));
+        assert_eq!(parse_duration_ms("2"), Ok(2_000));
+        assert_eq!(parse_duration_ms("1h"), Ok(3_600_000));
+        assert!(parse_duration_ms("fast").is_err());
+        assert!(parse_duration_ms("5x").is_err());
+        assert!(parse_duration_ms("").is_err());
+    }
 }

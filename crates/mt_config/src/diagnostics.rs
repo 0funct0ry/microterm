@@ -253,6 +253,7 @@ const ROOT: &[(&str, K)] = &[
         ]),
     ),
     ("gpu", K::Table(&[("prefer", K::Leaf)])),
+    ("ctl", K::Table(&[("capture_max_bytes", K::Leaf)])),
 ];
 
 fn suggest<'a>(unknown: &str, known: &'a [(&'static str, K)]) -> Option<&'a str> {
@@ -457,6 +458,12 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
                 format!("hyperlink_rules[{i}].regex is not a valid regular expression: {e}"),
             );
         }
+    }
+    if c.ctl.capture_max_bytes == 0 {
+        err(
+            &["ctl", "capture_max_bytes"],
+            "ctl.capture_max_bytes must be greater than 0".into(),
+        );
     }
     if c.text.min_contrast < 1.0 {
         err(

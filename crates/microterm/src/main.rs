@@ -5,6 +5,7 @@ mod ctl;
 mod ctl_cmd;
 mod headless;
 mod ipc;
+mod shell_integration;
 
 use std::sync::Arc;
 
@@ -33,6 +34,9 @@ fn main() {
             std::process::exit(mt_ui::ls_fonts::run(cli.config, text))
         }
         Some(Command::Completions { shell }) => std::process::exit(ctl_cmd::completions(shell)),
+        Some(Command::ShellIntegration { shell }) => {
+            std::process::exit(shell_integration::print(shell))
+        }
         Some(Command::Ctl(args)) => std::process::exit(ctl_cmd::run(args)),
         Some(Command::Record(args)) => std::process::exit(ctl_cmd::record(args)),
         Some(Command::ReplayInternal { file, speed }) => {

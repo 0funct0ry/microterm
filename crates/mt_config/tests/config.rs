@@ -195,3 +195,22 @@ fn quick_select_can_be_switched_off() {
         Config::default().quick_select.alphabet
     );
 }
+
+#[test]
+fn ctl_capture_cap_defaults_and_validates() {
+    assert_eq!(Config::default().ctl.capture_max_bytes, 1_048_576);
+    let cfg = parse_str("[ctl]\ncapture_max_bytes = 4096\n")
+        .unwrap()
+        .config;
+    assert_eq!(cfg.ctl.capture_max_bytes, 4096);
+    let e = parse_str("[ctl]\ncapture_max_bytes = 0\n").unwrap_err();
+    assert!(format!("{e:?}").contains("ctl.capture_max_bytes"), "{e:?}");
+    let l = parse_str("[ctl]\ncapture_max_byte = 1\n").unwrap();
+    assert!(
+        l.warnings
+            .iter()
+            .any(|w| format!("{w:?}").contains("capture_max_bytes")),
+        "did-you-mean for the typo: {:?}",
+        l.warnings
+    );
+}

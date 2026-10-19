@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite, Shell};
+use alacritty_terminal::tty::{self, Shell};
 
+use crate::commands::{drive, CommandInfo, CommandTracker, OscSniffer};
 use crate::emulator::{take_damage, term_config, CursorDefault, ScrollCmd, Size};
 use crate::events::{Listener, Osc52Policy, Palette, Shared, TermEvent};
 use crate::input::{encode_key, encode_paste, InputMode, KeyInput};
@@ -70,6 +70,8 @@ impl Default for SpawnOptions {
 struct Taps {
     output: std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
     input: std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
+    /// Unix milliseconds of the last PTY read (`pane wait --idle`). Zero before any output.
+    last_output_ms: AtomicU64,
 }
 
 impl Taps {
@@ -85,11 +87,13 @@ impl Taps {
 
 /// How a terminal reaches its process.
 enum Backend {
-    /// A local PTY driven by the engine's event loop.
+    /// A local PTY read by our own thread (see [`spawn_local_io`]).
     Local {
-        sender: EventLoopSender,
+        /// Resizes the PTY and signals the child on drop.
+        pty: Mutex<tty::Pty>,
+        input: std::sync::mpsc::Sender<Cow<'static, [u8]>>,
         pid: u32,
-        /// PTY master fd, for foreground-process queries. Owned by the event loop.
+        /// PTY master fd, for foreground-process queries.
         master_fd: RawFd,
     },
     /// A pane owned by a `microterm-mux` daemon: bytes are pushed in with `feed`.
@@ -112,7 +116,7 @@ pub struct RemoteFeed {
     parser: alacritty_terminal::vte::ansi::Processor,
     filter: WidthFilter,
     sniffer: crate::mouse::PixelModeSniffer,
-    prompt_sniffer: crate::lines::PromptSniffer,
+    osc: OscSniffer,
     out: Vec<u8>,
 }
 
@@ -126,9 +130,8 @@ pub struct Terminal {
     wide_ri: Arc<AtomicBool>,
     /// DECSET 1016 state, set by the PTY reader's sniffer.
     sgr_pixels: Arc<AtomicBool>,
-    /// OSC 133;A prompts seen by the reader that have not been placed on a line yet.
-    pending_marks: Arc<std::sync::atomic::AtomicUsize>,
-    marks: std::sync::Mutex<crate::lines::PromptMarks>,
+    /// Per-command OSC 133 records, written by whoever parses the output.
+    tracker: Arc<Mutex<CommandTracker>>,
 }
 
 impl Terminal {
@@ -197,34 +200,46 @@ impl Terminal {
         let master_fd = pty.file().as_raw_fd();
         let wide_ri = Arc::new(AtomicBool::new(opts.wide_regional_indicators));
         let sgr_pixels = Arc::new(AtomicBool::new(false));
-        let pending_marks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let taps = Arc::new(Taps::default());
-        let pty = FilteredPty::new(
-            pty,
-            wide_ri.clone(),
-            sgr_pixels.clone(),
-            pending_marks.clone(),
-            taps.clone(),
+        let tracker = Arc::new(Mutex::new(CommandTracker::new(
+            opts.scrollback,
+            opts.cols as usize,
+        )));
+        let input = spawn_local_io(
+            &pty,
+            LocalIo {
+                term: term.clone(),
+                shared: shared.clone(),
+                tracker: tracker.clone(),
+                reader: FilterReader::new(
+                    pty.file().try_clone()?,
+                    wide_ri.clone(),
+                    sgr_pixels.clone(),
+                    taps.clone(),
+                ),
+                pid,
+            },
         )?;
-        let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
-        let sender = event_loop.channel();
-        shared.set_pty(sender.clone());
-        // The loop thread owns the PTY; it exits on Shutdown or child exit.
-        let _ = event_loop.spawn();
+        {
+            let tx = input.clone();
+            shared.set_sink(Box::new(move |bytes| {
+                let _ = tx.send(Cow::Owned(bytes));
+            }));
+        }
         Ok(Terminal {
             taps,
             term,
             shared,
             backend: Backend::Local {
-                sender,
+                pty: Mutex::new(pty),
+                input,
                 pid,
                 master_fd,
             },
             scrollback: opts.scrollback,
             wide_ri,
             sgr_pixels,
-            pending_marks,
-            marks: Default::default(),
+            tracker,
         })
     }
 
@@ -273,15 +288,17 @@ impl Terminal {
                     parser: Default::default(),
                     filter: WidthFilter::new(),
                     sniffer: crate::mouse::PixelModeSniffer::new(sgr_pixels.clone()),
-                    prompt_sniffer: Default::default(),
+                    osc: Default::default(),
                     out: Vec::new(),
                 })),
             },
             scrollback: opts.scrollback,
             wide_ri: Arc::new(AtomicBool::new(opts.wide_regional_indicators)),
             sgr_pixels,
-            pending_marks: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            marks: Default::default(),
+            tracker: Arc::new(Mutex::new(CommandTracker::new(
+                opts.scrollback,
+                opts.cols as usize,
+            ))),
         }
     }
 
@@ -298,23 +315,44 @@ impl Terminal {
         let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
         let f = &mut *f;
         f.sniffer.feed(bytes);
-        let n = f.prompt_sniffer.feed(bytes).len();
-        if n > 0 {
-            self.pending_marks.fetch_add(n, Ordering::Relaxed);
-        }
+        self.taps
+            .last_output_ms
+            .store(crate::commands::now_ms(), Ordering::Relaxed);
         let mut term = self.term.lock();
-        if self.wide_ri.load(Ordering::Relaxed) {
-            f.out.clear();
-            f.filter.filter(bytes, &mut f.out);
-            f.parser.advance(&mut *term, &f.out);
-        } else {
-            let held = f.filter.take_pending();
-            f.filter.reset();
+        let mut tracker = self.tracker.lock().unwrap_or_else(|e| e.into_inner());
+        let RemoteFeed {
+            parser,
+            filter,
+            osc,
+            out,
+            ..
+        } = f;
+        let wide = self.wide_ri.load(Ordering::Relaxed);
+        // Bytes held back by the width filter while it was on are released first.
+        if !wide {
+            let held = filter.take_pending();
+            filter.reset();
             if !held.is_empty() {
-                f.parser.advance(&mut *term, &held);
+                parser.advance(&mut *term, &held);
             }
-            f.parser.advance(&mut *term, bytes);
         }
+        drive(
+            osc,
+            &mut tracker,
+            &mut term,
+            bytes,
+            |term, seg| {
+                if wide {
+                    out.clear();
+                    filter.filter(seg, out);
+                    parser.advance(term, out);
+                } else {
+                    parser.advance(term, seg);
+                }
+            },
+            |code| self.shared.notify(TermEvent::CommandFinished(code)),
+        );
+        drop(tracker);
         drop(term);
         self.shared.notify(TermEvent::Wakeup);
     }
@@ -355,8 +393,8 @@ impl Terminal {
         let bytes = bytes.into();
         Taps::send(&self.taps.input, &bytes);
         match &self.backend {
-            Backend::Local { sender, .. } => {
-                let _ = sender.send(Msg::Input(bytes));
+            Backend::Local { input, .. } => {
+                let _ = input.send(bytes);
             }
             Backend::Remote { io, .. } => (io.input)(bytes.into_owned()),
         }
@@ -394,13 +432,20 @@ impl Terminal {
             cell_height,
         };
         *self.shared.size.lock().unwrap() = ws;
-        self.term.lock().resize(Size {
-            cols: cols as usize,
-            rows: rows as usize,
-        });
+        {
+            let mut term = self.term.lock();
+            term.resize(Size {
+                cols: cols as usize,
+                rows: rows as usize,
+            });
+            self.tracker
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .after_resize(&term);
+        }
         match &self.backend {
-            Backend::Local { sender, .. } => {
-                let _ = sender.send(Msg::Resize(ws));
+            Backend::Local { pty, .. } => {
+                pty.lock().unwrap_or_else(|e| e.into_inner()).on_resize(ws);
             }
             Backend::Remote { io, .. } => (io.resize)(cols, rows),
         }
@@ -483,7 +528,12 @@ impl Terminal {
 
     /// Drops scrollback history (the visible screen is kept).
     pub fn clear_scrollback(&self) {
-        self.term.lock().grid_mut().clear_history();
+        let mut term = self.term.lock();
+        term.grid_mut().clear_history();
+        self.tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .history_cleared(&term);
     }
 
     /// Takes queued events. Call this before `snapshot` so new output re-arms the waker.
@@ -549,18 +599,83 @@ impl Terminal {
         crate::lines::scroll_to_abs(&mut self.term.lock(), abs, center);
     }
 
-    /// Absolute lines of OSC 133;A prompt starts, ascending; empty without shell integration.
-    ///
-    /// The PTY reader only counts prompts; they are placed on the cursor line when first
-    /// observed here, which is the prompt line for an idle shell.
+    fn tracker(&self) -> std::sync::MutexGuard<'_, CommandTracker> {
+        self.tracker.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Absolute lines of OSC 133 prompt starts, ascending; empty without shell integration.
     pub fn prompt_marks(&self) -> Vec<usize> {
+        self.tracker().prompt_lines()
+    }
+
+    /// Whether the shell ever sent an OSC 133 mark (shell integration is active).
+    pub fn has_marks(&self) -> bool {
+        self.tracker().has_marks()
+    }
+
+    /// A command is running: its `C` mark arrived and its `D` did not.
+    pub fn busy(&self) -> bool {
+        self.tracker().busy()
+    }
+
+    /// Number of commands that finished (OSC 133 `D`) over the terminal's life.
+    pub fn commands_finished(&self) -> u64 {
+        self.tracker().finished_total()
+    }
+
+    /// Sequence number the next command will get; remember it before typing a command line.
+    pub fn next_command_seq(&self) -> u64 {
+        self.tracker().next_seq()
+    }
+
+    /// The `n`-th most recent finished command (`1` = latest) with its output.
+    pub fn last_command(&self, n: usize) -> Option<CommandInfo> {
         let term = self.term.lock();
-        let mut marks = self.marks.lock().unwrap();
-        marks.sync(crate::lines::history_size(&term));
-        if self.pending_marks.swap(0, Ordering::Relaxed) > 0 {
-            marks.push(term.grid().cursor.point.line.0);
+        self.tracker().finished(&term, n)
+    }
+
+    /// The finished command with this sequence number, if it is still retained.
+    pub fn command_by_seq(&self, seq: u64) -> Option<CommandInfo> {
+        let term = self.term.lock();
+        self.tracker().finished_seq(&term, seq)
+    }
+
+    /// Output of the running command so far.
+    pub fn running_output(&self) -> Option<String> {
+        let term = self.term.lock();
+        self.tracker().running_output(&term)
+    }
+
+    /// The working directory last announced with OSC 7.
+    pub fn reported_cwd(&self) -> Option<String> {
+        self.tracker().cwd().map(str::to_string)
+    }
+
+    /// The whole grid as logical lines (soft wraps joined, trailing blanks trimmed, scrollback
+    /// first), for `pane wait --match` and `pane run` output.
+    pub fn logical_lines(&self) -> Vec<String> {
+        crate::lines::logical_lines(&self.term.lock())
+    }
+
+    /// Prints `bytes` into the grid as if the program had written them, without touching the
+    /// process (the `[process exited with status N]` notice).
+    pub fn inject(&self, bytes: &[u8]) {
+        let mut parser: alacritty_terminal::vte::ansi::Processor = Default::default();
+        parser.advance(&mut *self.term.lock(), bytes);
+        self.shared.notify(TermEvent::Wakeup);
+    }
+
+    /// The signal that ended the child, if it was killed by one.
+    pub fn exit_signal(&self) -> Option<i32> {
+        match self.shared.exit_signal.load(Ordering::Relaxed) {
+            0 => None,
+            n => Some(n),
         }
-        marks.abs_lines()
+    }
+
+    /// Unix milliseconds when output last arrived (`0` before any).
+    pub fn last_output_ms(&self) -> u64 {
+        self.taps.last_output_ms.load(Ordering::Relaxed)
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -570,68 +685,43 @@ impl Terminal {
     }
 }
 
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        if let Backend::Local { sender, .. } = &self.backend {
-            let _ = sender.send(Msg::Shutdown);
-        }
-    }
-}
-
-/// The PTY handed to the engine's event loop, with the width filter in the read path.
+/// Reads the PTY master, running the bytes through `WidthFilter` while
+/// `text.wide_regional_indicators` is on.
 ///
-/// The loop reads through `reader()`; this wrapper reads from a duplicate of the master fd
-/// (same open file, so readiness and `O_NONBLOCK` are shared) and runs the bytes through
-/// `WidthFilter` while `text.wide_regional_indicators` is on.
-struct FilteredPty {
-    inner: tty::Pty,
-    reader: FilterReader,
-}
-
+/// The fd is non-blocking (shared with the master the `Pty` owns), so a read with nothing
+/// pending fails with `WouldBlock`.
 struct FilterReader {
     file: std::fs::File,
     enabled: Arc<AtomicBool>,
     filter: WidthFilter,
     sniffer: crate::mouse::PixelModeSniffer,
-    prompt_sniffer: crate::lines::PromptSniffer,
-    pending_marks: Arc<std::sync::atomic::AtomicUsize>,
     taps: Arc<Taps>,
     raw: Vec<u8>,
     out: Vec<u8>,
 }
 
-impl FilteredPty {
+impl FilterReader {
     fn new(
-        inner: tty::Pty,
+        file: std::fs::File,
         enabled: Arc<AtomicBool>,
         pixels: Arc<AtomicBool>,
-        pending_marks: Arc<std::sync::atomic::AtomicUsize>,
         taps: Arc<Taps>,
-    ) -> io::Result<Self> {
-        let file = inner.file().try_clone()?;
-        Ok(Self {
-            inner,
-            reader: FilterReader {
-                file,
-                enabled,
-                filter: WidthFilter::new(),
-                sniffer: crate::mouse::PixelModeSniffer::new(pixels),
-                prompt_sniffer: Default::default(),
-                pending_marks,
-                taps,
-                raw: Vec::new(),
-                out: Vec::new(),
-            },
-        })
-    }
-}
-
-impl FilterReader {
-    fn note_prompts(&mut self, bytes: &[u8]) {
-        let n = self.prompt_sniffer.feed(bytes).len();
-        if n > 0 {
-            self.pending_marks.fetch_add(n, Ordering::Relaxed);
+    ) -> Self {
+        FilterReader {
+            file,
+            enabled,
+            filter: WidthFilter::new(),
+            sniffer: crate::mouse::PixelModeSniffer::new(pixels),
+            taps,
+            raw: Vec::new(),
+            out: Vec::new(),
         }
+    }
+
+    fn touch(&self) {
+        self.taps
+            .last_output_ms
+            .store(crate::commands::now_ms(), Ordering::Relaxed);
     }
 }
 
@@ -648,7 +738,7 @@ impl io::Read for FilterReader {
             let n = self.file.read(buf)?;
             Taps::send(&self.taps.output, &buf[..n]);
             self.sniffer.feed(&buf[..n]);
-            self.note_prompts(&buf[..n]);
+            self.touch();
             return Ok(n);
         }
         // Every 4-byte indicator grows by one byte and up to 3 held-back bytes are re-emitted,
@@ -668,9 +758,7 @@ impl io::Read for FilterReader {
             self.out.clear();
             Taps::send(&self.taps.output, &self.raw[..n]);
             self.sniffer.feed(&self.raw[..n]);
-            let raw = std::mem::take(&mut self.raw);
-            self.note_prompts(&raw[..n]);
-            self.raw = raw;
+            self.touch();
             self.filter.filter(&self.raw[..n], &mut self.out);
             if self.out.is_empty() {
                 continue; // only a partial UTF-8 sequence so far; read on
@@ -681,51 +769,197 @@ impl io::Read for FilterReader {
     }
 }
 
-impl EventedReadWrite for FilteredPty {
-    type Reader = FilterReader;
-    type Writer = std::fs::File;
+/// What the local reader thread needs.
+struct LocalIo {
+    term: Arc<FairMutex<Term<Listener>>>,
+    shared: Arc<Shared>,
+    tracker: Arc<Mutex<CommandTracker>>,
+    reader: FilterReader,
+    pid: u32,
+}
 
-    unsafe fn register(
-        &mut self,
-        poll: &Arc<polling::Poller>,
-        interest: polling::Event,
-        mode: polling::PollMode,
-    ) -> io::Result<()> {
-        unsafe { self.inner.register(poll, interest, mode) }
+/// Longest the reader sleeps without checking whether the child exited.
+const POLL_MS: i32 = 50;
+/// A parse never holds the terminal lock for more than one read of this many bytes.
+const READ_CHUNK: usize = 64 * 1024;
+
+#[allow(unsafe_code)]
+fn poll_fd(fd: RawFd, events: i16, timeout_ms: i32) -> bool {
+    let mut p = libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd for the duration of the call.
+    let r = unsafe { libc::poll(&mut p, 1, timeout_ms) };
+    r > 0
+}
+
+fn write_all_nb(file: &mut std::fs::File, mut buf: &[u8]) -> io::Result<()> {
+    use io::Write;
+    let fd = file.as_raw_fd();
+    while !buf.is_empty() {
+        match file.write(buf) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => buf = &buf[n..],
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                poll_fd(fd, libc::POLLOUT, 100);
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
     }
+    Ok(())
+}
 
-    fn reregister(
-        &mut self,
-        poll: &Arc<polling::Poller>,
-        interest: polling::Event,
-        mode: polling::PollMode,
-    ) -> io::Result<()> {
-        self.inner.reregister(poll, interest, mode)
+/// How the child ended: `(exit code, terminating signal)`, once it did.
+type ExitSlot = Arc<(
+    Mutex<Option<(Option<i32>, Option<i32>)>>,
+    std::sync::Condvar,
+)>;
+
+/// `(exit code, terminating signal)` of the child.
+#[allow(unsafe_code)]
+fn wait_status(pid: u32) -> (Option<i32>, Option<i32>) {
+    let mut status = 0;
+    // SAFETY: waitpid on our own child; the Pty's drop then sees ECHILD.
+    let r = unsafe { libc::waitpid(pid as i32, &mut status, 0) };
+    if r < 0 {
+        return (None, None);
     }
-
-    fn deregister(&mut self, poll: &Arc<polling::Poller>) -> io::Result<()> {
-        self.inner.deregister(poll)
-    }
-
-    fn reader(&mut self) -> &mut FilterReader {
-        &mut self.reader
-    }
-
-    fn writer(&mut self) -> &mut std::fs::File {
-        self.inner.writer()
+    if libc::WIFEXITED(status) {
+        (Some(libc::WEXITSTATUS(status)), None)
+    } else if libc::WIFSIGNALED(status) {
+        (None, Some(libc::WTERMSIG(status)))
+    } else {
+        (None, None)
     }
 }
 
-impl EventedPty for FilteredPty {
-    fn next_child_event(&mut self) -> Option<ChildEvent> {
-        self.inner.next_child_event()
-    }
+/// Starts the writer, the child waiter and the reader that parses output. Returns the channel
+/// that queues bytes for the child; sends never block, a full PTY only stalls the writer.
+///
+/// We run this ourselves instead of the engine's `EventLoop` so that OSC 133 marks are applied
+/// at the exact byte they arrive on (`commands::drive`).
+fn spawn_local_io(
+    pty: &tty::Pty,
+    io: LocalIo,
+) -> io::Result<std::sync::mpsc::Sender<Cow<'static, [u8]>>> {
+    let (tx, rx) = std::sync::mpsc::channel::<Cow<'static, [u8]>>();
+    let mut writer = pty.file().try_clone()?;
+    std::thread::Builder::new()
+        .name("PTY writer".into())
+        .spawn(move || {
+            while let Ok(bytes) = rx.recv() {
+                if bytes.is_empty() {
+                    continue;
+                }
+                if write_all_nb(&mut writer, &bytes).is_err() {
+                    break;
+                }
+            }
+        })?;
+
+    let exited: ExitSlot = Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+    let ex = exited.clone();
+    let pid = io.pid;
+    std::thread::Builder::new()
+        .name("PTY waiter".into())
+        .spawn(move || {
+            let status = wait_status(pid);
+            *ex.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(status);
+            ex.1.notify_all();
+        })?;
+
+    std::thread::Builder::new()
+        .name("PTY reader".into())
+        .spawn(move || run_reader(io, exited))?;
+    Ok(tx)
 }
 
-impl OnResize for FilteredPty {
-    fn on_resize(&mut self, window_size: WindowSize) {
-        self.inner.on_resize(window_size);
+fn run_reader(mut io: LocalIo, exited: ExitSlot) {
+    use alacritty_terminal::vte::ansi::Processor;
+    use io::Read;
+    let fd = io.reader.file.as_raw_fd();
+    let mut parser: Processor = Processor::default();
+    let mut osc = OscSniffer::default();
+    let mut buf = vec![0u8; READ_CHUNK];
+    let has_exited = |e: &ExitSlot| e.0.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+    loop {
+        // Wake for a synchronized-update timeout as well as for output.
+        let timeout = parser.sync_timeout().sync_timeout().map_or(POLL_MS, |t| {
+            (t.saturating_duration_since(std::time::Instant::now())
+                .as_millis() as i32)
+                .clamp(0, POLL_MS)
+        });
+        if !poll_fd(fd, libc::POLLIN, timeout) {
+            if parser
+                .sync_timeout()
+                .sync_timeout()
+                .is_some_and(|t| t <= std::time::Instant::now())
+            {
+                let mut term = io.term.lock();
+                parser.stop_sync(&mut *term);
+                drop(term);
+                io.shared.notify(TermEvent::Wakeup);
+            }
+            if has_exited(&exited) {
+                break;
+            }
+            continue;
+        }
+        let n = match io.reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue
+            }
+            Err(_) => break, // EIO once the child side closed (Linux)
+        };
+        {
+            let mut term = io.term.lock();
+            let mut tracker = io.tracker.lock().unwrap_or_else(|e| e.into_inner());
+            let shared = io.shared.clone();
+            drive(
+                &mut osc,
+                &mut tracker,
+                &mut term,
+                &buf[..n],
+                |term, seg| parser.advance(term, seg),
+                |code| shared.notify(TermEvent::CommandFinished(code)),
+            );
+        }
+        if parser.sync_bytes_count() < n {
+            io.shared.notify(TermEvent::Wakeup);
+        }
     }
+    // Output is drained; report how the child ended (it may still be shutting down).
+    let status = {
+        let mut g = exited.0.lock().unwrap_or_else(|e| e.into_inner());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while g.is_none() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            g = exited
+                .1
+                .wait_timeout(g, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        g.unwrap_or((None, None))
+    };
+    if let Some(sig) = status.1 {
+        io.shared.exit_signal.store(sig, Ordering::Relaxed);
+    }
+    io.shared.notify(TermEvent::ChildExit(status.0));
+    io.shared.notify(TermEvent::Wakeup);
 }
 
 #[cfg(test)]

@@ -155,6 +155,29 @@
   renamed (`tab.new|focus|rename|close`, `window.list|focus|close`, `pane.list|get|close`,
   `workspace.delete`, …) at protocol `v:1`, and a test pins the list. New docs: microterm ctl,
   Selectors & targeting; updated CLI overview, Environment variables, Exit codes.
+- **M10.2 — ctl: run, wait and last-command output.** `microterm ctl pane run` runs a command
+  and returns its output and status: in spawn mode (`-- CMD ARGS…`, argv, new tab that closes on
+  exit unless `--keep`; `--detach`, `--timeout`, `--propagate-exit`) or with `--in TARGET`, which
+  types a line into a shell pane and returns exactly the output between its OSC 133 `C` and `D`
+  marks. `pane wait` waits for `--match REGEX` (on rendered, unwrapped text across scrollback and
+  screen, then live output; `--new-only`), `--idle DUR` (PTY bytes, so a blinking cursor cannot
+  reset it), `--exit` or `--command-finished`, first one wins, 60 s default. A `--match` value
+  that reads as a pane selector (`title:dev`) picks the pane; `--text` and `--select` are the
+  unambiguous spellings. `pane get-text --last-command [N]` returns the N-th most recent
+  finished command as `{command, exit_code, cwd, text, finished_at}`. New exit codes **6**
+  (timeout; the command keeps running), **7** (no shell integration) and **9** (pane busy);
+  output is capped by the new `[ctl].capture_max_bytes` (default 1 MiB, tail kept,
+  `"truncated":true`). `microterm shell-integration bash|zsh|fish` prints the snippet that emits
+  OSC 133 and OSC 7 (tested against real bash, zsh and fish). `mt_term` now records one entry per
+  command (prompt, input, output and end anchors, command text, status, cwd, timestamps) in a
+  ring of 500 per pane and emits `CommandFinished`; to place marks at the exact byte, local panes
+  run on our own PTY reader instead of the engine's event loop, and the scrollback limit is
+  enforced by trimming between parser calls so anchors never drift. VT replay re-emits the marks
+  of retained history, so `--last-command` and `wait --command-finished` work over SSH and after
+  a reconnect. `pane.run` and `pane.wait` are long-running IPC requests that stop waiting when
+  the client disconnects (the command keeps running); mux events gain `pane_exited` and
+  `command_finished`. A pane kept by `--keep` lists as `exited: true` with its `exit_code`. New
+  docs: Run & wait, Shell integration; updated microterm ctl, Exit codes, CLI overview.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

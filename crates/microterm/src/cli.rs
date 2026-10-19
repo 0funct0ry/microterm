@@ -52,6 +52,16 @@ pub enum Command {
     Config(ConfigCmd),
     /// Print shell completions.
     Completions { shell: Shell },
+    /// Print the snippet that makes a shell emit OSC 133 marks and OSC 7.
+    ///
+    /// Marks let `microterm ctl pane run --in`, `pane wait --command-finished` and
+    /// `pane get-text --last-command` tell a command's output from the rest of the screen, and
+    /// power prompt jumps in copy mode. Add one line to your shell's rc file:
+    ///
+    ///   bash: eval "$(microterm shell-integration bash)"   (~/.bashrc)
+    ///   zsh:  eval "$(microterm shell-integration zsh)"    (~/.zshrc)
+    ///   fish: microterm shell-integration fish | source    (~/.config/fish/config.fish)
+    ShellIntegration { shell: Shell },
     /// Run a command in a new tab and record it (asciicast v2).
     ///
     /// The command starts only once recording is armed, so no output is lost, and the
@@ -60,7 +70,8 @@ pub enum Command {
     /// Script a running microterm instance, one resource at a time.
     ///
     /// `ctl` is organised by resource: `workspace`, `window`, `tab` and `pane`, plus the top-level
-    /// `list`, `record`, `replay` and `reload-config`. Every command talks to the instance named
+    /// `list`, `record`, `replay` and `reload-config`; `pane run` and `pane wait` run a command
+    /// and wait for it or for output. Every command talks to the instance named
     /// by $MICROTERM_UNIX_SOCKET (set in every local pane), or else the newest live instance of
     /// this user.
     ///
@@ -76,9 +87,12 @@ pub enum Command {
     /// {"error":{"code","message","candidates"?}}.
     ///
     /// EXIT CODES: 0 ok, 1 usage or other error (including a missing target for an input or
-    /// destructive verb), 2 no running instance, 3 target not found, 4 protocol version
-    /// mismatch, 5 ambiguous target (several matches, no --all), 8 confirmation required
-    /// (confirm_close would prompt and --force was not given; nothing was closed).
+    /// destructive verb), 2 no running instance, 3 target not found (or the pane went away
+    /// while waiting), 4 protocol version mismatch, 5 ambiguous target (several matches, no
+    /// --all), 6 timeout (`pane wait`, `pane run --timeout`; the command keeps running),
+    /// 7 needs shell integration (no OSC 133 marks seen in that pane), 8 confirmation required
+    /// (confirm_close would prompt and --force was not given; nothing was closed), 9 pane busy
+    /// (`pane run --in` while a command is running).
     Ctl(CtlArgs),
     /// Internal: plays a `.cast` file on stdout (what `ctl replay` runs in the new tab).
     #[command(name = "__replay", hide = true)]

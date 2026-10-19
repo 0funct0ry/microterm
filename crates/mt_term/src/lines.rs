@@ -119,71 +119,30 @@ pub(crate) fn scroll_to_abs<T: alacritty_terminal::event::EventListener>(
     term.scroll_display(Scroll::Delta(want - off));
 }
 
-/// OSC 133;A (prompt start) positions as grid lines that follow their text as history grows.
-#[derive(Debug, Default)]
-pub(crate) struct PromptMarks {
-    lines: Vec<i32>,
-    history: usize,
-}
-
-impl PromptMarks {
-    /// Re-bases the marks after the history length changed.
-    pub fn sync(&mut self, history: usize) {
-        let d = history as i32 - self.history as i32;
-        if d != 0 {
-            for l in &mut self.lines {
-                *l -= d;
-            }
-            self.history = history;
-        }
-        self.lines.retain(|l| *l >= -(history as i32));
-    }
-
-    pub fn push(&mut self, line: i32) {
-        if let Err(i) = self.lines.binary_search(&line) {
-            self.lines.insert(i, line);
+/// The whole grid as logical lines: soft-wrapped rows are joined, trailing blanks and wide-char
+/// spacers dropped, trailing empty lines removed. Index 0 is the oldest scrollback line.
+pub(crate) fn logical_lines<T>(term: &Term<T>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for abs in 0..total_lines(term) {
+        let Some(cells) = line_cells(term, abs) else {
+            break;
+        };
+        let seg: String = cells.chars.iter().filter(|c| **c != '\0').collect();
+        if cells.wrapped {
+            cur.push_str(&seg);
+        } else {
+            cur.push_str(seg.trim_end());
+            out.push(std::mem::take(&mut cur));
         }
     }
-
-    /// Ascending absolute lines.
-    pub fn abs_lines(&self) -> Vec<usize> {
-        self.lines
-            .iter()
-            .map(|l| (l + self.history as i32).max(0) as usize)
-            .collect()
+    if !cur.is_empty() {
+        out.push(cur);
     }
-}
-
-/// Finds the `ESC ] 133 ; A` prefix across arbitrary chunk boundaries.
-#[derive(Debug, Default, Clone)]
-pub struct PromptSniffer {
-    matched: usize,
-}
-
-const PREFIX: &[u8] = b"\x1b]133;A";
-
-impl PromptSniffer {
-    /// Offsets just past each prefix found in `bytes`.
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<usize> {
-        let mut out = Vec::new();
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == PREFIX[self.matched] {
-                self.matched += 1;
-                if self.matched == PREFIX.len() {
-                    out.push(i + 1);
-                    self.matched = 0;
-                }
-            } else {
-                self.matched = usize::from(b == PREFIX[0]);
-            }
-        }
-        out
+    while out.last().is_some_and(|l| l.is_empty()) {
+        out.pop();
     }
-}
-
-pub(crate) fn mark_here<T>(term: &Term<T>, marks: &mut PromptMarks) {
-    marks.sync(term.grid().history_size());
-    marks.push(term.grid().cursor.point.line.0);
+    out
 }
 
 /// One row with full styling, by absolute line (for `get-text --escapes`).
@@ -203,29 +162,7 @@ pub(crate) fn styled_line<T>(term: &Term<T>, abs: usize) -> Option<Vec<crate::Ce
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::Emulator;
-
-    #[test]
-    fn sniffer_matches_across_chunks() {
-        let mut s = PromptSniffer::default();
-        assert_eq!(s.feed(b"ab\x1b]13"), Vec::<usize>::new());
-        assert_eq!(s.feed(b"3;A\x07x"), vec![3]);
-        assert_eq!(s.feed(b"\x1b]133;B"), Vec::<usize>::new());
-        assert_eq!(s.feed(b"\x1b\x1b]133;A\x1b]133;A"), vec![8, 15]);
-    }
-
-    #[test]
-    fn marks_follow_scrolling_history() {
-        let mut e = Emulator::new(10, 3, 100);
-        e.advance(b"\x1b]133;A\x07prompt1\r\nout\r\n\x1b]133;A\x07prompt2");
-        assert_eq!(e.prompt_marks(), vec![0, 2]);
-        e.advance(b"\r\nmore\r\nmore2");
-        // History grew by 2; marks still point at their text.
-        let m = e.prompt_marks();
-        assert_eq!(m, vec![0, 2]);
-        assert_eq!(e.line_cells(2).unwrap().text(), "prompt2");
-    }
 
     #[test]
     fn line_cells_cover_history_and_wrap() {

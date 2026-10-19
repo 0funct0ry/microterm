@@ -8,6 +8,7 @@
 //! lock acquisitions), and reports activity through `TermEvent::Wakeup`, coalesced to one
 //! pending wakeup (SPEC §3.4).
 
+mod commands;
 mod emulator;
 mod events;
 mod headless;
@@ -23,6 +24,7 @@ mod snapshot;
 mod terminal;
 mod width_filter;
 
+pub use commands::{now_ms, CommandInfo, CommandTracker, Mark, OscSniffer, MAX_COMMANDS};
 pub use emulator::{CursorDefault, Emulator, ScrollCmd};
 pub use events::{ClipboardKind, Osc52Policy, Palette, TermEvent, OSC52_MAX_BYTES};
 pub use headless::{HeadlessOptions, HeadlessPane, PaneEvent};
@@ -30,7 +32,7 @@ pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,
     KittyFlags, Mods,
 };
-pub use lines::{LineCells, PromptSniffer};
+pub use lines::LineCells;
 pub use mouse::{
     encode_mouse, MouseButton, MouseEvent, MouseEventKind, MouseModes, MouseTracking,
     PixelModeSniffer,

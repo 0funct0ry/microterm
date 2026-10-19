@@ -13,7 +13,7 @@ microterm ctl list
 microterm ctl workspace list | create NAME | switch NAME | rename OLD NEW | delete NAME [--force]
 microterm ctl window    list | new | focus | close
 microterm ctl tab       list | new | focus | rename | close
-microterm ctl pane      list | get | send-text | get-text | close
+microterm ctl pane      list | get | send-text | get-text | run | wait | close
 microterm ctl record | replay | reload-config
 ```
 
@@ -89,6 +89,10 @@ microterm ctl pane list [--window ID] [--tab ID] [--match EXPR]
 microterm ctl pane get [--pane ID | --match EXPR]
 microterm ctl pane send-text [--pane ID | --match EXPR] [--all] [--no-paste] [TEXT]
 microterm ctl pane get-text [--pane ID | --match EXPR] [--start-line N] [--end-line N] [--escapes]
+                            [--last-command [N]]
+microterm ctl pane run [--in TARGET] [--keep] [--detach] [--timeout DUR] [--propagate-exit] -- CMD…
+microterm ctl pane wait [TARGET] [--match REGEX] [--idle DUR] [--exit] [--command-finished]
+                        [--timeout DUR] [--new-only]
 microterm ctl pane close [--pane ID | --match EXPR] [--force] [--all]
 ```
 
@@ -102,7 +106,7 @@ microterm ctl pane close [--pane ID | --match EXPR] [--force] [--all]
 
 `process` is the foreground process when it is not the shell (`null` at an idle prompt, and
 always `null` in SSH panes). A pane is removed from the mux when its process exits, so `exited`
-is `false` and `exit_code` `null` for every listed pane.
+is `false` and `exit_code` `null` for every pane except one kept open by `pane run --keep`.
 
 `send-text` sends TEXT, or stdin when TEXT is omitted. By default the text is **pasted**:
 wrapped in bracketed-paste markers when the program asked for them (so editors and shells do not
@@ -113,11 +117,24 @@ types the bytes exactly as given, which is what you want for control characters 
 `get-text` prints the pane's text. Lines are numbered from the top visible row (`0`); negative
 numbers reach into scrollback (`-1` is the row just above the screen). Soft-wrapped rows are
 joined and trailing blank lines dropped. `--escapes` re-encodes colours and styles as SGR
-sequences. With `--json` the result is `{"text": "…"}`.
+sequences. With `--json` the result is `{"text": "…"}` (`"truncated": true` when `[ctl].capture_max_bytes`
+cut the start). `--last-command [N]` prints the output of the N-th most recent finished command
+instead; see [Run & wait](/docs/run-and-wait/).
 
 ```sh
 microterm ctl pane get-text --pane 12 --start-line -200 --end-line -1
 microterm ctl pane get-text --match 'title:build*' --escapes > styled.txt
+```
+
+`run` runs a command and returns its output and status, `wait` waits for output, idleness, an
+exit or a finished command. They are described in [Run & wait](/docs/run-and-wait/), and the
+shell setup they need for `--in`, `--command-finished` and `--last-command` in
+[Shell integration](/docs/shell-integration/).
+
+```sh
+microterm ctl pane run --detach --title dev -- npm run dev
+microterm ctl pane wait --match title:dev --match 'ready on' --timeout 120s
+microterm ctl pane run --json -- cargo test        # {"exit_code":…,"output":"…",…}
 ```
 
 ## Closing and confirm_close

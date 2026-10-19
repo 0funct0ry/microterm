@@ -81,7 +81,8 @@ impl CursorDefault {
 
 pub(crate) fn term_config(scrollback: usize, policy: Osc52Policy, cursor: CursorDefault) -> Config {
     Config {
-        scrolling_history: scrollback,
+        // The command tracker trims back to `scrollback` itself (see `commands.rs`).
+        scrolling_history: scrollback + crate::commands::HISTORY_SLACK,
         kitty_keyboard: true,
         osc52: policy.engine(),
         default_cursor_style: cursor.engine(),
@@ -111,8 +112,8 @@ pub struct Emulator {
     wide_ri: bool,
     width_filter: crate::width_filter::WidthFilter,
     sniffer: crate::mouse::PixelModeSniffer,
-    prompt_sniffer: crate::lines::PromptSniffer,
-    marks: crate::lines::PromptMarks,
+    osc: crate::commands::OscSniffer,
+    tracker: crate::commands::CommandTracker,
 }
 
 impl Emulator {
@@ -144,8 +145,8 @@ impl Emulator {
             wide_ri: false,
             width_filter: crate::width_filter::WidthFilter::new(),
             sniffer: Default::default(),
-            prompt_sniffer: Default::default(),
-            marks: Default::default(),
+            osc: Default::default(),
+            tracker: crate::commands::CommandTracker::new(scrollback, cols),
         }
     }
 
@@ -157,28 +158,38 @@ impl Emulator {
 
     pub fn advance(&mut self, bytes: &[u8]) {
         self.sniffer.feed(bytes);
-        // Split after each OSC 133;A prefix so the mark records the cursor line it arrived on.
-        let mut start = 0;
-        for end in self.prompt_sniffer.feed(bytes) {
-            self.advance_raw(&bytes[start..end]);
-            crate::lines::mark_here(&self.term, &mut self.marks);
-            start = end;
-        }
-        self.advance_raw(&bytes[start..]);
-    }
-
-    fn advance_raw(&mut self, bytes: &[u8]) {
-        if self.wide_ri {
-            let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 4);
-            self.width_filter.filter(bytes, &mut out);
-            self.parser.advance(&mut self.term, &out);
-        } else {
-            self.parser.advance(&mut self.term, bytes);
-        }
+        let Emulator {
+            term,
+            parser,
+            wide_ri,
+            width_filter,
+            osc,
+            tracker,
+            shared,
+            ..
+        } = self;
+        let wide_ri = *wide_ri;
+        crate::commands::drive(
+            osc,
+            tracker,
+            term,
+            bytes,
+            |term, seg| {
+                if wide_ri {
+                    let mut out = Vec::with_capacity(seg.len() + seg.len() / 4);
+                    width_filter.filter(seg, &mut out);
+                    parser.advance(term, &out);
+                } else {
+                    parser.advance(term, seg);
+                }
+            },
+            |code| shared.notify(TermEvent::CommandFinished(code)),
+        );
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.term.resize(Size { cols, rows });
+        self.tracker.after_resize(&self.term);
     }
 
     pub fn scroll_display(&mut self, cmd: ScrollCmd) {
@@ -258,10 +269,44 @@ impl Emulator {
         crate::lines::scroll_to_abs(&mut self.term, abs, center);
     }
 
-    /// Absolute lines of OSC 133;A prompt starts, ascending. Empty when the shell sends none.
+    /// Absolute lines of OSC 133 prompt starts, ascending. Empty when the shell sends none.
     pub fn prompt_marks(&mut self) -> Vec<usize> {
-        self.marks.sync(self.history_size());
-        self.marks.abs_lines()
+        self.tracker.prompt_lines()
+    }
+
+    /// Whether the shell ever sent an OSC 133 mark.
+    pub fn has_marks(&self) -> bool {
+        self.tracker.has_marks()
+    }
+
+    /// A command is running (`C` seen, `D` not yet).
+    pub fn busy(&self) -> bool {
+        self.tracker.busy()
+    }
+
+    /// Commands finished so far (count of `D` marks that ended a command).
+    pub fn commands_finished(&self) -> u64 {
+        self.tracker.finished_total()
+    }
+
+    /// Commands retained in the ring (at most 500), finished or not.
+    pub fn commands_len(&self) -> usize {
+        self.tracker.len()
+    }
+
+    /// The `n`-th most recent finished command (`1` = latest) with its rendered output.
+    pub fn last_command(&self, n: usize) -> Option<crate::CommandInfo> {
+        self.tracker.finished(&self.term, n)
+    }
+
+    /// Output of the running command so far.
+    pub fn running_output(&self) -> Option<String> {
+        self.tracker.running_output(&self.term)
+    }
+
+    /// The whole grid as logical lines (soft wraps joined, trailing blanks trimmed).
+    pub fn logical_lines(&self) -> Vec<String> {
+        crate::lines::logical_lines(&self.term)
     }
 
     pub fn drain_events(&mut self) -> Vec<TermEvent> {
@@ -280,6 +325,7 @@ impl Emulator {
                 .flag()
                 .load(std::sync::atomic::Ordering::Relaxed),
             max_history,
+            &self.tracker,
         )
     }
 

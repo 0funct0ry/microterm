@@ -33,7 +33,13 @@ pub mod exit {
     pub const NOT_FOUND: i32 = 3;
     pub const VERSION_MISMATCH: i32 = 4;
     pub const AMBIGUOUS: i32 = 5;
+    /// `wait` or `run --timeout` ran out; the command keeps running.
+    pub const TIMEOUT: i32 = 6;
+    /// No OSC 133 marks seen in the pane.
+    pub const NEEDS_SHELL_INTEGRATION: i32 = 7;
     pub const CONFIRM_REQUIRED: i32 = 8;
+    /// `run --in` while a command is already running.
+    pub const BUSY: i32 = 9;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +53,12 @@ pub enum ErrorCode {
     Ambiguous,
     /// `confirm_close` would prompt and `--force` was not given (exit 8).
     ConfirmRequired,
+    /// A wait ran out of time (exit 6).
+    Timeout,
+    /// The pane has never sent OSC 133 marks (exit 7).
+    NeedsShellIntegration,
+    /// The pane is busy running a command (exit 9).
+    Busy,
 }
 
 impl ErrorCode {
@@ -57,6 +69,9 @@ impl ErrorCode {
             ErrorCode::VersionMismatch => exit::VERSION_MISMATCH,
             ErrorCode::Ambiguous => exit::AMBIGUOUS,
             ErrorCode::ConfirmRequired => exit::CONFIRM_REQUIRED,
+            ErrorCode::Timeout => exit::TIMEOUT,
+            ErrorCode::NeedsShellIntegration => exit::NEEDS_SHELL_INTEGRATION,
+            ErrorCode::Busy => exit::BUSY,
         }
     }
 }
@@ -90,6 +105,15 @@ impl RpcError {
     }
     pub fn confirm_required(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::ConfirmRequired, message)
+    }
+    pub fn timeout(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Timeout, message)
+    }
+    pub fn needs_shell_integration(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::NeedsShellIntegration, message)
+    }
+    pub fn busy(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Busy, message)
     }
     pub fn ambiguous(message: impl Into<String>, candidates: Vec<String>) -> Self {
         Self {
@@ -250,7 +274,55 @@ pub struct GetTextParams {
     pub end_line: Option<i64>,
     #[serde(default)]
     pub escapes: bool,
+    /// The output of the N-th most recent finished command (OSC 133) instead of screen rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_command: Option<u32>,
 }
+
+/// `pane.run` (SPEC §12.4). Without `in`, a new tab runs `spawn.command` as argv and the call
+/// returns when the process exits. With `in`, `line` is typed into that shell pane.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunParams {
+    #[serde(flatten)]
+    pub spawn: SpawnParams,
+    /// Keep the tab after the process exits (it then shows `[process exited with status N]`).
+    #[serde(default)]
+    pub keep: bool,
+    /// Return `{pane, tab}` immediately.
+    #[serde(default)]
+    pub detach: bool,
+    #[serde(default, rename = "in", skip_serializing_if = "Option::is_none")]
+    pub in_pane: Option<Target>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// `pane.wait` (SPEC §12.4): the first condition that holds wins.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitParams {
+    #[serde(flatten)]
+    pub target: Target,
+    /// Regular expressions over the rendered, unwrapped text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matches: Vec<String>,
+    /// No PTY output for this long.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_ms: Option<u64>,
+    #[serde(default)]
+    pub exit: bool,
+    #[serde(default)]
+    pub command_finished: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Ignore what is already on screen or in scrollback.
+    #[serde(default)]
+    pub new_only: bool,
+}
+
+/// Default `pane wait` timeout.
+pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 60_000;
 
 /// `tab.focus`: a target tab, or an `index` / `relative` move inside `window` (default: the
 /// caller's or focused window).
@@ -326,6 +398,8 @@ pub enum Request {
     PaneGet(Target),
     PaneSendText(SendTextParams),
     PaneGetText(GetTextParams),
+    PaneRun(RunParams),
+    PaneWait(WaitParams),
     PaneClose(Target),
     RecordStart(RecordStartParams),
     RecordStop {
@@ -357,6 +431,8 @@ pub const METHODS: &[&str] = &[
     "pane.get",
     "pane.send_text",
     "pane.get_text",
+    "pane.run",
+    "pane.wait",
     "pane.close",
     "record.start",
     "record.stop",
@@ -387,6 +463,8 @@ impl Request {
             Request::PaneGet(_) => "pane.get",
             Request::PaneSendText(_) => "pane.send_text",
             Request::PaneGetText(_) => "pane.get_text",
+            Request::PaneRun(_) => "pane.run",
+            Request::PaneWait(_) => "pane.wait",
             Request::PaneClose(_) => "pane.close",
             Request::RecordStart(_) => "record.start",
             Request::RecordStop { .. } => "record.stop",
@@ -394,6 +472,13 @@ impl Request {
             Request::ConfigReload => "config.reload",
             Request::Subscribe => "subscribe",
         }
+    }
+
+    /// Requests that may legitimately take a long time to answer (the host replies when its
+    /// condition holds or its own timeout fires), so the connection does not apply the usual
+    /// reply deadline. They are cancelled when the client disconnects.
+    pub fn is_long_running(&self) -> bool {
+        matches!(self, Request::PaneRun(_) | Request::PaneWait(_))
     }
 
     pub fn params(&self) -> Value {
@@ -421,6 +506,8 @@ impl Request {
             Request::TabRename(p) => to(p),
             Request::PaneSendText(p) => to(p),
             Request::PaneGetText(p) => to(p),
+            Request::PaneRun(p) => to(p),
+            Request::PaneWait(p) => to(p),
             Request::RecordStop { pane } => json!({ "pane": pane }),
             Request::RecordStart(p) => to(p),
             Request::ReplayStart(p) => to(p),
@@ -488,6 +575,8 @@ impl Request {
             "pane.get" => Request::PaneGet(p(method, params)?),
             "pane.send_text" => Request::PaneSendText(p(method, params)?),
             "pane.get_text" => Request::PaneGetText(p(method, params)?),
+            "pane.run" => Request::PaneRun(p(method, params)?),
+            "pane.wait" => Request::PaneWait(p(method, params)?),
             "pane.close" => Request::PaneClose(p(method, params)?),
             "record.start" => Request::RecordStart(p(method, params)?),
             "record.stop" => Request::RecordStop {
@@ -618,6 +707,89 @@ pub struct Spawned {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Text {
     pub text: String,
+    /// The capture cap cut the start of the text.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+}
+
+/// Result of `pane get-text --last-command`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandText {
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub cwd: Option<String>,
+    pub text: String,
+    /// ISO 8601, UTC.
+    pub finished_at: String,
+    /// The start of the output scrolled out of the history, or the capture cap cut it.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Result of `pane run`. Detached runs carry only `pane` and `tab`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunResult {
+    pub pane: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default)]
+    pub truncated: bool,
+    /// The timeout ran out first; `output` is what the command printed so far.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitMatch {
+    pub text: String,
+    /// Capture groups (`null` for groups that did not take part).
+    pub groups: Vec<Option<String>>,
+    /// Index of the matching line, `0` being the oldest line of scrollback.
+    pub line: usize,
+}
+
+/// Result of `pane wait`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitResult {
+    /// `match`, `idle`, `exit` or `command_finished`.
+    pub reason: String,
+    pub waited_ms: u64,
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub matched: Option<WaitMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+/// `2026-05-17T12:34:56.789Z` from Unix milliseconds.
+pub fn iso8601_utc(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil-from-days (Howard Hinnant).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60,
+        ms % 1000
+    )
 }
 
 /// A `MuxEvent` as streamed to `subscribe`rs (SPEC §5).
@@ -635,6 +807,16 @@ pub enum Event {
     },
     TitleChanged {
         pane: u64,
+    },
+    /// The pane's process ended (`None` when killed by a signal).
+    PaneExited {
+        pane: u64,
+        status: Option<i32>,
+    },
+    /// OSC 133 `D`: a command finished.
+    CommandFinished {
+        pane: u64,
+        exit_code: Option<i32>,
     },
     TabAdded {
         window: u64,
@@ -773,8 +955,9 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, RpcError> {
 pub use hub::{Call, EventHub};
 
 mod hub {
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc::{channel, Receiver, Sender};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use serde_json::Value;
 
@@ -785,6 +968,19 @@ mod hub {
     pub struct Call {
         pub request: Request,
         pub reply: Sender<Result<Value, RpcError>>,
+        /// Set by the connection when the client went away while the request was pending.
+        /// Long-running requests (`pane.run`, `pane.wait`) stop waiting; commands keep running.
+        pub cancel: Arc<AtomicBool>,
+    }
+
+    impl Call {
+        pub fn new(request: Request, reply: Sender<Result<Value, RpcError>>) -> Self {
+            Call {
+                request,
+                reply,
+                cancel: Arc::default(),
+            }
+        }
     }
 
     /// Fan-out of [`Event`]s to `subscribe` connections. Cheap to clone behind an `Arc`;
@@ -898,6 +1094,28 @@ mod tests {
                 start_line: Some(-5),
                 end_line: Some(10),
                 escapes: true,
+                last_command: Some(2),
+            }),
+            Request::PaneRun(RunParams {
+                spawn: SpawnParams {
+                    command: Some(vec!["cargo".into(), "test".into()]),
+                    title: Some("t".into()),
+                    ..Default::default()
+                },
+                keep: true,
+                detach: false,
+                in_pane: Some(Target::pane(4)),
+                line: Some("ls -l".into()),
+                timeout_ms: Some(2000),
+            }),
+            Request::PaneWait(WaitParams {
+                target: Target::matching("title:dev"),
+                matches: vec!["ready on".into()],
+                idle_ms: Some(500),
+                exit: true,
+                command_finished: true,
+                timeout_ms: Some(1000),
+                new_only: true,
             }),
             Request::PaneClose(t),
             Request::RecordStart(RecordStartParams {
@@ -929,7 +1147,7 @@ mod tests {
             "mux.list workspace.list workspace.create workspace.switch workspace.rename \
              workspace.delete window.list window.new window.focus window.close tab.list tab.new \
              tab.focus tab.rename tab.close pane.list pane.get pane.send_text pane.get_text \
-             pane.close record.start record.stop replay.start config.reload subscribe"
+             pane.run pane.wait pane.close record.start record.stop replay.start config.reload subscribe"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(
@@ -990,6 +1208,64 @@ mod tests {
         assert_eq!(ErrorCode::NotFound.exit_code(), exit::NOT_FOUND);
         assert_eq!(ErrorCode::Ambiguous.exit_code(), 5);
         assert_eq!(ErrorCode::ConfirmRequired.exit_code(), 8);
+        assert_eq!(ErrorCode::Timeout.exit_code(), 6);
+        assert_eq!(ErrorCode::NeedsShellIntegration.exit_code(), 7);
+        assert_eq!(ErrorCode::Busy.exit_code(), 9);
+        let line = encode_response(Some(1), Err(RpcError::needs_shell_integration("x")));
+        assert!(line.contains(r#""code":"needs_shell_integration""#));
+        assert_eq!(
+            decode_incoming(&line).unwrap(),
+            Incoming::Response(Err(RpcError::needs_shell_integration("x")))
+        );
+    }
+
+    #[test]
+    fn long_running_requests_are_run_and_wait() {
+        assert!(Request::PaneRun(RunParams::default()).is_long_running());
+        assert!(Request::PaneWait(WaitParams::default()).is_long_running());
+        assert!(!Request::PaneGetText(GetTextParams {
+            target: Target::default(),
+            start_line: None,
+            end_line: None,
+            escapes: false,
+            last_command: None
+        })
+        .is_long_running());
+    }
+
+    #[test]
+    fn run_and_wait_params_have_stable_json_shapes() {
+        let run = Request::PaneRun(RunParams {
+            spawn: SpawnParams {
+                command: Some(vec!["npm".into(), "run".into(), "dev".into()]),
+                title: Some("dev".into()),
+                ..Default::default()
+            },
+            detach: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            run.params(),
+            json!({"command": ["npm","run","dev"], "title": "dev", "new_window": false,
+                   "keep": false, "detach": true})
+        );
+        let wait = Request::PaneWait(WaitParams {
+            target: Target::matching("title:dev"),
+            matches: vec!["ready on".into()],
+            ..Default::default()
+        });
+        assert_eq!(
+            wait.params(),
+            json!({"match": "title:dev", "matches": ["ready on"], "exit": false,
+                   "command_finished": false, "new_only": false})
+        );
+    }
+
+    #[test]
+    fn iso8601_formats_unix_milliseconds() {
+        assert_eq!(iso8601_utc(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso8601_utc(1_709_210_096_789), "2024-02-29T12:34:56.789Z");
+        assert_eq!(iso8601_utc(951_782_400_000), "2000-02-29T00:00:00.000Z");
     }
 
     #[test]

@@ -13,6 +13,7 @@ use mt_mux::{ConfirmClose, Id, Mux, SpawnSpec};
 use mt_proto::{Call, EventHub, Request, RpcError, Spawned};
 use mt_term::{SpawnOptions, TermEvent, Terminal};
 use mt_ui::ipc_ops::{self, Recorders};
+use mt_ui::ipc_pending::{CallCtx, PaneAccess, PaneRuntime};
 use serde_json::{json, Value};
 
 type Reply = Result<Value, RpcError>;
@@ -33,6 +34,23 @@ struct Host {
     scrollback: usize,
     env: Vec<(String, String)>,
     confirm_close: ConfirmClose,
+    capture_max_bytes: usize,
+    runtime: PaneRuntime,
+}
+
+/// The headless mux as pending `pane.run` / `pane.wait` calls see it.
+struct Access<'a> {
+    mux: &'a Mux,
+    panes: &'a HashMap<Id, Arc<Terminal>>,
+}
+
+impl PaneAccess for Access<'_> {
+    fn exists(&mut self, pane: Id) -> bool {
+        self.mux.locate_pane(pane).is_some()
+    }
+    fn terminal(&mut self, pane: Id) -> Option<Arc<Terminal>> {
+        self.panes.get(&pane).cloned()
+    }
 }
 
 pub fn run(config: Option<PathBuf>) -> i32 {
@@ -69,6 +87,8 @@ pub fn run(config: Option<PathBuf>) -> i32 {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         confirm_close: ipc_ops::policy_of(&cfg.confirm_close),
+        capture_max_bytes: cfg.ctl.capture_max_bytes.min(usize::MAX as u64) as usize,
+        runtime: PaneRuntime::default(),
     };
     host.mux
         .subscribe(move |e| hub.publish(ipc_ops::event_of(e)));
@@ -79,14 +99,14 @@ pub fn run(config: Option<PathBuf>) -> i32 {
     while !STOP.load(Ordering::Relaxed) {
         match rx.try_recv() {
             Ok(call) => {
-                let result = host.handle(call.request);
-                let _ = call.reply.send(result);
+                host.dispatch(call);
                 continue;
             }
             Err(async_channel::TryRecvError::Closed) => break,
             Err(async_channel::TryRecvError::Empty) => {}
         }
         host.pump();
+        host.poll_pending();
         std::thread::sleep(Duration::from_millis(10));
     }
     drop(server);
@@ -104,18 +124,100 @@ impl Host {
                 match ev {
                     TermEvent::Title(t) => self.mux.set_pane_title(pane, &t),
                     TermEvent::Wakeup => self.mux.notify_output(pane),
-                    TermEvent::ChildExit(_) => exited.push(pane),
+                    TermEvent::CommandFinished(code) => {
+                        self.mux.notify_command_finished(pane, code)
+                    }
+                    TermEvent::ChildExit(status) => exited.push((pane, status)),
                     _ => {}
                 }
             }
         }
-        for pane in exited {
-            let _ = self.close_pane(pane);
+        for (pane, status) in exited {
+            self.mux.notify_exited(pane, status);
+            let term = self.panes.get(&pane).cloned();
+            // `run --keep` leaves the exited pane open.
+            if !self.runtime.on_exit(pane, term.as_deref(), status) {
+                let _ = self.close_pane(pane);
+            }
         }
+    }
+
+    fn poll_pending(&mut self) {
+        if self.runtime.has_pending() {
+            let mut access = Access {
+                mux: &self.mux,
+                panes: &self.panes,
+            };
+            self.runtime.poll(&mut access);
+        }
+    }
+
+    /// Answers one call now, or (for `pane.run` / `pane.wait`) when it is ready.
+    fn dispatch(&mut self, call: Call) {
+        let Call {
+            request,
+            reply,
+            cancel,
+        } = call;
+        let ctx = CallCtx {
+            reply: reply.clone(),
+            cancel,
+        };
+        let answer = match request {
+            Request::PaneRun(p) => self.run(p, ctx),
+            Request::PaneWait(p) => {
+                match ipc_ops::resolve_panes(&self.rows(), &p.target, Verb::ReadOnly) {
+                    Err(e) => Some(Err(e)),
+                    Ok(v) => {
+                        let mut access = Access {
+                            mux: &self.mux,
+                            panes: &self.panes,
+                        };
+                        self.runtime.begin_wait(&mut access, v[0], &p, ctx)
+                    }
+                }
+            }
+            other => Some(self.handle(other)),
+        };
+        if let Some(a) = answer {
+            let _ = reply.send(a);
+        }
+    }
+
+    fn run(&mut self, p: mt_proto::RunParams, ctx: CallCtx) -> Option<Reply> {
+        let cap = self.capture_max_bytes;
+        if let Some(target) = p.in_pane.clone() {
+            let pane = match ipc_ops::resolve_panes(
+                &self.rows(),
+                &target,
+                Verb::Acting { all_allowed: false },
+            ) {
+                Ok(v) => v[0],
+                Err(e) => return Some(Err(e)),
+            };
+            let mut access = Access {
+                mux: &self.mux,
+                panes: &self.panes,
+            };
+            return self.runtime.begin_run_in(&mut access, pane, &p, cap, ctx);
+        }
+        if p.spawn.command.as_ref().is_none_or(|c| c.is_empty()) {
+            return Some(Err(RpcError::bad_request("run needs a command after `--`")));
+        }
+        let spawned = match self.spawn(&p.spawn) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let Ok(s) = serde_json::from_value::<Spawned>(spawned) else {
+            return Some(Err(RpcError::internal("bad spawn result")));
+        };
+        self.runtime.mark_run(s.pane, p.keep, !p.detach);
+        self.runtime.begin_run_spawn(s.pane, s.tab, &p, cap, ctx)
     }
 
     fn close_pane(&mut self, pane: Id) -> Result<(), RpcError> {
         let term = self.panes.remove(&pane);
+        self.runtime.forget(pane);
         self.recorders.finish(pane, term.as_deref());
         self.mux
             .kill_pane(pane)
@@ -133,10 +235,7 @@ impl Host {
     /// Snapshot of the mux with each pane's live terminal facts.
     fn rows(&self) -> Rows {
         self.mux.rows(&|id| {
-            self.panes
-                .get(&id)
-                .map(|t| ipc_ops::live_of(t))
-                .unwrap_or_default()
+            ipc_ops::live_with_exit(self.panes.get(&id).map(|t| &**t), self.runtime.exit_of(id))
         })
     }
 
@@ -228,7 +327,6 @@ impl Host {
 
     fn handle(&mut self, request: Request) -> Reply {
         let ok = || Ok(json!({}));
-        let to = |v: &dyn erased::Ser| Ok(v.value());
         match request {
             Request::MuxList
             | Request::WorkspaceList
@@ -266,7 +364,7 @@ impl Host {
             Request::PaneGetText(p) => {
                 let panes = ipc_ops::resolve_panes(&self.rows(), &p.target, Verb::ReadOnly)?;
                 let term = self.terminal(panes[0])?;
-                to(&ipc_ops::get_text(&term, &p)?)
+                ipc_ops::get_text(&term, &p, self.capture_max_bytes)
             }
             Request::PaneClose(_) | Request::TabClose(_) | Request::WindowClose(_) => {
                 self.close(&request)
@@ -346,17 +444,9 @@ impl Host {
             }
             // There is no config file watcher to poke without a GUI.
             Request::ConfigReload | Request::Subscribe => ok(),
-        }
-    }
-}
-
-mod erased {
-    pub trait Ser {
-        fn value(&self) -> serde_json::Value;
-    }
-    impl<T: serde::Serialize> Ser for T {
-        fn value(&self) -> serde_json::Value {
-            serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+            Request::PaneRun(_) | Request::PaneWait(_) => Err(RpcError::internal(
+                "pane.run and pane.wait answer later; they go through dispatch()",
+            )),
         }
     }
 }

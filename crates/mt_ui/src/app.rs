@@ -663,6 +663,8 @@ impl AppWindow {
         let mut bell = false;
         let mut exit = None;
         let mut new_title = None;
+        let mut finished = Vec::new();
+        let term = session.term.clone();
         for ev in session.term.drain_events() {
             match ev {
                 TermEvent::Wakeup | TermEvent::CursorBlinkingChange => {}
@@ -688,6 +690,7 @@ impl AppWindow {
                     session.term.write(format(&text).into_bytes());
                 }
                 TermEvent::ChildExit(code) => exit = Some(code),
+                TermEvent::CommandFinished(code) => finished.push(code),
             }
         }
         session.refresh();
@@ -702,15 +705,21 @@ impl AppWindow {
         if bell {
             self.flash_bell(cx);
         }
+        for code in finished {
+            mux_host::on_command_finished(cx, pane, code);
+        }
         if let Some(code) = exit {
-            if let Some(c) = code.filter(|c| *c != 0) {
-                self.toast(
-                    ToastKind::Warning,
-                    format!("Shell exited with status {c}"),
-                    cx,
-                );
+            // `pane run --keep` leaves the tab open, showing the exit notice.
+            if !mux_host::on_pane_exit(cx, pane, &term, code) {
+                if let Some(c) = code.filter(|c| *c != 0) {
+                    self.toast(
+                        ToastKind::Warning,
+                        format!("Shell exited with status {c}"),
+                        cx,
+                    );
+                }
+                self.close_tab(tab_id, window, cx);
             }
-            self.close_tab(tab_id, window, cx);
         }
         cx.notify();
     }

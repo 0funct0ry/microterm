@@ -7,6 +7,7 @@ pub mod ctl;
 mod domain;
 mod model;
 mod title;
+pub mod wait;
 
 pub use domain::{
     Domain, DomainId, DomainKind, DomainState, LocalDomain, SpawnSpec, SshDomain, LOCAL_DOMAIN_ID,
