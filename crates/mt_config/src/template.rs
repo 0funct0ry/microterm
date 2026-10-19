@@ -64,7 +64,7 @@ trim_trailing_whitespace = true
 right_click = "context_menu"     # "context_menu" | "paste" | "none"
 hide_while_typing = true
 scroll_multiplier = 3
-# focus_follows_mouse = false    # accepted from v1.1.0 (splits)
+# focus_follows_mouse = false    # accepted from M11 (splits)
 
 [clipboard]
 osc52 = "write"                  # "write" | "read-write" | "disabled"

@@ -27,7 +27,7 @@ pub struct Pane {
     pub cwd: Option<PathBuf>,
 }
 
-/// `Split` exists in the type from day one (SPEC D4) but is unreachable until M12.
+/// `Split` exists in the type from day one (SPEC D4) but is unreachable until M11.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaneTree {
     Leaf(Pane),
@@ -140,6 +140,9 @@ pub enum MuxEvent {
         from: Id,
         to: Id,
     },
+    WorkspaceRemoved {
+        workspace: Id,
+    },
     DomainStateChanged {
         domain: DomainId,
         state: DomainState,
@@ -164,6 +167,10 @@ pub enum Error {
     EmptyName,
     #[error("the '{0}' workspace cannot be renamed")]
     ProtectedWorkspace(String),
+    #[error("the '{0}' workspace cannot be deleted")]
+    UndeletableWorkspace(String),
+    #[error("'{0}' is the active workspace; switch to another one before deleting it")]
+    ActiveWorkspace(String),
 }
 
 type Listener = Box<dyn FnMut(&MuxEvent) + Send>;
@@ -179,6 +186,10 @@ pub struct Mux {
     workspaces: Vec<Workspace>,
     windows: Vec<Window>,
     active_workspace: Id,
+    /// The window `ctl` treats as focused; `None` means the first window of the active
+    /// workspace. Always belongs to the active workspace when read through
+    /// [`Mux::focused_window`].
+    focused_window: Option<Id>,
     listeners: Vec<Listener>,
 }
 
@@ -200,6 +211,7 @@ impl Mux {
             workspaces: Vec::new(),
             windows: Vec::new(),
             active_workspace: 0,
+            focused_window: None,
             listeners: Vec::new(),
         };
         let id = mux.alloc();
@@ -294,6 +306,39 @@ impl Mux {
         Ok(from)
     }
 
+    /// Deletes a workspace and closes its windows. The `default` and the active workspace are
+    /// refused. Returns the ids of the panes that went away (the host stops their terminals
+    /// first; see [`Mux::workspace_panes`]).
+    pub fn delete_workspace(&mut self, name: &str) -> Result<Vec<Id>, Error> {
+        let ws = self
+            .workspace_by_name(name)
+            .ok_or_else(|| Error::NoWorkspace(name.into()))?
+            .clone();
+        if ws.name == DEFAULT_WORKSPACE {
+            return Err(Error::UndeletableWorkspace(ws.name));
+        }
+        if ws.id == self.active_workspace {
+            return Err(Error::ActiveWorkspace(ws.name));
+        }
+        let panes = self.workspace_panes(ws.id);
+        let windows: Vec<Id> = self.windows_in(ws.id).map(|w| w.id).collect();
+        for w in windows {
+            self.close_window(w)?;
+        }
+        self.workspaces.retain(|w| w.id != ws.id);
+        self.emit(MuxEvent::WorkspaceRemoved { workspace: ws.id });
+        Ok(panes)
+    }
+
+    /// Every pane in the windows of `workspace`.
+    pub fn workspace_panes(&self, workspace: Id) -> Vec<Id> {
+        self.windows_in(workspace)
+            .flat_map(|w| w.tabs.iter())
+            .flat_map(|t| t.tree.panes())
+            .map(|p| p.id)
+            .collect()
+    }
+
     pub fn switch_workspace_relative(&mut self, delta: isize) -> Id {
         let n = self.workspaces.len() as isize;
         let cur = self
@@ -330,6 +375,32 @@ impl Mux {
             .filter(move |w| w.workspace_id == workspace)
     }
 
+    /// The focused window: the one `focus_window` chose if it is in the active workspace,
+    /// otherwise the first window of the active workspace.
+    pub fn focused_window(&self) -> Option<Id> {
+        self.focused_window
+            .and_then(|id| self.window(id))
+            .filter(|w| w.workspace_id == self.active_workspace)
+            .map(|w| w.id)
+            .or_else(|| self.windows_in(self.active_workspace).next().map(|w| w.id))
+    }
+
+    /// Marks `id` as the focused window. Its workspace becomes the active one.
+    pub fn focus_window(&mut self, id: Id) -> Result<(), Error> {
+        let ws = self.window(id).ok_or(Error::NoWindow(id))?.workspace_id;
+        if ws != self.active_workspace {
+            let name = self
+                .workspaces
+                .iter()
+                .find(|w| w.id == ws)
+                .map(|w| w.name.clone())
+                .unwrap_or_default();
+            self.switch_workspace(&name)?;
+        }
+        self.focused_window = Some(id);
+        Ok(())
+    }
+
     /// (windows, tabs) in a workspace, for the switcher.
     pub fn counts(&self, workspace: Id) -> (usize, usize) {
         let ws: Vec<_> = self.windows_in(workspace).collect();
@@ -358,6 +429,9 @@ impl Mux {
             .position(|w| w.id == id)
             .ok_or(Error::NoWindow(id))?;
         let win = self.windows.remove(pos);
+        if self.focused_window == Some(id) {
+            self.focused_window = None;
+        }
         for tab in &win.tabs {
             for p in tab.tree.panes() {
                 self.emit(MuxEvent::PaneRemoved { pane: p.id });
@@ -672,6 +746,66 @@ mod tests {
             .map(|_| mux.spawn_tab(w, None, None).unwrap().0)
             .collect();
         (mux, w, tabs)
+    }
+
+    #[test]
+    fn delete_workspace_closes_its_windows_and_protects_default_and_active() {
+        let mut mux = Mux::new();
+        let log = recorded(&mut mux);
+        let api = mux.create_workspace("api").unwrap();
+        mux.switch_workspace("api").unwrap();
+        let w = mux.spawn_window(None);
+        let (_, pane) = mux.spawn_tab(w, None, None).unwrap();
+        mux.switch_workspace("default").unwrap();
+        assert_eq!(mux.workspace_panes(api), [pane]);
+        assert_eq!(
+            mux.delete_workspace("default"),
+            Err(Error::UndeletableWorkspace("default".into()))
+        );
+        mux.switch_workspace("api").unwrap();
+        assert_eq!(
+            mux.delete_workspace("api"),
+            Err(Error::ActiveWorkspace("api".into()))
+        );
+        mux.switch_workspace("default").unwrap();
+        assert_eq!(
+            mux.delete_workspace("ghost"),
+            Err(Error::NoWorkspace("ghost".into()))
+        );
+        log.lock().unwrap().clear();
+        assert_eq!(mux.delete_workspace("api").unwrap(), [pane]);
+        assert!(mux.window(w).is_none() && mux.workspace_by_name("api").is_none());
+        let events = log.lock().unwrap().clone();
+        assert_eq!(
+            events.last(),
+            Some(&MuxEvent::WorkspaceRemoved { workspace: api })
+        );
+        assert!(events.contains(&MuxEvent::WindowRemoved { window: w }));
+    }
+
+    #[test]
+    fn focus_follows_focus_window_and_falls_back_to_the_first_window() {
+        let mut mux = Mux::new();
+        let w1 = mux.spawn_window(None);
+        let w2 = mux.spawn_window(None);
+        assert_eq!(
+            mux.focused_window(),
+            Some(w1),
+            "defaults to the first window"
+        );
+        mux.focus_window(w2).unwrap();
+        assert_eq!(mux.focused_window(), Some(w2));
+        mux.close_window(w2).unwrap();
+        assert_eq!(mux.focused_window(), Some(w1));
+        // Focusing a window of another workspace switches to it.
+        mux.create_workspace("api").unwrap();
+        mux.switch_workspace("api").unwrap();
+        let w3 = mux.spawn_window(None);
+        mux.switch_workspace("default").unwrap();
+        mux.focus_window(w3).unwrap();
+        assert_eq!(mux.active_workspace().name, "api");
+        assert_eq!(mux.focused_window(), Some(w3));
+        assert_eq!(mux.focus_window(999), Err(Error::NoWindow(999)));
     }
 
     #[test]

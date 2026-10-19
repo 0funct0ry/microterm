@@ -33,7 +33,7 @@ tab first opens in them; editing a domain does not disturb tabs that are already
   green connected, amber connecting or reconnecting, red disconnected, grey not used yet.
   *Connect to host…* asks for `[user@]host[:port]` and opens a temporary domain.
 - **Command line:** `microterm ssh prod`, `microterm ssh bruce@example.com:2222`,
-  `microterm ssh --domain prod`, or `microterm cli spawn --domain prod`.
+  `microterm ssh --domain prod`, or `microterm ctl tab new --domain prod`.
 - **Keybinding / config:** the `SpawnTabInDomain` and `ConnectSsh` actions.
 
 The title bar shows the active tab's domain with the same dot.

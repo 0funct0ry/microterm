@@ -3,6 +3,7 @@
 //! This crate is GPUI-free and owns no PTYs: it is the bookkeeping model. The UI layer maps
 //! pane ids to live terminal sessions. IDs are monotonic `u64`s and are never reused.
 
+pub mod ctl;
 mod domain;
 mod model;
 mod title;

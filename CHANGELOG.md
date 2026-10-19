@@ -103,17 +103,18 @@
   `mt_term` plus a snapshot step, without touching the engine. Hot-reloadable; documented under
   Fonts → Wide characters and emoji. Known gap: a flag at the very last column wraps as two
   narrow indicators.
-- **M9 — CLI, IPC and recording.** `microterm cli list|spawn|send-text|get-text|activate-tab|
-  set-tab-title|kill-pane|workspace|record|replay|reload-config` drive a running instance over a
+- **M9 — CLI, IPC and recording.** A flat command set (reorganised as `microterm ctl` in M10.1)
+  to list, spawn, send text, read text, activate and rename tabs, kill panes, manage workspaces,
+  record, replay and reload the config drives a running instance over a
   versioned JSON-lines protocol (`mt_proto`) on a per-user `0700` Unix socket with peer-uid
   checks and stale-socket cleanup; `--json` everywhere; exit codes 0–4. `send-text` honours
   bracketed paste (`--no-paste` types raw bytes), `get-text` reads line ranges into scrollback
   and re-encodes SGR with `--escapes`. `subscribe` streams mux events. Panes get
   `MICROTERM_PANE` and `MICROTERM_UNIX_SOCKET`. asciicast v2 writer/reader (`mt_record`),
-  `microterm record -o FILE -- CMD`, `cli record` (`--input` is opt-in) and `cli replay`.
+  `microterm record -o FILE -- CMD`, `ctl record` (`--input` is opt-in) and `ctl replay`.
   `microterm completions bash|zsh|fish`. A hidden `--headless` flag runs the mux and IPC server
   without windows for the end-to-end tests. `mt_term` gains output/input taps and styled
-  scrollback access; `mt_mux` gains `kill_pane`. New docs: CLI overview, microterm cli,
+  scrollback access; `mt_mux` gains `kill_pane`. New docs: CLI overview, microterm ctl,
   Recording & replay, Environment variables, Exit codes.
 - **M10 — SSH domains and reconnection.** Tabs can live on remote hosts and survive dropped
   connections. `microterm-mux` (new `mt_mux_server` crate, no GPUI) is a per-user daemon
@@ -129,11 +130,31 @@
   with a notice when that fails. Reconnection backs off 1, 2, 4, 8, 16, 30 s with jitter, with a
   real overlay (attempt counter, *Reconnect now*, *Close tab*), blocked input and replay on
   re-attach. `[[ssh_domains]]` entries appear in the launcher with status dots, *Connect to
-  host…* opens an ad-hoc domain, `microterm ssh [--domain NAME]` and `cli spawn --domain` work,
+  host…* opens an ad-hoc domain, `microterm ssh [--domain NAME]` and `ctl tab new --domain` work,
   and the title bar shows the active domain's state. `mt_mux` gains `SshDomain`,
   `DomainState` and `DomainStateChanged`. The M1 debug action `DebugShowSshOverlay` is gone.
   New docs: SSH domains, microterm-mux. Not preserved on replay: scroll region, saved cursor,
   character sets, tab stops, hyperlinks and the normal screen behind a full-screen app.
+- **M10.1 — ctl: resource-oriented commands, targeting and selectors.** **`microterm cli` is
+  renamed `microterm ctl` and reorganised by resource** (nothing was released, so there is no
+  alias and the old flat verbs are gone): `ctl workspace list|create|switch|rename|delete`,
+  `ctl window list|new|focus|close`, `ctl tab list|new|focus|rename|close`,
+  `ctl pane list|get|send-text|get-text|close`, plus `ctl list|record|replay|reload-config`.
+  Old → new: `spawn` → `tab new` / `window new` (now prints `tab= pane= window=`, safe to
+  `eval`), `activate-tab` → `tab focus`, `set-tab-title` → `tab rename`, `kill-pane` →
+  `pane close`. Items are addressed by `--pane|--tab|--window ID`, by `--match EXPR` (selectors:
+  `title:build*,!exited:true`, globs, `re:` regexes, AND, evaluated by `mt_mux::ctl` against
+  plain snapshot rows), or from the caller's own pane through the new `MICROTERM_TAB` and
+  `MICROTERM_WINDOW` (exported next to `MICROTERM_PANE` and `MICROTERM_UNIX_SOCKET` into local
+  panes only, never SSH panes). Read-only verbs fall back to the focused item; input and
+  destructive verbs never do. Zero matches exit 3, several exit **5** with the candidates listed
+  (`--all` opts in on `close` and `send-text`). Closes honour `confirm_close` without ever
+  opening a dialog: if it would ask, exit **8** and nothing is closed, unless `--force`.
+  `pane list --json` returns id, tab, window, workspace, domain, title, cwd, process, size,
+  focused, exited and exit_code; `--json` errors are one JSON object on stderr. IPC methods are
+  renamed (`tab.new|focus|rename|close`, `window.list|focus|close`, `pane.list|get|close`,
+  `workspace.delete`, …) at protocol `v:1`, and a test pins the list. New docs: microterm ctl,
+  Selectors & targeting; updated CLI overview, Environment variables, Exit codes.
 - Component library in `mt_ui::components` (Button, IconButton, Tab, TabBar, Modal, Picker,
   ListItem, KeyBinding, Toast, Banner, Pill, Tooltip, ContextMenu, StatusDot, TextInput).
 - Bundled IBM Plex Sans, JetBrains Mono and Lucide icons (`assets/LICENSES.md`).

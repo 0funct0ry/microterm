@@ -253,6 +253,20 @@ impl AppWindow {
         let subscription = cx.observe_window_bounds(window, |this, window, cx| {
             this.on_resize(window, cx);
         });
+        // The window the user is in is the one `ctl` treats as focused.
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                let id = this.mux_window;
+                let host = mux_host::host(cx);
+                if host
+                    .mux
+                    .window(id)
+                    .is_some_and(|w| w.workspace_id == host.mux.active_workspace().id)
+                {
+                    let _ = host.mux.focus_window(id);
+                }
+            }
+        });
         if !cx.has_global::<Settings>() {
             cx.set_global(Settings::defaults());
         }
@@ -316,7 +330,7 @@ impl AppWindow {
             blink_started: false,
             refocus_viewport: false,
             theme_restore: None,
-            _subscriptions: vec![subscription, appearance, release],
+            _subscriptions: vec![subscription, activation, appearance, release],
         };
         if let Some(b) = banner {
             this.config_banner_kind = b.kind;
@@ -408,14 +422,14 @@ impl AppWindow {
                 let mut opts = self.spawn_options(cx);
                 opts.cwd = spec.cwd;
                 opts.command = spec.command;
-                opts.env
-                    .push(("MICROTERM_PANE".into(), self.tabs[i].pane.to_string()));
-                if let Some(sock) = &mux_host::host(cx).socket {
-                    opts.env.push((
-                        "MICROTERM_UNIX_SOCKET".into(),
-                        sock.to_string_lossy().into_owned(),
-                    ));
-                }
+                // Local panes only: SSH-domain panes never get these (SPEC §12.6 S7).
+                let socket = mux_host::host(cx).socket.clone();
+                opts.env.extend(crate::ipc_ops::pane_env(
+                    self.tabs[i].pane,
+                    self.tabs[i].id,
+                    self.mux_window,
+                    socket.as_deref(),
+                ));
                 if let Err(e) = self.attach_terminal(i, opts, window, cx) {
                     self.toast(
                         ToastKind::Error,

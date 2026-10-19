@@ -1,4 +1,4 @@
-//! Re-encodes styled grid rows as text with SGR escapes (`microterm cli get-text --escapes`).
+//! Re-encodes styled grid rows as text with SGR escapes (`microterm ctl pane get-text --escapes`).
 
 use crate::snapshot::{Cell, CellColor, CellFlags, Underline};
 

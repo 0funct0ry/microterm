@@ -20,7 +20,7 @@ fn help_lists_subcommands() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ssh").and(predicate::str::contains("cli")));
+        .stdout(predicate::str::contains("ssh").and(predicate::str::contains("ctl")));
 }
 
 #[test]

@@ -1,7 +1,8 @@
 mod cli;
-mod cli_cmd;
 mod client;
 mod commands;
+mod ctl;
+mod ctl_cmd;
 mod headless;
 mod ipc;
 
@@ -31,11 +32,11 @@ fn main() {
         Some(Command::LsFonts { text }) => {
             std::process::exit(mt_ui::ls_fonts::run(cli.config, text))
         }
-        Some(Command::Completions { shell }) => std::process::exit(cli_cmd::completions(shell)),
-        Some(Command::Cli(args)) => std::process::exit(cli_cmd::run(args)),
-        Some(Command::Record(args)) => std::process::exit(cli_cmd::record(args)),
+        Some(Command::Completions { shell }) => std::process::exit(ctl_cmd::completions(shell)),
+        Some(Command::Ctl(args)) => std::process::exit(ctl_cmd::run(args)),
+        Some(Command::Record(args)) => std::process::exit(ctl_cmd::record(args)),
         Some(Command::ReplayInternal { file, speed }) => {
-            std::process::exit(cli_cmd::replay_internal(&file, speed))
+            std::process::exit(ctl_cmd::replay_internal(&file, speed))
         }
         Some(Command::Ssh(args)) => {
             let domain = args.domain_ref();

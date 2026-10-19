@@ -11,12 +11,14 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use mt_mux::{DomainKind, Id, Mux, MuxEvent, SpawnSpec};
+use mt_mux::ctl::{self, Live, PaneRow, Row, Rows, TabRow, Verb, WindowRow};
+use mt_mux::{ConfirmClose, Id, Mux, MuxEvent, SpawnSpec};
 use mt_proto::{
-    ActivateTabParams, Event, GetTextParams, MuxSnapshot, PaneInfo, RpcError, SendTextParams,
-    SpawnParams, TabInfo, Text, WindowInfo, WorkspaceInfo,
+    Event, GetTextParams, Request, RpcError, SendTextParams, SpawnParams, TabFocusParams, Target,
+    Text,
 };
 use mt_term::Terminal;
+use serde_json::Value;
 
 pub fn event_of(e: &MuxEvent) -> Event {
     match *e {
@@ -40,6 +42,7 @@ pub fn event_of(e: &MuxEvent) -> Event {
         MuxEvent::WindowAdded { window } => Event::WindowAdded { window },
         MuxEvent::WindowRemoved { window } => Event::WindowRemoved { window },
         MuxEvent::WorkspaceSwitched { from, to } => Event::WorkspaceSwitched { from, to },
+        MuxEvent::WorkspaceRemoved { workspace } => Event::WorkspaceRemoved { workspace },
         MuxEvent::DomainStateChanged { domain, ref state } => Event::DomainStateChanged {
             domain,
             state: state.label().into(),
@@ -55,54 +58,7 @@ pub fn event_of(e: &MuxEvent) -> Event {
     }
 }
 
-pub fn snapshot(mux: &Mux) -> MuxSnapshot {
-    let active = mux.active_workspace().id;
-    let workspaces = mux
-        .workspaces()
-        .iter()
-        .map(|ws| WorkspaceInfo {
-            id: ws.id,
-            name: ws.name.clone(),
-            active: ws.id == active,
-            windows: mux
-                .windows_in(ws.id)
-                .map(|w| WindowInfo {
-                    id: w.id,
-                    title: w.title.clone(),
-                    tabs: w
-                        .tabs
-                        .iter()
-                        .enumerate()
-                        .map(|(i, t)| TabInfo {
-                            id: t.id,
-                            title: t
-                                .title_override
-                                .clone()
-                                .unwrap_or_else(|| t.pane().title.clone()),
-                            active: i == w.active,
-                            panes: t
-                                .tree
-                                .panes()
-                                .into_iter()
-                                .map(|p| PaneInfo {
-                                    id: p.id,
-                                    title: p.title.clone(),
-                                    cwd: p.cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
-                                    domain: mux
-                                        .domain_kind(p.domain_id)
-                                        .map_or_else(|| "local".into(), |k| domain_name(&k)),
-                                })
-                                .collect(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        })
-        .collect();
-    MuxSnapshot { workspaces }
-}
-
-/// The launch spec of a `pane.spawn`. The domain is resolved by the caller (it needs the app's
+/// The launch spec of a `tab.new` / `window.new`. The domain is resolved by the caller (it needs the app's
 /// SSH domains); the spec starts out local.
 pub fn spawn_spec(p: &SpawnParams) -> Result<SpawnSpec, RpcError> {
     let command = p.command.clone().filter(|c| !c.is_empty());
@@ -122,45 +78,251 @@ pub fn expand_tilde(path: &str) -> std::path::PathBuf {
     }
 }
 
-pub fn domain_name(kind: &DomainKind) -> String {
-    match kind {
-        DomainKind::Local => "local".into(),
-        DomainKind::Ssh { name } | DomainKind::Serial { name } => name.clone(),
+/// The `MICROTERM_*` variables exported into every **local** pane (SPEC §6.1, §12.3): the
+/// pane's own ids, so a process inside can address itself, and the IPC socket. SSH-domain
+/// panes get none of them (SPEC §12.6 S7).
+pub fn pane_env(pane: Id, tab: Id, window: Id, socket: Option<&Path>) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("MICROTERM_PANE".to_string(), pane.to_string()),
+        ("MICROTERM_TAB".to_string(), tab.to_string()),
+        ("MICROTERM_WINDOW".to_string(), window.to_string()),
+    ];
+    if let Some(s) = socket {
+        env.push((
+            "MICROTERM_UNIX_SOCKET".to_string(),
+            s.to_string_lossy().into_owned(),
+        ));
+    }
+    env
+}
+
+/// Live facts of a pane's terminal for `pane list|get` and the `process:`/`cmd:` selectors.
+pub fn live_of(term: &Terminal) -> Live {
+    let (cols, rows) = term.size();
+    Live {
+        process: term.foreground_process().map(|p| p.name),
+        size: (cols as u16, rows as u16),
+        ..Default::default()
     }
 }
 
-/// `(window, tab index)` a `tab.activate` refers to. `default_window` is used when the request
-/// names no window.
-pub fn resolve_activation(
-    mux: &Mux,
-    p: &ActivateTabParams,
-    default_window: Option<Id>,
-) -> Result<(Id, usize), RpcError> {
-    let window = |p: &ActivateTabParams| {
-        p.window
-            .or(default_window)
-            .ok_or_else(|| RpcError::not_found("no window"))
+pub fn policy_of(c: &mt_config::ConfirmClose) -> ConfirmClose {
+    match c {
+        mt_config::ConfirmClose::Always => ConfirmClose::Always,
+        mt_config::ConfirmClose::Process => ConfirmClose::Process,
+        mt_config::ConfirmClose::Never => ConfirmClose::Never,
+    }
+}
+
+fn to_json<T: serde::Serialize>(v: &T) -> Result<Value, RpcError> {
+    serde_json::to_value(v).map_err(|e| RpcError::internal(e.to_string()))
+}
+
+/// The side-effect-free listing methods, shared by both hosts: `mux.list`, `workspace.list`,
+/// `window.list`, `tab.list`, `pane.list` and `pane.get`. `None` for any other request.
+pub fn read_only(rows: &Rows, req: &Request) -> Option<Result<Value, RpcError>> {
+    fn infos<R: Row, T: serde::Serialize>(
+        t: &Target,
+        rows: &[R],
+        f: impl Fn(&R) -> T,
+    ) -> Result<Value, RpcError> {
+        let items: Vec<T> = ctl::select(t, rows)?.into_iter().map(f).collect();
+        to_json(&items)
+    }
+    Some(match req {
+        Request::MuxList => to_json(&rows.tree()),
+        Request::WorkspaceList => {
+            to_json(&rows.workspaces.iter().map(|w| w.info()).collect::<Vec<_>>())
+        }
+        Request::WindowList(t) => infos(t, &rows.windows, WindowRow::info),
+        Request::TabList(t) => infos(t, &rows.tabs, TabRow::info),
+        Request::PaneList(t) => infos(t, &rows.panes, PaneRow::info),
+        Request::PaneGet(t) => {
+            let id = ctl::resolve_one(t, &rows.panes, rows.focused_pane, Verb::ReadOnly);
+            id.and_then(|id| {
+                let pane = rows.panes.iter().find(|p| p.id == id).expect("resolved");
+                to_json(&pane.info())
+            })
+        }
+        _ => return None,
+    })
+}
+
+/// The panes a `pane.*` request addresses.
+pub fn resolve_panes(rows: &Rows, t: &Target, verb: Verb) -> Result<Vec<Id>, RpcError> {
+    ctl::resolve(t, &rows.panes, rows.focused_pane, verb)
+}
+
+/// What a scripted close will remove (SPEC §12.3).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CloseSet {
+    /// Panes to close; closing the last pane closes its tab, the last tab its window.
+    pub panes: Vec<Id>,
+    /// Windows that must be gone afterwards even when they hold no panes.
+    pub windows: Vec<Id>,
+}
+
+/// Resolves a `*.close` request and applies `confirm_close`: when the policy would prompt and
+/// `--force` is absent, nothing is closed and the error is [`ErrorCode::ConfirmRequired`]
+/// (exit 8). Never opens a dialog.
+pub fn plan_close(rows: &Rows, req: &Request, policy: ConfirmClose) -> Result<CloseSet, RpcError> {
+    let acting = Verb::Acting { all_allowed: true };
+    let (set, what, force) = match req {
+        Request::PaneClose(t) => {
+            let panes = resolve_panes(rows, t, acting)?;
+            let what = describe("pane", &panes);
+            (
+                CloseSet {
+                    panes,
+                    windows: vec![],
+                },
+                what,
+                t.force,
+            )
+        }
+        Request::TabClose(t) => {
+            let tabs = ctl::resolve(t, &rows.tabs, rows.focused_tab, acting)?;
+            let panes = rows
+                .tabs
+                .iter()
+                .filter(|tab| tabs.contains(&tab.id))
+                .flat_map(|tab| tab.panes.clone())
+                .collect();
+            let what = describe("tab", &tabs);
+            (
+                CloseSet {
+                    panes,
+                    windows: vec![],
+                },
+                what,
+                t.force,
+            )
+        }
+        Request::WindowClose(t) => {
+            let windows = ctl::resolve(t, &rows.windows, rows.focused_window, acting)?;
+            let panes = rows
+                .panes
+                .iter()
+                .filter(|p| windows.contains(&p.window))
+                .map(|p| p.id)
+                .collect();
+            let what = describe("window", &windows);
+            (CloseSet { panes, windows }, what, t.force)
+        }
+        other => {
+            return Err(RpcError::internal(format!(
+                "{} is not a close request",
+                other.method()
+            )))
+        }
     };
-    if let Some(tab) = p.tab_id {
+    if !force && ctl::close_would_prompt(policy, busy_flags(rows, &set.panes)) {
+        return Err(ctl::confirm_required(&what));
+    }
+    Ok(set)
+}
+
+fn describe(kind: &str, ids: &[Id]) -> String {
+    let ids: Vec<String> = ids.iter().map(Id::to_string).collect();
+    format!("{kind} {}", ids.join(", "))
+}
+
+fn busy_flags(rows: &Rows, panes: &[Id]) -> Vec<bool> {
+    let mut flags: Vec<bool> = rows
+        .panes
+        .iter()
+        .filter(|p| panes.contains(&p.id))
+        .map(|p| p.process.is_some())
+        .collect();
+    // A close that holds no panes still "prompts" under `always`.
+    if flags.is_empty() {
+        flags.push(false);
+    }
+    flags
+}
+
+/// `workspace.delete`: validates (the `default` and the active workspace stay), applies
+/// `confirm_close` and returns the panes to stop before `Mux::delete_workspace`.
+pub fn plan_workspace_delete(
+    rows: &Rows,
+    name: &str,
+    force: bool,
+    policy: ConfirmClose,
+) -> Result<Vec<Id>, RpcError> {
+    let ws = rows
+        .workspace_by_name(name)
+        .ok_or_else(|| RpcError::not_found(format!("no workspace named \"{name}\"")))?;
+    if name == mt_mux::DEFAULT_WORKSPACE {
+        return Err(RpcError::bad_request(format!(
+            "the '{name}' workspace cannot be deleted"
+        )));
+    }
+    if ws.active {
+        return Err(RpcError::bad_request(format!(
+            "'{name}' is the active workspace; switch to another one before deleting it"
+        )));
+    }
+    let panes: Vec<Id> = rows
+        .panes
+        .iter()
+        .filter(|p| p.workspace == name)
+        .map(|p| p.id)
+        .collect();
+    if !force && ctl::close_would_prompt(policy, busy_flags(rows, &panes)) {
+        return Err(ctl::confirm_required(&format!("workspace \"{name}\"")));
+    }
+    Ok(panes)
+}
+
+/// `(window, tab index)` a `tab.focus` refers to: a target tab, or `index` / `relative` inside
+/// `window` (default: the focused window).
+pub fn resolve_focus(mux: &Mux, rows: &Rows, p: &TabFocusParams) -> Result<(Id, usize), RpcError> {
+    if p.index.is_none() && p.relative.is_none() {
+        let tab = ctl::resolve_one(
+            &p.target,
+            &rows.tabs,
+            None,
+            Verb::Acting { all_allowed: false },
+        )?;
         return mux
             .tab_location(tab)
             .ok_or_else(|| RpcError::not_found(format!("tab {tab} does not exist")));
     }
-    let w = window(p)?;
+    let w = match p.target.window {
+        Some(w) => w,
+        None => rows
+            .focused_window
+            .ok_or_else(|| RpcError::not_found("no window"))?,
+    };
     let win = mux
         .window(w)
         .ok_or_else(|| RpcError::not_found(format!("window {w} does not exist")))?;
-    match (p.tab_index, p.tab_relative) {
+    match (p.index, p.relative) {
         (Some(i), _) if i < win.tabs.len() => Ok((w, i)),
         (Some(i), _) => Err(RpcError::not_found(format!("window {w} has no tab {i}"))),
         (None, Some(d)) => {
             let n = win.tabs.len() as i64;
-            Ok((w, (win.active as i64 + d).rem_euclid(n.max(1)) as usize))
+            if n == 0 {
+                return Err(RpcError::not_found(format!("window {w} has no tabs")));
+            }
+            Ok((w, (win.active as i64 + d).rem_euclid(n) as usize))
         }
-        (None, None) => Err(RpcError::bad_request(
-            "give tab_id, tab_index or tab_relative",
-        )),
+        (None, None) => unreachable!("handled above"),
     }
+}
+
+/// The tab a `tab.rename` addresses, as `(window, tab)`.
+pub fn resolve_rename(mux: &Mux, rows: &Rows, t: &Target) -> Result<(Id, Id), RpcError> {
+    let tab = ctl::resolve_one(t, &rows.tabs, None, Verb::Acting { all_allowed: false })?;
+    let (w, _) = mux
+        .tab_location(tab)
+        .ok_or_else(|| RpcError::not_found(format!("tab {tab} does not exist")))?;
+    Ok((w, tab))
+}
+
+/// The window a `window.focus` addresses.
+pub fn resolve_window(rows: &Rows, t: &Target) -> Result<Id, RpcError> {
+    ctl::resolve_one(t, &rows.windows, None, Verb::Acting { all_allowed: false })
 }
 
 /// `pane.get_text`: rows `start_line..=end_line`, where line `0` is the top visible row and
@@ -331,67 +493,168 @@ impl Recorders {
 mod tests {
     use super::*;
 
+    fn rows_of(mux: &Mux) -> Rows {
+        mux.rows(&|_| Live::default())
+    }
+
     #[test]
-    fn snapshot_lists_the_tree_and_titles() {
+    fn mux_list_is_the_tree_with_titles() {
         let mut mux = Mux::new();
         let w = mux.spawn_window(None);
         let (tab, pane) = mux.spawn_tab(w, None, Some("srv".into())).unwrap();
         mux.set_pane_title(pane, "zsh");
-        let s = snapshot(&mux);
+        let s = rows_of(&mux).tree();
         let ws = &s.workspaces[0];
         assert!(ws.active);
         assert_eq!(ws.windows[0].tabs[0].id, tab);
+        assert_eq!(ws.windows[0].tabs[0].title, "srv");
         assert_eq!(ws.windows[0].tabs[0].panes[0].id, pane);
         assert_eq!(ws.windows[0].tabs[0].panes[0].title, "zsh");
+        assert!(ws.windows[0].tabs[0].panes[0].focused);
+    }
+
+    fn mux_with(n: usize) -> (Mux, Id, Vec<Id>) {
+        let mut mux = Mux::new();
+        let w = mux.spawn_window(None);
+        let tabs = (0..n)
+            .map(|_| mux.spawn_tab(w, None, None).unwrap().0)
+            .collect();
+        (mux, w, tabs)
     }
 
     #[test]
-    fn activation_resolves_ids_indexes_and_relative() {
-        let mut mux = Mux::new();
-        let w = mux.spawn_window(None);
-        let tabs: Vec<_> = (0..3)
-            .map(|_| mux.spawn_tab(w, None, None).unwrap().0)
-            .collect();
-        let by = |p: ActivateTabParams| resolve_activation(&mux, &p, Some(w));
-        assert_eq!(
-            by(ActivateTabParams {
-                tab_id: Some(tabs[1]),
-                ..Default::default()
-            })
-            .unwrap(),
-            (w, 1)
-        );
-        assert_eq!(
-            by(ActivateTabParams {
-                tab_index: Some(2),
-                ..Default::default()
-            })
-            .unwrap(),
-            (w, 2)
-        );
-        assert!(by(ActivateTabParams {
-            tab_index: Some(9),
+    fn focus_resolves_ids_indexes_and_relative() {
+        let (mux, w, tabs) = mux_with(3);
+        let rows = rows_of(&mux);
+        let by = |p: TabFocusParams| resolve_focus(&mux, &rows, &p);
+        let tab = |t: Target| TabFocusParams {
+            target: t,
             ..Default::default()
-        })
-        .is_err());
-        // Spawning left tab 2 active; -1 goes to 1 and +1 wraps to 0.
-        assert_eq!(
-            by(ActivateTabParams {
-                tab_relative: Some(-1),
-                ..Default::default()
-            })
-            .unwrap(),
-            (w, mux.window(w).unwrap().active.saturating_sub(1))
+        };
+        assert_eq!(by(tab(Target::tab(tabs[1]))).unwrap(), (w, 1));
+        let idx = |i| TabFocusParams {
+            index: Some(i),
+            ..Default::default()
+        };
+        assert_eq!(by(idx(2)).unwrap(), (w, 2));
+        assert!(by(idx(9)).is_err());
+        // Spawning left tab 2 active: -1 goes to 1, +1 wraps to 0.
+        let rel = |d| TabFocusParams {
+            relative: Some(d),
+            ..Default::default()
+        };
+        assert_eq!(by(rel(-1)).unwrap(), (w, 1));
+        assert_eq!(by(rel(1)).unwrap(), (w, 0));
+        assert!(
+            by(TabFocusParams::default()).is_err(),
+            "no target, no focus fallback"
         );
+    }
+
+    fn policy_rows(busy: bool) -> (Rows, Vec<Id>) {
+        let (mux, _, _) = mux_with(2);
+        let panes: Vec<Id> = rows_of(&mux).panes.iter().map(|p| p.id).collect();
+        let rows = mux.rows(&|id| Live {
+            process: (busy && id == panes[0]).then(|| "vim".into()),
+            ..Default::default()
+        });
+        (rows, panes)
+    }
+
+    #[test]
+    fn close_matrix_policy_by_force() {
+        use ConfirmClose::*;
+        for (policy, busy, prompts) in [
+            (Always, false, true),
+            (Always, true, true),
+            (Process, false, false),
+            (Process, true, true),
+            (Never, false, false),
+            (Never, true, false),
+        ] {
+            let (rows, panes) = policy_rows(busy);
+            let tab = rows.panes[0].tab;
+            for req in [
+                Request::PaneClose(Target::pane(panes[0])),
+                Request::TabClose(Target::tab(tab)),
+                Request::WindowClose(Target::window(rows.panes[0].window)),
+            ] {
+                let got = plan_close(&rows, &req, policy);
+                if prompts {
+                    let e = got.unwrap_err();
+                    assert_eq!(e.code, mt_proto::ErrorCode::ConfirmRequired, "{req:?}");
+                } else {
+                    assert!(got.is_ok(), "{policy:?} busy={busy} {req:?}");
+                }
+                // --force closes immediately, whatever the policy says.
+                let forced = match req {
+                    Request::PaneClose(t) => Request::PaneClose(Target { force: true, ..t }),
+                    Request::TabClose(t) => Request::TabClose(Target { force: true, ..t }),
+                    Request::WindowClose(t) => Request::WindowClose(Target { force: true, ..t }),
+                    _ => unreachable!(),
+                };
+                assert!(plan_close(&rows, &forced, policy).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn closes_never_fall_back_to_the_focused_item() {
+        let (rows, _) = policy_rows(false);
+        let e = plan_close(
+            &rows,
+            &Request::TabClose(Target::default()),
+            ConfirmClose::Never,
+        )
+        .unwrap_err();
+        assert_eq!(e.code, mt_proto::ErrorCode::BadRequest);
+    }
+
+    #[test]
+    fn a_window_close_covers_all_its_panes() {
+        let (rows, panes) = policy_rows(false);
+        let w = rows.panes[0].window;
+        let set = plan_close(
+            &rows,
+            &Request::WindowClose(Target::window(w)),
+            ConfirmClose::Never,
+        )
+        .unwrap();
+        assert_eq!(set.panes, panes);
+        assert_eq!(set.windows, [w]);
+    }
+
+    #[test]
+    fn workspace_delete_rules() {
+        let mut mux = Mux::new();
+        mux.create_workspace("api").unwrap();
+        mux.create_workspace("infra").unwrap();
+        mux.switch_workspace("api").unwrap();
+        let rows = rows_of(&mux);
+        let plan = |name| plan_workspace_delete(&rows, name, false, ConfirmClose::Never);
+        assert!(plan("default").is_err(), "default is protected");
+        assert!(plan("api").is_err(), "the active workspace stays");
         assert_eq!(
-            by(ActivateTabParams {
-                tab_relative: Some(1),
-                ..Default::default()
-            })
-            .unwrap()
-            .1,
-            (mux.window(w).unwrap().active + 1) % 3
+            plan("nope").unwrap_err().code,
+            mt_proto::ErrorCode::NotFound
         );
+        assert!(plan("infra").unwrap().is_empty());
+        let e = plan_workspace_delete(&rows, "infra", false, ConfirmClose::Always).unwrap_err();
+        assert_eq!(e.code, mt_proto::ErrorCode::ConfirmRequired);
+        assert!(plan_workspace_delete(&rows, "infra", true, ConfirmClose::Always).is_ok());
+    }
+
+    #[test]
+    fn pane_env_names_the_pane_tab_window_and_socket() {
+        let env = pane_env(12, 4, 2, Some(Path::new("/run/m.sock")));
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("MICROTERM_PANE"), Some("12"));
+        assert_eq!(get("MICROTERM_TAB"), Some("4"));
+        assert_eq!(get("MICROTERM_WINDOW"), Some("2"));
+        assert_eq!(get("MICROTERM_UNIX_SOCKET"), Some("/run/m.sock"));
+        assert!(pane_env(1, 1, 1, None)
+            .iter()
+            .all(|(k, _)| k != "MICROTERM_UNIX_SOCKET"));
     }
 
     #[test]

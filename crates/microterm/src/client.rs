@@ -1,4 +1,4 @@
-//! The client side of the IPC protocol, used by every `microterm cli …` command and by a second
+//! The client side of the IPC protocol, used by every `microterm ctl …` command and by a second
 //! `microterm` that hands its window request to the running instance.
 
 use std::io::{self, BufRead, BufReader, Write};

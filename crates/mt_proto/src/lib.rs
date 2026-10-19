@@ -1,5 +1,5 @@
 //! Wire types and codecs for the GUI↔CLI IPC protocol (SPEC §12.2): one JSON object per line over
-//! a Unix socket, with a versioned envelope. The mux binary-frame protocol arrives in M10.
+//! a Unix socket, with a versioned envelope. The mux binary-frame protocol lives in [`mux`].
 //!
 //! ```text
 //! → {"v":1,"id":7,"method":"pane.send_text","params":{"pane":12,"text":"ls\n","paste":true}}
@@ -8,6 +8,9 @@
 //! ```
 //!
 //! `subscribe` turns the connection into an event stream: notifications carry no `id`.
+//!
+//! Targets travel as `{pane|tab|window: ID, match: "selector", all, force}`; selectors are parsed
+//! here ([`selector`]) and evaluated by the server so every client gets identical semantics.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -18,14 +21,19 @@ pub const PROTO_VERSION: u32 = 1;
 pub const MAX_LINE: usize = 1024 * 1024;
 
 pub mod mux;
+pub mod selector;
 
-/// CLI exit codes (SPEC §12.1).
+pub use selector::{Resource, Selector};
+
+/// CLI exit codes (SPEC §12.3).
 pub mod exit {
     pub const OK: i32 = 0;
     pub const USAGE: i32 = 1;
     pub const NO_INSTANCE: i32 = 2;
     pub const NOT_FOUND: i32 = 3;
     pub const VERSION_MISMATCH: i32 = 4;
+    pub const AMBIGUOUS: i32 = 5;
+    pub const CONFIRM_REQUIRED: i32 = 8;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +43,10 @@ pub enum ErrorCode {
     NotFound,
     VersionMismatch,
     Internal,
+    /// Several targets matched and `--all` was not given (exit 5).
+    Ambiguous,
+    /// `confirm_close` would prompt and `--force` was not given (exit 8).
+    ConfirmRequired,
 }
 
 impl ErrorCode {
@@ -43,6 +55,8 @@ impl ErrorCode {
             ErrorCode::BadRequest | ErrorCode::Internal => exit::USAGE,
             ErrorCode::NotFound => exit::NOT_FOUND,
             ErrorCode::VersionMismatch => exit::VERSION_MISMATCH,
+            ErrorCode::Ambiguous => exit::AMBIGUOUS,
+            ErrorCode::ConfirmRequired => exit::CONFIRM_REQUIRED,
         }
     }
 }
@@ -52,6 +66,9 @@ impl ErrorCode {
 pub struct RpcError {
     pub code: ErrorCode,
     pub message: String,
+    /// The matches of an ambiguous target, one description per line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
 }
 
 impl RpcError {
@@ -59,6 +76,7 @@ impl RpcError {
         Self {
             code,
             message: message.into(),
+            candidates: Vec::new(),
         }
     }
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -70,9 +88,118 @@ impl RpcError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message)
     }
+    pub fn confirm_required(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ConfirmRequired, message)
+    }
+    pub fn ambiguous(message: impl Into<String>, candidates: Vec<String>) -> Self {
+        Self {
+            candidates,
+            ..Self::new(ErrorCode::Ambiguous, message)
+        }
+    }
 }
 
 // ---- request parameters -------------------------------------------------------------------
+
+/// Which item a request addresses (SPEC §12.3). `pane`, `tab` and `window` are explicit IDs (the
+/// verb's resource decides which one is read; `tab list` and `tab new` also use `window` as a
+/// filter or parent), `match` is a selector. `all` and `force` apply to acting verbs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Target {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<u64>,
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub expr: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl Target {
+    pub fn pane(id: u64) -> Self {
+        Target {
+            pane: Some(id),
+            ..Default::default()
+        }
+    }
+    pub fn tab(id: u64) -> Self {
+        Target {
+            tab: Some(id),
+            ..Default::default()
+        }
+    }
+    pub fn window(id: u64) -> Self {
+        Target {
+            window: Some(id),
+            ..Default::default()
+        }
+    }
+    pub fn matching(expr: impl Into<String>) -> Self {
+        Target {
+            expr: Some(expr.into()),
+            ..Default::default()
+        }
+    }
+
+    /// The explicit id for `resource`.
+    pub fn id_for(&self, resource: Resource) -> Option<u64> {
+        match resource {
+            Resource::Pane => self.pane,
+            Resource::Tab => self.tab,
+            Resource::Window => self.window,
+            Resource::Workspace => None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pane.is_none() && self.tab.is_none() && self.window.is_none() && self.expr.is_none()
+    }
+}
+
+/// Where the caller runs, from `$MICROTERM_PANE|TAB|WINDOW` (SPEC §12.3 step 3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CallerEnv {
+    pub pane: Option<u64>,
+    pub tab: Option<u64>,
+    pub window: Option<u64>,
+}
+
+impl CallerEnv {
+    pub fn from_env() -> Self {
+        let get = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse().ok());
+        CallerEnv {
+            pane: get("MICROTERM_PANE"),
+            tab: get("MICROTERM_TAB"),
+            window: get("MICROTERM_WINDOW"),
+        }
+    }
+}
+
+impl Target {
+    /// Client-side half of target resolution (SPEC §12.3): an explicit id or `--match` wins,
+    /// otherwise the caller's own item from the environment fills in the id for `resource`.
+    /// The focused-item fallback of read-only verbs is the server's job.
+    pub fn with_env(mut self, resource: Resource, env: CallerEnv) -> Target {
+        if self.id_for(resource).is_none() && self.expr.is_none() {
+            match resource {
+                Resource::Pane => self.pane = env.pane,
+                Resource::Tab => self.tab = env.tab,
+                Resource::Window => self.window = env.window,
+                Resource::Workspace => {}
+            }
+        }
+        self
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnParams {
@@ -99,7 +226,8 @@ pub struct SpawnParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SendTextParams {
-    pub pane: u64,
+    #[serde(flatten)]
+    pub target: Target,
     pub text: String,
     #[serde(default = "yes")]
     pub paste: bool,
@@ -111,7 +239,8 @@ fn yes() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTextParams {
-    pub pane: u64,
+    #[serde(flatten)]
+    pub target: Target,
     /// Absolute-from-screen-top line numbers: `0` is the first visible row, negative values reach
     /// into scrollback (`-1` is the row just above the screen).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,23 +252,23 @@ pub struct GetTextParams {
     pub escapes: bool,
 }
 
+/// `tab.focus`: a target tab, or an `index` / `relative` move inside `window` (default: the
+/// caller's or focused window).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActivateTabParams {
+pub struct TabFocusParams {
+    #[serde(flatten)]
+    pub target: Target,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window: Option<u64>,
+    pub index: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_index: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_relative: Option<i64>,
+    pub relative: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetTabTitleParams {
-    /// `None` targets the active tab of the active window.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<u64>,
+pub struct TabRenameParams {
+    #[serde(flatten)]
+    pub target: Target,
+    /// An empty title clears the override.
     pub title: String,
 }
 
@@ -168,25 +297,36 @@ fn one() -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     MuxList,
-    PaneSpawn(SpawnParams),
-    PaneSendText(SendTextParams),
-    PaneGetText(GetTextParams),
-    PaneKill {
-        pane: u64,
-    },
-    TabActivate(ActivateTabParams),
-    TabSetTitle(SetTabTitleParams),
     WorkspaceList,
-    WorkspaceSwitch {
+    WorkspaceCreate {
         name: String,
     },
-    WorkspaceCreate {
+    WorkspaceSwitch {
         name: String,
     },
     WorkspaceRename {
         old: String,
         new: String,
     },
+    WorkspaceDelete {
+        name: String,
+        force: bool,
+    },
+    WindowList(Target),
+    /// Also the M5 single-instance request: open a window in the running instance.
+    WindowNew(SpawnParams),
+    WindowFocus(Target),
+    WindowClose(Target),
+    TabList(Target),
+    TabNew(SpawnParams),
+    TabFocus(TabFocusParams),
+    TabRename(TabRenameParams),
+    TabClose(Target),
+    PaneList(Target),
+    PaneGet(Target),
+    PaneSendText(SendTextParams),
+    PaneGetText(GetTextParams),
+    PaneClose(Target),
     RecordStart(RecordStartParams),
     RecordStop {
         pane: u64,
@@ -194,30 +334,65 @@ pub enum Request {
     ReplayStart(ReplayParams),
     ConfigReload,
     Subscribe,
-    /// The M5 single-instance request: open a window in the running instance.
-    WindowNew(SpawnParams),
 }
+
+/// Every method name, in a stable order; a test pins this list.
+pub const METHODS: &[&str] = &[
+    "mux.list",
+    "workspace.list",
+    "workspace.create",
+    "workspace.switch",
+    "workspace.rename",
+    "workspace.delete",
+    "window.list",
+    "window.new",
+    "window.focus",
+    "window.close",
+    "tab.list",
+    "tab.new",
+    "tab.focus",
+    "tab.rename",
+    "tab.close",
+    "pane.list",
+    "pane.get",
+    "pane.send_text",
+    "pane.get_text",
+    "pane.close",
+    "record.start",
+    "record.stop",
+    "replay.start",
+    "config.reload",
+    "subscribe",
+];
 
 impl Request {
     pub fn method(&self) -> &'static str {
         match self {
             Request::MuxList => "mux.list",
-            Request::PaneSpawn(_) => "pane.spawn",
+            Request::WorkspaceList => "workspace.list",
+            Request::WorkspaceCreate { .. } => "workspace.create",
+            Request::WorkspaceSwitch { .. } => "workspace.switch",
+            Request::WorkspaceRename { .. } => "workspace.rename",
+            Request::WorkspaceDelete { .. } => "workspace.delete",
+            Request::WindowList(_) => "window.list",
+            Request::WindowNew(_) => "window.new",
+            Request::WindowFocus(_) => "window.focus",
+            Request::WindowClose(_) => "window.close",
+            Request::TabList(_) => "tab.list",
+            Request::TabNew(_) => "tab.new",
+            Request::TabFocus(_) => "tab.focus",
+            Request::TabRename(_) => "tab.rename",
+            Request::TabClose(_) => "tab.close",
+            Request::PaneList(_) => "pane.list",
+            Request::PaneGet(_) => "pane.get",
             Request::PaneSendText(_) => "pane.send_text",
             Request::PaneGetText(_) => "pane.get_text",
-            Request::PaneKill { .. } => "pane.kill",
-            Request::TabActivate(_) => "tab.activate",
-            Request::TabSetTitle(_) => "tab.set_title",
-            Request::WorkspaceList => "workspace.list",
-            Request::WorkspaceSwitch { .. } => "workspace.switch",
-            Request::WorkspaceCreate { .. } => "workspace.create",
-            Request::WorkspaceRename { .. } => "workspace.rename",
+            Request::PaneClose(_) => "pane.close",
             Request::RecordStart(_) => "record.start",
             Request::RecordStop { .. } => "record.stop",
             Request::ReplayStart(_) => "replay.start",
             Request::ConfigReload => "config.reload",
             Request::Subscribe => "subscribe",
-            Request::WindowNew(_) => "window.new",
         }
     }
 
@@ -228,16 +403,25 @@ impl Request {
             | Request::WorkspaceList
             | Request::ConfigReload
             | Request::Subscribe => json!({}),
-            Request::PaneSpawn(p) | Request::WindowNew(p) => to(p),
-            Request::PaneSendText(p) => to(p),
-            Request::PaneGetText(p) => to(p),
-            Request::PaneKill { pane } | Request::RecordStop { pane } => json!({ "pane": pane }),
-            Request::TabActivate(p) => to(p),
-            Request::TabSetTitle(p) => to(p),
-            Request::WorkspaceSwitch { name } | Request::WorkspaceCreate { name } => {
+            Request::WorkspaceCreate { name } | Request::WorkspaceSwitch { name } => {
                 json!({ "name": name })
             }
             Request::WorkspaceRename { old, new } => json!({ "old": old, "new": new }),
+            Request::WorkspaceDelete { name, force } => json!({ "name": name, "force": force }),
+            Request::WindowList(t)
+            | Request::WindowFocus(t)
+            | Request::WindowClose(t)
+            | Request::TabList(t)
+            | Request::TabClose(t)
+            | Request::PaneList(t)
+            | Request::PaneGet(t)
+            | Request::PaneClose(t) => to(t),
+            Request::WindowNew(p) | Request::TabNew(p) => to(p),
+            Request::TabFocus(p) => to(p),
+            Request::TabRename(p) => to(p),
+            Request::PaneSendText(p) => to(p),
+            Request::PaneGetText(p) => to(p),
+            Request::RecordStop { pane } => json!({ "pane": pane }),
             Request::RecordStart(p) => to(p),
             Request::ReplayStart(p) => to(p),
         }
@@ -257,6 +441,12 @@ impl Request {
             name: String,
         }
         #[derive(Deserialize)]
+        struct Delete {
+            name: String,
+            #[serde(default)]
+            force: bool,
+        }
+        #[derive(Deserialize)]
         struct Rename {
             old: String,
             new: String,
@@ -264,19 +454,11 @@ impl Request {
         let params = if params.is_null() { json!({}) } else { params };
         Ok(match method {
             "mux.list" => Request::MuxList,
-            "pane.spawn" => Request::PaneSpawn(p(method, params)?),
-            "pane.send_text" => Request::PaneSendText(p(method, params)?),
-            "pane.get_text" => Request::PaneGetText(p(method, params)?),
-            "pane.kill" => Request::PaneKill {
-                pane: p::<Pane>(method, params)?.pane,
-            },
-            "tab.activate" => Request::TabActivate(p(method, params)?),
-            "tab.set_title" => Request::TabSetTitle(p(method, params)?),
             "workspace.list" => Request::WorkspaceList,
-            "workspace.switch" => Request::WorkspaceSwitch {
+            "workspace.create" => Request::WorkspaceCreate {
                 name: p::<Name>(method, params)?.name,
             },
-            "workspace.create" => Request::WorkspaceCreate {
+            "workspace.switch" => Request::WorkspaceSwitch {
                 name: p::<Name>(method, params)?.name,
             },
             "workspace.rename" => {
@@ -286,6 +468,27 @@ impl Request {
                     new: r.new,
                 }
             }
+            "workspace.delete" => {
+                let d: Delete = p(method, params)?;
+                Request::WorkspaceDelete {
+                    name: d.name,
+                    force: d.force,
+                }
+            }
+            "window.list" => Request::WindowList(p(method, params)?),
+            "window.new" => Request::WindowNew(p(method, params)?),
+            "window.focus" => Request::WindowFocus(p(method, params)?),
+            "window.close" => Request::WindowClose(p(method, params)?),
+            "tab.list" => Request::TabList(p(method, params)?),
+            "tab.new" => Request::TabNew(p(method, params)?),
+            "tab.focus" => Request::TabFocus(p(method, params)?),
+            "tab.rename" => Request::TabRename(p(method, params)?),
+            "tab.close" => Request::TabClose(p(method, params)?),
+            "pane.list" => Request::PaneList(p(method, params)?),
+            "pane.get" => Request::PaneGet(p(method, params)?),
+            "pane.send_text" => Request::PaneSendText(p(method, params)?),
+            "pane.get_text" => Request::PaneGetText(p(method, params)?),
+            "pane.close" => Request::PaneClose(p(method, params)?),
             "record.start" => Request::RecordStart(p(method, params)?),
             "record.stop" => Request::RecordStop {
                 pane: p::<Pane>(method, params)?.pane,
@@ -293,7 +496,6 @@ impl Request {
             "replay.start" => Request::ReplayStart(p(method, params)?),
             "config.reload" => Request::ConfigReload,
             "subscribe" => Request::Subscribe,
-            "window.new" => Request::WindowNew(p(method, params)?),
             other => return Err(RpcError::bad_request(format!("unknown method {other:?}"))),
         })
     }
@@ -314,41 +516,96 @@ mod erased {
 
 // ---- results ------------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Size {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// `pane list|get` (SPEC §12.3). `exited`/`exit_code` are always `false`/`null` today: a pane is
+/// removed from the mux when its process exits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInfo {
     pub id: u64,
+    pub tab: u64,
+    pub window: u64,
+    pub workspace: String,
+    pub domain: String,
     pub title: String,
     pub cwd: Option<String>,
-    pub domain: String,
+    pub process: Option<String>,
+    pub size: Size,
+    pub focused: bool,
+    pub exited: bool,
+    pub exit_code: Option<i32>,
 }
 
+/// `tab list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabInfo {
     pub id: u64,
     pub title: String,
+    pub window: u64,
+    pub workspace: String,
+    pub domain: String,
+    /// Active tab of its window.
     pub active: bool,
-    pub panes: Vec<PaneInfo>,
+    /// Active tab of the focused window.
+    pub focused: bool,
+    pub panes: Vec<u64>,
 }
 
+/// `window list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowInfo {
     pub id: u64,
     pub title: String,
-    pub tabs: Vec<TabInfo>,
+    pub workspace: String,
+    /// Belongs to the active workspace.
+    pub active: bool,
+    pub focused: bool,
+    pub tabs: Vec<u64>,
 }
 
+/// `workspace list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     pub id: u64,
     pub name: String,
     pub active: bool,
-    pub windows: Vec<WindowInfo>,
+    pub windows: Vec<u64>,
 }
 
-/// Result of `mux.list` and `workspace.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabNode {
+    pub id: u64,
+    pub title: String,
+    pub active: bool,
+    pub focused: bool,
+    pub panes: Vec<PaneInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowNode {
+    pub id: u64,
+    pub title: String,
+    pub active: bool,
+    pub focused: bool,
+    pub tabs: Vec<TabNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceNode {
+    pub id: u64,
+    pub name: String,
+    pub active: bool,
+    pub windows: Vec<WindowNode>,
+}
+
+/// Result of `mux.list`: workspaces → windows → tabs → panes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MuxSnapshot {
-    pub workspaces: Vec<WorkspaceInfo>,
+    pub workspaces: Vec<WorkspaceNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,6 +659,9 @@ pub enum Event {
     WorkspaceSwitched {
         from: u64,
         to: u64,
+    },
+    WorkspaceRemoved {
+        workspace: u64,
     },
     /// `state` is `connecting`, `connected`, `reconnecting` or `disconnected`; `attempt` is set
     /// while reconnecting, `reason` when disconnected.
@@ -458,7 +718,12 @@ pub fn encode_response(id: Option<u64>, res: Result<Value, RpcError>) -> String 
     let mut v = json!({ "v": PROTO_VERSION, "id": id });
     match res {
         Ok(result) => v["result"] = result,
-        Err(e) => v["error"] = json!({ "code": e.code, "message": e.message }),
+        Err(e) => {
+            v["error"] = json!({ "code": e.code, "message": e.message });
+            if !e.candidates.is_empty() {
+                v["error"]["candidates"] = json!(e.candidates);
+            }
+        }
     }
     let mut s = v.to_string();
     s.push('\n');
@@ -574,8 +839,15 @@ mod tests {
 
     #[test]
     fn every_method_round_trips() {
-        roundtrip(Request::MuxList);
-        roundtrip(Request::PaneSpawn(SpawnParams {
+        let t = Target {
+            pane: Some(3),
+            tab: Some(2),
+            window: Some(1),
+            expr: Some("title:x*".into()),
+            all: true,
+            force: true,
+        };
+        let spawn = SpawnParams {
             window: Some(2),
             workspace: Some("api".into()),
             cwd: Some("/tmp".into()),
@@ -584,48 +856,109 @@ mod tests {
             cols: Some(100),
             rows: Some(30),
             ..Default::default()
-        }));
-        roundtrip(Request::PaneSendText(SendTextParams {
-            pane: 12,
-            text: "ls\n".into(),
-            paste: false,
-        }));
-        roundtrip(Request::PaneGetText(GetTextParams {
-            pane: 1,
-            start_line: Some(-5),
-            end_line: Some(10),
-            escapes: true,
-        }));
-        roundtrip(Request::PaneKill { pane: 3 });
-        roundtrip(Request::TabActivate(ActivateTabParams {
-            tab_relative: Some(-1),
-            ..Default::default()
-        }));
-        roundtrip(Request::TabSetTitle(SetTabTitleParams {
-            tab_id: None,
-            title: "x".into(),
-        }));
-        roundtrip(Request::WorkspaceList);
-        roundtrip(Request::WorkspaceSwitch { name: "a".into() });
-        roundtrip(Request::WorkspaceCreate { name: "a".into() });
-        roundtrip(Request::WorkspaceRename {
-            old: "a".into(),
-            new: "b".into(),
-        });
-        roundtrip(Request::RecordStart(RecordStartParams {
-            pane: 1,
-            path: "x.cast".into(),
-            input: true,
-        }));
-        roundtrip(Request::RecordStop { pane: 1 });
-        roundtrip(Request::ReplayStart(ReplayParams {
-            path: "x.cast".into(),
-            speed: 2.0,
-            new_window: true,
-        }));
-        roundtrip(Request::ConfigReload);
-        roundtrip(Request::Subscribe);
-        roundtrip(Request::WindowNew(SpawnParams::default()));
+        };
+        let reqs = vec![
+            Request::MuxList,
+            Request::WorkspaceList,
+            Request::WorkspaceCreate { name: "a".into() },
+            Request::WorkspaceSwitch { name: "a".into() },
+            Request::WorkspaceRename {
+                old: "a".into(),
+                new: "b".into(),
+            },
+            Request::WorkspaceDelete {
+                name: "a".into(),
+                force: true,
+            },
+            Request::WindowList(t.clone()),
+            Request::WindowNew(spawn.clone()),
+            Request::WindowFocus(t.clone()),
+            Request::WindowClose(t.clone()),
+            Request::TabList(t.clone()),
+            Request::TabNew(spawn),
+            Request::TabFocus(TabFocusParams {
+                target: Target::default(),
+                index: Some(1),
+                relative: Some(-1),
+            }),
+            Request::TabRename(TabRenameParams {
+                target: Target::tab(5),
+                title: "x".into(),
+            }),
+            Request::TabClose(t.clone()),
+            Request::PaneList(t.clone()),
+            Request::PaneGet(t.clone()),
+            Request::PaneSendText(SendTextParams {
+                target: Target::pane(12),
+                text: "ls\n".into(),
+                paste: false,
+            }),
+            Request::PaneGetText(GetTextParams {
+                target: Target::pane(1),
+                start_line: Some(-5),
+                end_line: Some(10),
+                escapes: true,
+            }),
+            Request::PaneClose(t),
+            Request::RecordStart(RecordStartParams {
+                pane: 1,
+                path: "x.cast".into(),
+                input: true,
+            }),
+            Request::RecordStop { pane: 1 },
+            Request::ReplayStart(ReplayParams {
+                path: "x.cast".into(),
+                speed: 2.0,
+                new_window: true,
+            }),
+            Request::ConfigReload,
+            Request::Subscribe,
+        ];
+        let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
+        assert_eq!(methods, METHODS, "METHODS lists every request in order");
+        for r in reqs {
+            roundtrip(r);
+        }
+    }
+
+    /// The method list is the public IPC surface (SPEC §12.2): changing it is a deliberate act.
+    #[test]
+    fn method_list_is_pinned() {
+        assert_eq!(
+            METHODS.join(" "),
+            "mux.list workspace.list workspace.create workspace.switch workspace.rename \
+             workspace.delete window.list window.new window.focus window.close tab.list tab.new \
+             tab.focus tab.rename tab.close pane.list pane.get pane.send_text pane.get_text \
+             pane.close record.start record.stop replay.start config.reload subscribe"
+        );
+        for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
+            assert!(
+                Request::from_parts(old, json!({})).is_err(),
+                "{old} is gone"
+            );
+        }
+    }
+
+    #[test]
+    fn env_fills_the_target_only_when_nothing_explicit_is_given() {
+        let env = CallerEnv {
+            pane: Some(7),
+            tab: Some(4),
+            window: Some(2),
+        };
+        let r = Resource::Tab;
+        assert_eq!(Target::default().with_env(r, env).tab, Some(4));
+        assert_eq!(Target::tab(9).with_env(r, env).tab, Some(9));
+        let m = Target::matching("title:x").with_env(r, env);
+        assert_eq!(m.tab, None, "--match beats the environment");
+        assert_eq!(
+            Target::default().with_env(Resource::Pane, env).pane,
+            Some(7)
+        );
+        assert_eq!(
+            Target::default().with_env(Resource::Window, env).window,
+            Some(2)
+        );
     }
 
     #[test]
@@ -635,7 +968,7 @@ mod tests {
         assert_eq!(
             r,
             Request::PaneSendText(SendTextParams {
-                pane: 12,
+                target: Target::pane(12),
                 text: "ls\n".into(),
                 paste: true
             })
@@ -652,9 +985,22 @@ mod tests {
         let (_, e) = decode_request(r#"{"v":1,"id":1,"method":"zzz"}"#).unwrap_err();
         assert_eq!(e.code, ErrorCode::BadRequest);
         let (_, e) =
-            decode_request(r#"{"v":1,"id":1,"method":"pane.kill","params":{}}"#).unwrap_err();
-        assert!(e.message.contains("pane.kill"));
+            decode_request(r#"{"v":1,"id":1,"method":"pane.send_text","params":{}}"#).unwrap_err();
+        assert!(e.message.contains("pane.send_text"));
         assert_eq!(ErrorCode::NotFound.exit_code(), exit::NOT_FOUND);
+        assert_eq!(ErrorCode::Ambiguous.exit_code(), 5);
+        assert_eq!(ErrorCode::ConfirmRequired.exit_code(), 8);
+    }
+
+    #[test]
+    fn ambiguous_errors_carry_candidates_over_the_wire() {
+        let e = RpcError::ambiguous(
+            "2 panes match",
+            vec!["pane 1 \"a\"".into(), "pane 2".into()],
+        );
+        let line = encode_response(Some(1), Err(e.clone()));
+        assert!(line.contains("candidates"));
+        assert_eq!(decode_incoming(&line).unwrap(), Incoming::Response(Err(e)));
     }
 
     #[test]

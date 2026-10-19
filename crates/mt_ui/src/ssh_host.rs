@@ -315,6 +315,7 @@ pub(crate) fn remote_terminal(
         pane,
         cwd: spec.cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
         command: spec.command.clone(),
+        // Never MICROTERM_* here: the local socket must not be reachable from a remote host (S7).
         env: Vec::new(),
         cols,
         rows,

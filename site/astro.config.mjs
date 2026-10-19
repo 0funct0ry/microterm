@@ -31,7 +31,8 @@ export default defineConfig({
           label: 'Automation',
           items: [
             { label: 'CLI overview', slug: 'docs/cli-overview' },
-            { label: 'microterm cli', slug: 'docs/cli' },
+            { label: 'microterm ctl', slug: 'docs/ctl' },
+            { label: 'Selectors & targeting', slug: 'docs/selectors-and-targeting' },
             { label: 'Recording & replay', slug: 'docs/recording-and-replay' },
           ],
         },

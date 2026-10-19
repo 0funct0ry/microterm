@@ -60,7 +60,7 @@ pub struct RunOptions {
     pub command: Option<Vec<String>>,
     /// Domain of the first tab (`microterm ssh`): a configured name or `ssh:[user@]host[:port]`.
     pub domain: Option<String>,
-    /// IPC requests from other `microterm` invocations and `microterm cli`.
+    /// IPC requests from other `microterm` invocations and `microterm ctl`.
     pub ipc: Option<IpcHandle>,
 }
 

@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mt_mux::{Id, Mux, SpawnSpec};
+use mt_mux::ctl::{Rows, Verb};
+use mt_mux::{ConfirmClose, Id, Mux, SpawnSpec};
 use mt_proto::{Call, EventHub, Request, RpcError, Spawned};
 use mt_term::{SpawnOptions, TermEvent, Terminal};
 use mt_ui::ipc_ops::{self, Recorders};
@@ -31,6 +32,7 @@ struct Host {
     term: String,
     scrollback: usize,
     env: Vec<(String, String)>,
+    confirm_close: ConfirmClose,
 }
 
 pub fn run(config: Option<PathBuf>) -> i32 {
@@ -66,6 +68,7 @@ pub fn run(config: Option<PathBuf>) -> i32 {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
+        confirm_close: ipc_ops::policy_of(&cfg.confirm_close),
     };
     host.mux
         .subscribe(move |e| hub.publish(ipc_ops::event_of(e)));
@@ -127,18 +130,25 @@ impl Host {
             .ok_or_else(|| RpcError::not_found(format!("pane {pane} does not exist")))
     }
 
+    /// Snapshot of the mux with each pane's live terminal facts.
+    fn rows(&self) -> Rows {
+        self.mux.rows(&|id| {
+            self.panes
+                .get(&id)
+                .map(|t| ipc_ops::live_of(t))
+                .unwrap_or_default()
+        })
+    }
+
     fn start_terminal(
         &mut self,
-        pane: Id,
+        ids: (Id, Id, Id),
         spec: SpawnSpec,
         size: (u16, u16),
     ) -> Result<(), RpcError> {
+        let (pane, tab, window) = ids;
         let mut env = self.env.clone();
-        env.push(("MICROTERM_PANE".into(), pane.to_string()));
-        env.push((
-            "MICROTERM_UNIX_SOCKET".into(),
-            self.socket.to_string_lossy().into_owned(),
-        ));
+        env.extend(ipc_ops::pane_env(pane, tab, window, Some(&self.socket)));
         let opts = SpawnOptions {
             shell: self.shell.clone(),
             command: spec.command,
@@ -181,7 +191,7 @@ impl Host {
                 if p.new_window {
                     self.mux.spawn_window(Some(ws))
                 } else {
-                    let existing = self.mux.windows_in(ws).next().map(|w| w.id);
+                    let existing = self.mux.focused_window();
                     match existing {
                         Some(w) => w,
                         None => self.mux.spawn_window(Some(ws)),
@@ -193,7 +203,7 @@ impl Host {
             .mux
             .spawn_tab(window, spec.cwd.clone(), spec.title.clone())
             .map_err(|e| RpcError::not_found(e.to_string()))?;
-        if let Err(e) = self.start_terminal(pane, spec, size) {
+        if let Err(e) = self.start_terminal((pane, tab, window), spec, size) {
             let _ = self.mux.kill_pane(pane);
             return Err(e);
         }
@@ -203,75 +213,78 @@ impl Host {
             .map_err(|e| RpcError::internal(e.to_string()))
     }
 
+    fn close(&mut self, request: &Request) -> Reply {
+        let set = ipc_ops::plan_close(&self.rows(), request, self.confirm_close)?;
+        for pane in &set.panes {
+            if self.panes.contains_key(pane) {
+                self.close_pane(*pane)?;
+            }
+        }
+        for w in set.windows {
+            let _ = self.mux.close_window(w);
+        }
+        Ok(json!({ "closed": set.panes }))
+    }
+
     fn handle(&mut self, request: Request) -> Reply {
         let ok = || Ok(json!({}));
         let to = |v: &dyn erased::Ser| Ok(v.value());
         match request {
-            Request::MuxList | Request::WorkspaceList => to(&ipc_ops::snapshot(&self.mux)),
-            Request::PaneSpawn(p) => self.spawn(&p),
-            Request::WindowNew(p) => {
-                self.spawn(&mt_proto::SpawnParams {
-                    new_window: true,
-                    ..p
-                })?;
+            Request::MuxList
+            | Request::WorkspaceList
+            | Request::WindowList(_)
+            | Request::TabList(_)
+            | Request::PaneList(_)
+            | Request::PaneGet(_) => {
+                ipc_ops::read_only(&self.rows(), &request).expect("a listing request")
+            }
+            Request::TabNew(p) => self.spawn(&mt_proto::SpawnParams {
+                new_window: false,
+                ..p
+            }),
+            Request::WindowNew(p) => self.spawn(&mt_proto::SpawnParams {
+                new_window: true,
+                ..p
+            }),
+            Request::WindowFocus(t) => {
+                let id = ipc_ops::resolve_window(&self.rows(), &t)?;
+                self.mux.focus_window(id)?;
                 ok()
             }
             Request::PaneSendText(p) => {
-                let term = self.terminal(p.pane)?;
-                ipc_ops::send_text(&term, &p);
+                let panes = ipc_ops::resolve_panes(
+                    &self.rows(),
+                    &p.target,
+                    Verb::Acting { all_allowed: true },
+                )?;
+                for pane in panes {
+                    let term = self.terminal(pane)?;
+                    ipc_ops::send_text(&term, &p);
+                }
                 ok()
             }
             Request::PaneGetText(p) => {
-                let term = self.terminal(p.pane)?;
+                let panes = ipc_ops::resolve_panes(&self.rows(), &p.target, Verb::ReadOnly)?;
+                let term = self.terminal(panes[0])?;
                 to(&ipc_ops::get_text(&term, &p)?)
             }
-            Request::PaneKill { pane } => {
-                self.terminal(pane)?;
-                self.close_pane(pane)?;
+            Request::PaneClose(_) | Request::TabClose(_) | Request::WindowClose(_) => {
+                self.close(&request)
+            }
+            Request::TabFocus(p) => {
+                let (w, i) = ipc_ops::resolve_focus(&self.mux, &self.rows(), &p)?;
+                self.mux.focus_window(w)?;
+                self.mux.activate_tab(w, i)?;
                 ok()
             }
-            Request::TabActivate(p) => {
-                let ws = self.mux.active_workspace().id;
-                let default = self.mux.windows_in(ws).next().map(|w| w.id);
-                let (w, i) = ipc_ops::resolve_activation(&self.mux, &p, default)?;
-                self.mux
-                    .activate_tab(w, i)
-                    .map_err(|e| RpcError::not_found(e.to_string()))?;
-                ok()
-            }
-            Request::TabSetTitle(p) => {
-                let (w, tab) = match p.tab_id {
-                    Some(t) => (
-                        self.mux
-                            .tab_location(t)
-                            .ok_or_else(|| RpcError::not_found(format!("tab {t} does not exist")))?
-                            .0,
-                        t,
-                    ),
-                    None => {
-                        let ws = self.mux.active_workspace().id;
-                        let win = self
-                            .mux
-                            .windows_in(ws)
-                            .next()
-                            .ok_or_else(|| RpcError::not_found("no window"))?;
-                        let tab = win
-                            .active_tab()
-                            .ok_or_else(|| RpcError::not_found("no active tab"))?
-                            .id;
-                        (win.id, tab)
-                    }
-                };
+            Request::TabRename(p) => {
+                let (w, tab) = ipc_ops::resolve_rename(&self.mux, &self.rows(), &p.target)?;
                 let title = (!p.title.is_empty()).then(|| p.title.clone());
-                self.mux
-                    .rename_tab(w, tab, title)
-                    .map_err(|e| RpcError::not_found(e.to_string()))?;
+                self.mux.rename_tab(w, tab, title)?;
                 ok()
             }
             Request::WorkspaceSwitch { name } => {
-                self.mux
-                    .switch_workspace(&name)
-                    .map_err(|e| RpcError::not_found(e.to_string()))?;
+                self.mux.switch_workspace(&name)?;
                 ok()
             }
             Request::WorkspaceCreate { name } => {
@@ -289,6 +302,17 @@ impl Host {
                 self.mux
                     .rename_workspace(id, &new)
                     .map_err(|e| RpcError::bad_request(e.to_string()))?;
+                ok()
+            }
+            Request::WorkspaceDelete { name, force } => {
+                let panes =
+                    ipc_ops::plan_workspace_delete(&self.rows(), &name, force, self.confirm_close)?;
+                for pane in panes {
+                    if self.panes.contains_key(&pane) {
+                        self.close_pane(pane)?;
+                    }
+                }
+                self.mux.delete_workspace(&name)?;
                 ok()
             }
             Request::RecordStart(p) => {

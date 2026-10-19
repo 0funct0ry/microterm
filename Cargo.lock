@@ -3367,7 +3367,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4190,6 +4190,7 @@ dependencies = [
 name = "mt_mux"
 version = "0.1.0"
 dependencies = [
+ "mt_proto",
  "thiserror 2.0.21",
 ]
 
@@ -4216,6 +4217,7 @@ version = "0.1.0"
 dependencies = [
  "postcard",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -379,7 +379,7 @@ pub struct Mouse {
     pub right_click: RightClick,
     pub hide_while_typing: bool,
     pub scroll_multiplier: f32,
-    /// Accepted from v1.1.0 (splits).
+    /// Accepted from M11 (splits).
     pub focus_follows_mouse: bool,
 }
 

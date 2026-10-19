@@ -20,8 +20,8 @@ is armed before the command starts, so no output is lost. `--cols N --rows N` re
 ## Record an existing pane
 
 ```sh
-microterm cli record --pane 3 -o session.cast            # until the pane closes or Ctrl-C
-microterm cli record --pane 3 -o session.cast --duration 30
+microterm ctl record --pane 3 -o session.cast            # until the pane closes or Ctrl-C
+microterm ctl record --pane 3 -o session.cast --duration 30
 ```
 
 Recording starts at the moment of the call; the header holds the pane's current size.
@@ -37,7 +37,7 @@ review it before sharing.
 ## Replay
 
 ```sh
-microterm cli replay demo.cast [--speed 2] [--new-window]
+microterm ctl replay demo.cast [--speed 2] [--new-window]
 ```
 
 Opens a new tab (or window) that plays the output with its original timing divided by `--speed`

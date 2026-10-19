@@ -11,8 +11,15 @@ description: Variables microterm reads and exports.
 | `COLORTERM` | `truecolor` |
 | `TERM_PROGRAM` | `microterm` |
 | `TERM_PROGRAM_VERSION` | the microterm version |
-| `MICROTERM_PANE` | the pane's id: the default for `microterm cli --pane` |
-| `MICROTERM_UNIX_SOCKET` | the IPC socket of the instance that owns the pane: the default for every `microterm cli` command |
+| `MICROTERM_PANE` | the pane's id: the default pane for `microterm ctl` |
+| `MICROTERM_TAB` | the id of the tab holding the pane: the default tab for `microterm ctl` |
+| `MICROTERM_WINDOW` | the id of the window holding the pane: the default window for `microterm ctl` |
+| `MICROTERM_UNIX_SOCKET` | the IPC socket of the instance that owns the pane: the default for every `microterm ctl` command |
+
+The four `MICROTERM_*` variables are exported into **local** panes only. Panes of an
+[SSH domain](/docs/ssh-domains/) never get them: the local socket is not reachable from a remote
+host, and it is never forwarded over SSH. The ids are the ones at the time the pane started; a
+pane's tab and window do not change today.
 
 `MICROTERM_UNIX_SOCKET` is only used by clients. A new GUI instance always creates its own socket,
 even when started from inside a pane.
@@ -21,8 +28,8 @@ even when started from inside a pane.
 
 | Variable | Used for |
 |----------|----------|
-| `MICROTERM_UNIX_SOCKET` | which instance `microterm cli`, `record` and a second `microterm` talk to |
-| `MICROTERM_PANE` | default `--pane` |
+| `MICROTERM_UNIX_SOCKET` | which instance `microterm ctl`, `record` and a second `microterm` talk to |
+| `MICROTERM_PANE`, `MICROTERM_TAB`, `MICROTERM_WINDOW` | the default target of `microterm ctl` ([Selectors & targeting](/docs/selectors-and-targeting/)) |
 | `MICROTERM_CONFIG` | path of the config file |
 | `XDG_RUNTIME_DIR` | socket directory on Linux (`$XDG_RUNTIME_DIR/microterm/`) |
 | `XDG_CONFIG_HOME`, `XDG_STATE_HOME` | config and state locations |

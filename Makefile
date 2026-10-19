@@ -15,7 +15,7 @@ SITE  := site
 #   ARGS        extra arguments for `make run`          make run ARGS="ssh prod"
 #   T           test name filter                        make test T=replay
 #   C           one crate                               make test-crate C=mt_term
-#   PREFIX      reserved for `make install` (M11)
+#   PREFIX      reserved for `make install` (M13)
 #   MUX_TARGETS targets built by `make mux-musl`
 ARGS ?=
 T ?=
@@ -84,7 +84,7 @@ endif
 
 # ------------------------------------------------------------------------------ run
 
-# SSH tabs install the daemon from a local build until releases exist (M11): build it and point
+# SSH tabs install the daemon from a local build until releases exist (M13): build it and point
 # MICROTERM_MUX_BINARY at it unless you set your own. Without it, SSH tabs fall back to plain
 # sessions that cannot survive a disconnect.
 run: export MICROTERM_MUX_BINARY ?= $(CURDIR)/target/debug/microterm-mux
@@ -225,16 +225,16 @@ site-preview: site-build ## Serve the built site locally
 
 ci: check-facade check-mux-gpui fmt-check clippy deny test themes docs-check site-build ## Everything CI runs
 
-# ------------------------------------------------------------------------------ packaging (M11)
+# ------------------------------------------------------------------------------ packaging (M13)
 
-bundle: ## (M11) macOS .app/.dmg and Linux tarball
-	@echo "bundle: not implemented yet (M11)"
+bundle: ## (M13) macOS .app/.dmg and Linux tarball
+	@echo "bundle: not implemented yet (M13)"
 
-install: ## (M11) install microterm and microterm-mux under PREFIX
-	@echo "install: not implemented yet (M11)"
+install: ## (M13) install microterm and microterm-mux under PREFIX
+	@echo "install: not implemented yet (M13)"
 
-release-dry: ## (M11) dry-run of the release pipeline
-	@echo "release-dry: not implemented yet (M11)"
+release-dry: ## (M13) dry-run of the release pipeline
+	@echo "release-dry: not implemented yet (M13)"
 
 # ------------------------------------------------------------------------------ clean
 

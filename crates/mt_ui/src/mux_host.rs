@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{App, AppContext as _, Global, WindowHandle};
+use mt_mux::ctl::{Live, Rows, Verb};
 use mt_mux::{Id, Mux, SpawnSpec};
 use mt_proto::{Request, RpcError, Spawned};
 use mt_term::Terminal;
@@ -359,10 +360,37 @@ fn reconcile_window(cx: &mut App, window: Id, close: bool) {
     }
 }
 
+/// The window new tabs go to by default: the focused one of the active workspace.
 fn first_window_of_active(cx: &mut App) -> Option<Id> {
-    let h = host(cx);
-    let ws = h.mux.active_workspace().id;
-    h.mux.windows_in(ws).next().map(|w| w.id)
+    host(cx).mux.focused_window()
+}
+
+/// Snapshot of the mux with each pane's live terminal facts, for `ctl` listings and targets.
+fn rows(cx: &mut App) -> Rows {
+    let panes: Vec<Id> = host(cx)
+        .mux
+        .windows()
+        .iter()
+        .flat_map(|w| w.tabs.iter())
+        .flat_map(|t| t.tree.panes())
+        .map(|p| p.id)
+        .collect();
+    let live: HashMap<Id, Live> = panes
+        .into_iter()
+        .map(|p| {
+            let l = terminal(cx, p)
+                .map(|t| ipc_ops::live_of(&t))
+                .unwrap_or_default();
+            (p, l)
+        })
+        .collect();
+    host(cx)
+        .mux
+        .rows(&|id| live.get(&id).cloned().unwrap_or_default())
+}
+
+fn confirm_policy(cx: &App) -> mt_mux::ConfirmClose {
+    ipc_ops::policy_of(&cx.global::<Settings>().config.confirm_close)
 }
 
 fn spawned(cx: &mut App, window: Id, tab_index: usize) -> Reply {
@@ -411,7 +439,7 @@ fn spawn(cx: &mut App, p: &mt_proto::SpawnParams) -> Reply {
             ws.is_none_or(|id| h.mux.windows_in(id).next().is_none()),
         )
     };
-    let uses_first_tab = fresh && !p.new_window && p.window.is_none();
+    let uses_first_tab = fresh && p.window.is_none();
     if !is_active || fresh {
         // Starts the workspace when it has no windows: the spec becomes its first tab.
         show_workspace(cx, &ws_name, true, uses_first_tab.then(|| spec.clone()))
@@ -473,13 +501,20 @@ fn show(cx: &mut App, name: &str) -> Result<(), RpcError> {
     show_workspace(cx, name, false, None).map_err(RpcError::not_found)
 }
 
-fn activate_tab(cx: &mut App, p: &mt_proto::ActivateTabParams) -> Reply {
-    let default = first_window_of_active(cx);
-    let (window, index) = {
-        let h = host(cx);
-        ipc_ops::resolve_activation(&h.mux, p, default)?
-    };
-    let ws = {
+/// Makes `index` the active tab of `window`, showing the window's workspace first.
+fn activate_tab(cx: &mut App, window: Id, index: usize) -> Reply {
+    show_window_workspace(cx, window)?;
+    host(cx)
+        .mux
+        .activate_tab(window, index)
+        .map_err(RpcError::from)?;
+    reconcile_window(cx, window, false);
+    Ok(json!({}))
+}
+
+/// Shows the workspace `window` belongs to when it is not the active one.
+fn show_window_workspace(cx: &mut App, window: Id) -> Result<(), RpcError> {
+    let name = {
         let h = host(cx);
         let win = h
             .mux
@@ -494,47 +529,68 @@ fn activate_tab(cx: &mut App, p: &mt_proto::ActivateTabParams) -> Reply {
                 .unwrap_or_default()
         })
     };
-    if let Some(name) = ws {
-        show(cx, &name)?;
+    match name {
+        Some(n) => show(cx, &n),
+        None => Ok(()),
     }
-    host(cx)
-        .mux
-        .activate_tab(window, index)
-        .map_err(|e| RpcError::not_found(e.to_string()))?;
-    reconcile_window(cx, window, false);
-    Ok(json!({}))
 }
 
-fn set_tab_title(cx: &mut App, p: &mt_proto::SetTabTitleParams) -> Reply {
-    let default = first_window_of_active(cx);
-    let (window, tab) = {
-        let h = host(cx);
-        match p.tab_id {
-            Some(tab) => {
-                let (w, _) = h
-                    .mux
-                    .tab_location(tab)
-                    .ok_or_else(|| not_found("tab", tab))?;
-                (w, tab)
-            }
-            None => {
-                let w = default.ok_or_else(|| RpcError::not_found("no window"))?;
-                let tab = h
-                    .mux
-                    .window(w)
-                    .and_then(|w| w.active_tab())
-                    .ok_or_else(|| RpcError::not_found("no active tab"))?
-                    .id;
-                (w, tab)
-            }
-        }
-    };
+fn rename_tab(cx: &mut App, p: &mt_proto::TabRenameParams) -> Reply {
+    let rows = rows(cx);
+    let (window, tab) = ipc_ops::resolve_rename(&host(cx).mux, &rows, &p.target)?;
     let title = (!p.title.is_empty()).then(|| p.title.clone());
     host(cx)
         .mux
         .rename_tab(window, tab, title)
-        .map_err(|e| RpcError::not_found(e.to_string()))?;
+        .map_err(RpcError::from)?;
     reconcile_window(cx, window, false);
+    Ok(json!({}))
+}
+
+fn focus_window(cx: &mut App, t: &mt_proto::Target) -> Reply {
+    let id = ipc_ops::resolve_window(&rows(cx), t)?;
+    show_window_workspace(cx, id)?;
+    host(cx).mux.focus_window(id).map_err(RpcError::from)?;
+    let handle = host(cx).open.get(&id).copied();
+    if let Some(handle) = handle {
+        let _ = handle.update(cx, |_, window, _| window.activate_window());
+    }
+    cx.activate(true);
+    Ok(json!({}))
+}
+
+/// `pane|tab|window.close`: honours `confirm_close` without ever showing the dialog.
+fn close(cx: &mut App, request: &Request) -> Reply {
+    let rows = rows(cx);
+    let set = ipc_ops::plan_close(&rows, request, confirm_policy(cx))?;
+    for pane in &set.panes {
+        if host(cx).mux.locate_pane(*pane).is_some() {
+            kill_pane(cx, *pane)?;
+        }
+    }
+    for w in set.windows {
+        if host(cx).mux.window(w).is_some() {
+            let h = host(cx);
+            let _ = h.mux.close_window(w);
+            h.parked.remove(&w);
+            reconcile_window(cx, w, true);
+        }
+    }
+    Ok(json!({ "closed": set.panes }))
+}
+
+fn delete_workspace(cx: &mut App, name: &str, force: bool) -> Reply {
+    let rows = rows(cx);
+    let panes = ipc_ops::plan_workspace_delete(&rows, name, force, confirm_policy(cx))?;
+    for pane in panes {
+        if host(cx).mux.locate_pane(pane).is_some() {
+            kill_pane(cx, pane)?;
+        }
+    }
+    host(cx)
+        .mux
+        .delete_workspace(name)
+        .map_err(RpcError::from)?;
     Ok(json!({}))
 }
 
@@ -567,36 +623,58 @@ fn replay(cx: &mut App, p: &mt_proto::ReplayParams) -> Reply {
 /// Executes one IPC request on the GPUI main thread (SPEC §12.2).
 pub fn handle_call(cx: &mut App, request: Request) -> Reply {
     match request {
-        Request::MuxList | Request::WorkspaceList => to_json(&ipc_ops::snapshot(&host(cx).mux)),
-        Request::PaneSpawn(p) => spawn(cx, &p),
-        Request::WindowNew(p) => {
-            // The single-instance request of a second `microterm` (SPEC §12.1).
-            let mut spec = ipc_ops::spawn_spec(&p)?;
-            if let Some(d) = p.domain.as_deref() {
-                spec.domain = crate::ssh_host::resolve_domain(cx, d)?;
-            }
-            let active = host(cx).mux.active_workspace().name.clone();
-            match p.workspace {
-                Some(ws) if ws != active => {
-                    show_workspace(cx, &ws, true, Some(spec)).map_err(RpcError::internal)?;
-                }
-                _ => open_new_window(cx, spec),
-            }
-            cx.activate(true);
-            Ok(json!({}))
+        Request::MuxList
+        | Request::WorkspaceList
+        | Request::WindowList(_)
+        | Request::TabList(_)
+        | Request::PaneList(_)
+        | Request::PaneGet(_) => {
+            let rows = rows(cx);
+            ipc_ops::read_only(&rows, &request).expect("a listing request")
         }
+        Request::TabNew(p) => spawn(
+            cx,
+            &mt_proto::SpawnParams {
+                new_window: false,
+                ..p
+            },
+        ),
+        Request::WindowNew(p) => {
+            // Also the single-instance request of a second `microterm` (SPEC §12.1).
+            let r = spawn(
+                cx,
+                &mt_proto::SpawnParams {
+                    new_window: true,
+                    ..p
+                },
+            );
+            cx.activate(true);
+            r
+        }
+        Request::WindowFocus(t) => focus_window(cx, &t),
         Request::PaneSendText(p) => {
-            let term = pane_terminal(cx, p.pane)?;
-            ipc_ops::send_text(&term, &p);
+            let panes =
+                ipc_ops::resolve_panes(&rows(cx), &p.target, Verb::Acting { all_allowed: true })?;
+            for pane in panes {
+                let term = pane_terminal(cx, pane)?;
+                ipc_ops::send_text(&term, &p);
+            }
             Ok(json!({}))
         }
         Request::PaneGetText(p) => {
-            let term = pane_terminal(cx, p.pane)?;
+            let panes = ipc_ops::resolve_panes(&rows(cx), &p.target, Verb::ReadOnly)?;
+            let term = pane_terminal(cx, panes[0])?;
             to_json(&ipc_ops::get_text(&term, &p)?)
         }
-        Request::PaneKill { pane } => kill_pane(cx, pane),
-        Request::TabActivate(p) => activate_tab(cx, &p),
-        Request::TabSetTitle(p) => set_tab_title(cx, &p),
+        Request::PaneClose(_) | Request::TabClose(_) | Request::WindowClose(_) => {
+            close(cx, &request)
+        }
+        Request::TabFocus(p) => {
+            let rows = rows(cx);
+            let (window, index) = ipc_ops::resolve_focus(&host(cx).mux, &rows, &p)?;
+            activate_tab(cx, window, index)
+        }
+        Request::TabRename(p) => rename_tab(cx, &p),
         Request::WorkspaceSwitch { name } => {
             show(cx, &name)?;
             Ok(json!({}))
@@ -620,6 +698,7 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
                 .map_err(|e| RpcError::bad_request(e.to_string()))?;
             Ok(json!({}))
         }
+        Request::WorkspaceDelete { name, force } => delete_workspace(cx, &name, force),
         Request::RecordStart(p) => {
             let term = pane_terminal(cx, p.pane)?;
             host(cx).recorders.start(p.pane, &term, &p.path, p.input)?;
@@ -645,6 +724,7 @@ mod tests {
     use super::*;
     use crate::theme::Theme;
     use gpui::TestAppContext;
+    use mt_proto::Target;
 
     fn init(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -741,21 +821,32 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
+    fn list<T: serde::de::DeserializeOwned>(cx: &mut TestAppContext, req: Request) -> Vec<T> {
+        serde_json::from_value(call(cx, req).unwrap()).unwrap()
+    }
+
+    fn tab_titles(cx: &mut TestAppContext) -> Vec<(u64, String, bool)> {
+        list::<mt_proto::TabInfo>(cx, Request::TabList(Default::default()))
+            .into_iter()
+            .map(|t| (t.id, t.title, t.active))
+            .collect()
+    }
+
     #[gpui::test]
-    fn ipc_spawn_list_title_activate_and_kill(cx: &mut TestAppContext) {
+    fn ipc_new_list_rename_focus_and_close(cx: &mut TestAppContext) {
         init(cx);
         cx.update(|cx| show_workspace(cx, "default", true, None).unwrap());
         let a = spawned(
             call(
                 cx,
-                Request::PaneSpawn(mt_proto::SpawnParams {
+                Request::TabNew(mt_proto::SpawnParams {
                     title: Some("one".into()),
                     ..Default::default()
                 }),
             )
             .unwrap(),
         );
-        let b = spawned(call(cx, Request::PaneSpawn(Default::default())).unwrap());
+        let b = spawned(call(cx, Request::TabNew(Default::default())).unwrap());
         assert_eq!(a.window, b.window);
         let snap: mt_proto::MuxSnapshot =
             serde_json::from_value(call(cx, Request::MuxList).unwrap()).unwrap();
@@ -765,29 +856,37 @@ mod tests {
 
         call(
             cx,
-            Request::TabSetTitle(mt_proto::SetTabTitleParams {
-                tab_id: Some(a.tab),
+            Request::TabRename(mt_proto::TabRenameParams {
+                target: Target::tab(a.tab),
                 title: "renamed".into(),
             }),
         )
         .unwrap();
         call(
             cx,
-            Request::TabActivate(mt_proto::ActivateTabParams {
-                tab_id: Some(a.tab),
+            Request::TabFocus(mt_proto::TabFocusParams {
+                target: Target::tab(a.tab),
                 ..Default::default()
             }),
         )
         .unwrap();
-        let snap: mt_proto::MuxSnapshot =
-            serde_json::from_value(call(cx, Request::MuxList).unwrap()).unwrap();
-        let tabs = &snap.workspaces[0].windows[0].tabs;
-        assert_eq!(tabs[1].title, "renamed");
-        assert!(tabs[1].active);
+        let tabs = tab_titles(cx);
+        assert_eq!(tabs[1], (a.tab, "renamed".into(), true));
 
-        call(cx, Request::PaneKill { pane: a.pane }).unwrap();
+        // Selectors: one match closes it; a title nobody has is "not found".
+        let by_title = |t: &str| Target::matching(format!("title:{t}"));
+        let e = call(cx, Request::TabClose(by_title("nope"))).unwrap_err();
+        assert_eq!(e.code, mt_proto::ErrorCode::NotFound);
+        // Closing never falls back to the focused tab.
+        let e = call(cx, Request::TabClose(Target::default())).unwrap_err();
+        assert_eq!(e.code, mt_proto::ErrorCode::BadRequest);
+        call(cx, Request::TabClose(by_title("renamed"))).unwrap();
+        assert_eq!(tab_titles(cx).len(), 2);
+
+        // Pane close by id, then again: not found.
+        call(cx, Request::PaneClose(Target::pane(b.pane))).unwrap();
         assert_eq!(
-            call(cx, Request::PaneKill { pane: a.pane })
+            call(cx, Request::PaneClose(Target::pane(b.pane)))
                 .unwrap_err()
                 .code,
             mt_proto::ErrorCode::NotFound
@@ -796,7 +895,7 @@ mod tests {
             call(
                 cx,
                 Request::PaneGetText(mt_proto::GetTextParams {
-                    pane: 9999,
+                    target: Target::pane(9999),
                     start_line: None,
                     end_line: None,
                     escapes: false,
@@ -806,6 +905,28 @@ mod tests {
             .code,
             mt_proto::ErrorCode::NotFound
         );
+    }
+
+    #[gpui::test]
+    fn ipc_ambiguous_matches_need_all(cx: &mut TestAppContext) {
+        init(cx);
+        cx.update(|cx| show_workspace(cx, "default", true, None).unwrap());
+        for _ in 0..2 {
+            call(
+                cx,
+                Request::TabNew(mt_proto::SpawnParams {
+                    title: Some("build".into()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        }
+        let sel = Target::matching("title:build");
+        let e = call(cx, Request::TabClose(sel.clone())).unwrap_err();
+        assert_eq!(e.code, mt_proto::ErrorCode::Ambiguous);
+        assert_eq!(e.candidates.len(), 2);
+        call(cx, Request::TabClose(Target { all: true, ..sel })).unwrap();
+        assert_eq!(tab_titles(cx).len(), 1);
     }
 
     #[gpui::test]
@@ -826,7 +947,7 @@ mod tests {
         let first = spawned(
             call(
                 cx,
-                Request::PaneSpawn(mt_proto::SpawnParams {
+                Request::TabNew(mt_proto::SpawnParams {
                     workspace: Some("svc".into()),
                     ..Default::default()
                 }),
@@ -834,27 +955,40 @@ mod tests {
             .unwrap(),
         );
         cx.run_until_parked();
-        let snap: mt_proto::MuxSnapshot =
-            serde_json::from_value(call(cx, Request::WorkspaceList).unwrap()).unwrap();
-        let svc = snap.workspaces.iter().find(|w| w.name == "svc").unwrap();
+        let workspaces: Vec<mt_proto::WorkspaceInfo> = list(cx, Request::WorkspaceList);
+        let svc = workspaces.iter().find(|w| w.name == "svc").unwrap();
         assert!(svc.active);
-        assert_eq!(svc.windows[0].tabs.len(), 1);
-        assert_eq!(svc.windows[0].tabs[0].panes[0].id, first.pane);
-        let w2 = spawned(
-            call(
-                cx,
-                Request::PaneSpawn(mt_proto::SpawnParams {
-                    new_window: true,
-                    ..Default::default()
-                }),
-            )
-            .unwrap(),
+        assert_eq!(svc.windows, [first.window]);
+        let panes: Vec<mt_proto::PaneInfo> = list(cx, Request::PaneList(Default::default()));
+        let p = panes.iter().find(|p| p.id == first.pane).unwrap();
+        assert_eq!(
+            (p.tab, p.window, p.workspace.as_str()),
+            (first.tab, first.window, "svc")
         );
+        let w2 = spawned(call(cx, Request::WindowNew(Default::default())).unwrap());
         assert_ne!(w2.window, first.window);
         assert!(call(
             cx,
             Request::WorkspaceSwitch {
                 name: "ghost".into()
+            }
+        )
+        .is_err());
+
+        // The active workspace and `default` cannot be deleted; an inactive one can.
+        assert!(call(
+            cx,
+            Request::WorkspaceDelete {
+                name: "svc".into(),
+                force: true
+            }
+        )
+        .is_err());
+        assert!(call(
+            cx,
+            Request::WorkspaceDelete {
+                name: "default".into(),
+                force: true
             }
         )
         .is_err());
@@ -865,11 +999,25 @@ mod tests {
             },
         )
         .unwrap();
+        call(
+            cx,
+            Request::WorkspaceDelete {
+                name: "svc".into(),
+                force: false,
+            },
+        )
+        .unwrap();
+        let names: Vec<String> = list::<mt_proto::WorkspaceInfo>(cx, Request::WorkspaceList)
+            .into_iter()
+            .map(|w| w.name)
+            .collect();
+        assert_eq!(names, ["default"]);
+
         // A foreign domain does not exist yet.
         assert_eq!(
             call(
                 cx,
-                Request::PaneSpawn(mt_proto::SpawnParams {
+                Request::TabNew(mt_proto::SpawnParams {
                     domain: Some("prod".into()),
                     ..Default::default()
                 })

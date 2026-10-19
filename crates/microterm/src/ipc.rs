@@ -224,7 +224,7 @@ mod tests {
         std::thread::spawn(move || {
             while let Ok(c) = rx.recv_blocking() {
                 let r = match &c.request {
-                    Request::PaneKill { pane: 99 } => {
+                    Request::PaneClose(t) if t.pane == Some(99) => {
                         Err(RpcError::not_found("pane 99 does not exist"))
                     }
                     r => Ok(json!({ "method": r.method() })),
@@ -244,7 +244,9 @@ mod tests {
             c.call(&Request::MuxList).unwrap(),
             json!({"method": "mux.list"})
         );
-        let e = c.call(&Request::PaneKill { pane: 99 }).unwrap_err();
+        let e = c
+            .call(&Request::PaneClose(mt_proto::Target::pane(99)))
+            .unwrap_err();
         assert_eq!(e.exit_code(), mt_proto::exit::NOT_FOUND);
         // The connection stays usable after an error.
         assert!(c.call(&Request::WindowNew(SpawnParams::default())).is_ok());

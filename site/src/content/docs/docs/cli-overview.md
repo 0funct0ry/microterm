@@ -4,14 +4,16 @@ description: Script, automate and record a running microterm from the shell.
 ---
 
 `microterm` is also a command-line client for the instance that is already running. Every GUI
-process listens on a Unix socket; `microterm cli …` talks to it over a small JSON-lines protocol,
-so scripts can open tabs, type into them, read their output and record them.
+process listens on a Unix socket; `microterm ctl …` talks to it over a small JSON-lines protocol,
+so scripts can open tabs, type into them, read their output, close them and record them.
+`ctl` is organised by resource: `workspace`, `window`, `tab` and `pane`.
 
 ```sh
-microterm cli workspace create build
-pane=$(microterm cli spawn --workspace build -- cargo watch -x test)
-microterm cli send-text --pane "$pane" 'echo hello'
-microterm cli get-text --pane "$pane"
+microterm ctl workspace create build
+eval "$(microterm ctl tab new --workspace build -- cargo watch -x test)"   # sets $tab $pane $window
+microterm ctl pane send-text --pane "$pane" 'echo hello'
+microterm ctl pane get-text --pane "$pane"
+microterm ctl tab close --tab "$tab" --force
 ```
 
 ## Which instance?
@@ -23,19 +25,22 @@ microterm cli get-text --pane "$pane"
    `~/Library/Application Support/microterm/sock/` on macOS. Sockets left by a crashed instance
    are removed when they are found dead.
 
-With no instance running every `cli` command exits with code **2**. The directory is created
+With no instance running every `ctl` command exits with code **2**. The directory is created
 with mode `0700` and the server refuses connections from other users.
 
-## Which pane?
+## Which pane, tab or window?
 
-`--pane` defaults to `$MICROTERM_PANE`, which is set in every pane. A script that runs inside a
-tab can therefore write `microterm cli get-text` and mean its own tab. Outside a pane you must
-pass `--pane ID`; `microterm cli list` shows the ids.
+Name it with `--pane|--tab|--window ID` or `--match EXPR`. With neither, a command run inside a
+pane targets that pane, tab or window through `$MICROTERM_PANE`, `$MICROTERM_TAB` and
+`$MICROTERM_WINDOW`, so a script can write `microterm ctl pane get-text` and mean its own pane.
+Read-only verbs fall back to the focused item; input and destructive verbs never do. The full
+rules and the selector language are in [Selectors & targeting](/docs/selectors-and-targeting/).
+`microterm ctl list` shows the ids.
 
 ## Output
 
-Commands print plain text for people and, with `--json`, the raw result of the underlying IPC
-call for scripts. Errors go to stderr. See [Exit codes](/docs/reference/exit-codes/).
+Commands print plain text for people (tab-separated rows when piped) and, with `--json`, one
+JSON value for scripts. Errors go to stderr, as a JSON object with `--json`. See [Exit codes](/docs/reference/exit-codes/).
 
 ## Other commands
 
@@ -45,7 +50,7 @@ call for scripts. Errors go to stderr. See [Exit codes](/docs/reference/exit-cod
 | `microterm record -o FILE.cast -- CMD` | runs CMD in a new tab and records it |
 | `microterm --workspace NAME`, `--cwd`, `-e CMD` | start the GUI, or open a window in the running instance |
 
-See [`microterm cli`](/docs/cli/) for every subcommand and [Recording & replay](/docs/recording-and-replay/).
+See [`microterm ctl`](/docs/ctl/) for every command and [Recording & replay](/docs/recording-and-replay/).
 
 ## Shell completions
 
