@@ -1,23 +1,24 @@
 //! `microterm ctl …`, `microterm record` and the internal `__replay` player (SPEC §12.1).
 //!
-//! Every command prints its result on stdout (`--json`: the raw IPC `result`) and errors on
-//! stderr (`--json`: `{"error":{"code","message","candidates"?}}`), and returns the exit codes
-//! of SPEC §12.3: 0 ok, 1 usage, 2 no running instance, 3 target not found, 4 protocol/version
-//! mismatch, 5 ambiguous target, 6 timeout, 7 needs shell integration, 8 confirmation required,
-//! 9 pane busy.
+//! `dispatch` turns a parsed verb into an [`Output`] (or a [`CtlError`]) without printing or
+//! exiting, so `microterm sh` runs the very same code. [`run`] renders the result: the result on
+//! stdout (`--json`: the raw IPC `result`), errors on stderr (`--json`:
+//! `{"error":{"code","message","candidates"?}}`), and the exit codes of SPEC §12.3: 0 ok, 1 usage,
+//! 2 no running instance, 3 target not found, 4 protocol/version mismatch, 5 ambiguous target,
+//! 6 timeout, 7 needs shell integration, 8 confirmation required, 9 pane busy.
 
-use std::io::{IsTerminal, Read, Write};
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use mt_proto::{
-    exit, CallerEnv, CommandText, ErrorCode, Event, GetTextParams, MuxSnapshot, NotifyParams,
-    PaneInfo, RecordStartParams, ReplayParams, Request, Resource, RunParams, RunResult, Selector,
+    exit, CallerEnv, CommandText, Event, GetTextParams, MuxSnapshot, NotifyParams, PaneInfo,
+    RecordStartParams, ReplayParams, Request, Resource, RunParams, RunResult, Selector,
     SendTextParams, SpawnParams, Spawned, StatusResult, StatusSetParams, SubscribeParams,
     TabFocusParams, TabInfo, TabRenameParams, Target, Text, WaitParams, WindowInfo, WorkspaceInfo,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::cli::RecordArgs;
 use crate::client::{Client, ClientError};
@@ -25,48 +26,56 @@ use crate::ctl::{
     CtlAction, CtlArgs, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget, WindowCmd, WindowTarget,
     WorkspaceCmd,
 };
+use crate::output::{Body, ColKind, Column, CtlError, Output, Table};
+use crate::render::{render, render_error, RenderOpts};
 
-static JSON_ERRORS: AtomicBool = AtomicBool::new(false);
-
-fn fail(code: i32, msg: impl std::fmt::Display) -> i32 {
-    if JSON_ERRORS.load(Ordering::Relaxed) {
-        let name = match code {
-            exit::NO_INSTANCE => "no_instance",
-            exit::NOT_FOUND => "not_found",
-            exit::VERSION_MISMATCH => "version_mismatch",
-            exit::TIMEOUT => "timeout",
-            exit::NEEDS_SHELL_INTEGRATION => "needs_shell_integration",
-            exit::BUSY => "busy",
-            _ => "bad_request",
-        };
-        eprintln!(
-            "{}",
-            json!({ "error": { "code": name, "message": msg.to_string() } })
-        );
-    } else {
-        eprintln!("microterm: {msg}");
-    }
-    code
+/// What a verb needs besides its arguments: who is calling, where to stream, how to connect.
+pub struct Ctx<'a> {
+    pub json: bool,
+    pub env: CallerEnv,
+    /// Where streaming verbs (`events`) write as they go.
+    pub stream: &'a mut dyn Write,
+    /// `send-text` without TEXT reads stdin; `sh` turns that into a usage error.
+    pub allow_stdin: bool,
+    /// An explicit socket (`sh --socket`); `None` finds the running instance.
+    pub socket: Option<PathBuf>,
 }
 
-fn client_err(e: ClientError) -> i32 {
-    match &e {
-        ClientError::Rpc(rpc) if JSON_ERRORS.load(Ordering::Relaxed) => {
-            eprintln!("{}", json!({ "error": rpc }));
-            e.exit_code()
-        }
-        ClientError::Rpc(rpc) if !rpc.candidates.is_empty() => {
-            eprintln!("microterm: {}", rpc.message);
-            for c in &rpc.candidates {
-                eprintln!("  {c}");
+impl Ctx<'_> {
+    fn connect(&self) -> Result<Client, ClientError> {
+        connect(self.socket.as_deref())
+    }
+}
+
+/// Connects to `socket`, or to the running instance when there is none.
+pub fn connect(socket: Option<&Path>) -> Result<Client, ClientError> {
+    match socket {
+        Some(p) => Client::connect_to(p),
+        None => Client::connect(),
+    }
+}
+
+/// Writes a verb's result to `stdout`/`stderr` and returns its exit code.
+pub fn present(
+    res: Result<Output, CtlError>,
+    json: bool,
+    opts: &RenderOpts,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    match res {
+        Ok(out) => {
+            let _ = stdout.write_all(render(&out, opts).as_bytes());
+            let _ = stdout.flush();
+            for note in &out.notes {
+                let _ = writeln!(stderr, "microterm: {note}");
             }
-            e.exit_code()
+            out.code
         }
-        ClientError::Rpc(rpc) if rpc.code == ErrorCode::ConfirmRequired => {
-            eprintln!("microterm: {}", rpc.message);
-            e.exit_code()
+        Err(e) => {
+            let _ = stderr.write_all(render_error(&e, json, opts).as_bytes());
+            e.code
         }
-        _ => fail(e.exit_code(), &e),
     }
 }
 
@@ -77,105 +86,49 @@ fn abs(p: &Path) -> String {
         .into_owned()
 }
 
-fn print_json(v: &Value) {
-    println!("{}", serde_json::to_string(v).unwrap_or_default());
-}
-
-fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, i32> {
+fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, CtlError> {
     serde_json::from_value(v)
-        .map_err(|e| fail(exit::VERSION_MISMATCH, format!("unexpected reply: {e}")))
+        .map_err(|e| CtlError::new(exit::VERSION_MISMATCH, format!("unexpected reply: {e}")))
 }
 
-/// Rows as an aligned table on a terminal, tab-separated when piped (SPEC §12.3).
-fn print_table(headers: &[&str], rows: Vec<Vec<String>>) {
-    if std::io::stdout().is_terminal() {
-        let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
-        for r in &rows {
-            for (i, c) in r.iter().enumerate() {
-                widths[i] = widths[i].max(c.chars().count());
-            }
-        }
-        let line = |cells: Vec<&str>| {
-            let parts: Vec<String> = cells
-                .iter()
-                .enumerate()
-                .map(|(i, c)| format!("{c:<w$}", w = widths[i]))
-                .collect();
-            println!("{}", parts.join("  ").trim_end());
-        };
-        line(headers.to_vec());
-        for r in &rows {
-            line(r.iter().map(String::as_str).collect());
-        }
-    } else {
-        for r in rows {
-            println!("{}", r.join("\t"));
-        }
-    }
+fn table(columns: Vec<Column>, rows: Vec<Vec<String>>, noun: &'static str) -> Output {
+    Output::new(Body::Table(Table {
+        columns,
+        rows,
+        dim_rows: Vec::new(),
+        noun,
+    }))
 }
 
 fn flag(b: bool) -> String {
     if b { "*" } else { "" }.to_string()
 }
 
-fn print_tree(s: &MuxSnapshot) {
-    for ws in &s.workspaces {
-        println!(
-            "workspace {}{}",
-            ws.name,
-            if ws.active { " (active)" } else { "" }
-        );
-        for w in &ws.windows {
-            println!(
-                "  window {}{}",
-                w.id,
-                if w.focused { " (focused)" } else { "" }
-            );
-            for t in &w.tabs {
-                println!(
-                    "    tab {} {:?}{}",
-                    t.id,
-                    t.title,
-                    if t.active { " (active)" } else { "" }
-                );
-                for p in &t.panes {
-                    println!(
-                        "      pane {}  {}{}",
-                        p.id,
-                        p.domain,
-                        p.cwd
-                            .as_deref()
-                            .map(|c| format!("  {c}"))
-                            .unwrap_or_default()
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// `tab=5 pane=6 window=2`, safe to feed to `eval`.
-fn print_spawned(s: &Spawned) {
-    println!("tab={} pane={} window={}", s.tab, s.pane, s.window);
-}
-
 pub fn run(args: CtlArgs) -> i32 {
     let json = args.json;
-    JSON_ERRORS.store(json, Ordering::Relaxed);
     // These two need no running instance (or connect on demand).
     match &args.action {
         CtlAction::Skill(cmd) => return microterm::agent::run_skill(cmd, json),
         CtlAction::Mcp => return crate::mcp::run(),
         _ => {}
     }
-    let mut c = match Client::connect() {
-        Ok(c) => c,
-        Err(e) => return client_err(e),
+    let opts = RenderOpts::detect(false, json);
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+    let res = match Client::connect() {
+        Ok(mut c) => {
+            let mut ctx = Ctx {
+                json,
+                env: CallerEnv::from_env(),
+                stream: &mut stdout,
+                allow_stdin: true,
+                socket: None,
+            };
+            dispatch(&mut c, args.action, &mut ctx)
+        }
+        Err(e) => Err(e.into()),
     };
-    match dispatch(&mut c, args.action, json, CallerEnv::from_env()) {
-        Ok(()) => exit::OK,
-        Err(code) => code,
-    }
+    present(res, json, &opts, &mut stdout, &mut stderr)
 }
 
 fn pane_target(t: PaneTarget, env: CallerEnv) -> Target {
@@ -205,35 +158,52 @@ fn window_target(t: WindowTarget, env: CallerEnv) -> Target {
     .with_env(Resource::Window, env)
 }
 
-fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Result<(), i32> {
-    let mut call = |req: Request| c.call(&req).map_err(client_err);
-    // Verbs whose success output is nothing (text) or the raw result (--json).
-    let quiet = |v: Value| {
+/// Runs one verb against the instance behind `c`.
+pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<Output, CtlError> {
+    let json = ctx.json;
+    let env = ctx.env;
+    let mut call = |req: Request| c.call(&req).map_err(CtlError::from);
+    // `--json` prints the raw result; the plain forms are built by `plain`.
+    let result = |v: Value, plain: &dyn Fn(Value) -> Result<Output, CtlError>| {
         if json {
-            print_json(&v);
+            Ok(Output::new(Body::Json(v)))
+        } else {
+            plain(v)
         }
+    };
+    // Verbs whose success output is nothing (text) or the raw result (--json).
+    let quiet = |v: Value| -> Result<Output, CtlError> {
+        Ok(if json {
+            Output::new(Body::Json(v))
+        } else {
+            Output::none()
+        })
     };
     match action {
         CtlAction::List => {
             let v = call(Request::MuxList)?;
-            if json {
-                print_json(&v);
-            } else {
-                print_tree(&decode(v)?);
-            }
+            result(v, &|v| {
+                Ok(Output::new(Body::Tree(decode::<MuxSnapshot>(v)?)))
+            })
         }
         CtlAction::Workspace(w) => match w {
             WorkspaceCmd::List => {
                 let v = call(Request::WorkspaceList)?;
-                if json {
-                    print_json(&v);
-                } else {
+                result(v, &|v| {
                     let rows = decode::<Vec<WorkspaceInfo>>(v)?
                         .into_iter()
                         .map(|w| vec![flag(w.active), w.name, w.windows.len().to_string()])
                         .collect();
-                    print_table(&["ACTIVE", "NAME", "WINDOWS"], rows);
-                }
+                    Ok(table(
+                        vec![
+                            Column::new("ACTIVE", ColKind::Flag),
+                            Column::new("NAME", ColKind::Text),
+                            Column::new("WINDOWS", ColKind::Id),
+                        ],
+                        rows,
+                        "workspace",
+                    ))
+                })
             }
             WorkspaceCmd::Switch { name } => quiet(call(Request::WorkspaceSwitch { name })?),
             WorkspaceCmd::Create { name } => quiet(call(Request::WorkspaceCreate { name })?),
@@ -250,9 +220,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     expr,
                     ..Default::default()
                 }))?;
-                if json {
-                    print_json(&v);
-                } else {
+                result(v, &|v| {
                     let rows = decode::<Vec<WindowInfo>>(v)?
                         .into_iter()
                         .map(|w| {
@@ -265,8 +233,18 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                             ]
                         })
                         .collect();
-                    print_table(&["FOCUSED", "ID", "WORKSPACE", "TABS", "TITLE"], rows);
-                }
+                    Ok(table(
+                        vec![
+                            Column::new("FOCUSED", ColKind::Flag),
+                            Column::new("ID", ColKind::Id),
+                            Column::low("WORKSPACE", ColKind::Text, 1),
+                            Column::new("TABS", ColKind::Id),
+                            Column::new("TITLE", ColKind::Text),
+                        ],
+                        rows,
+                        "window",
+                    ))
+                })
             }
             WindowCmd::New {
                 workspace,
@@ -279,11 +257,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     command: (!command.is_empty()).then_some(command),
                     ..Default::default()
                 }))?;
-                if json {
-                    print_json(&v);
-                } else {
-                    print_spawned(&decode(v)?);
-                }
+                result(v, &|v| spawned("window", v))
             }
             WindowCmd::Focus(t) => quiet(call(Request::WindowFocus(window_target(t, env)))?),
             WindowCmd::Close { target, force, all } => {
@@ -292,7 +266,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     all,
                     ..window_target(target, env)
                 };
-                quiet(call(Request::WindowClose(t))?);
+                quiet(call(Request::WindowClose(t))?)
             }
         },
         CtlAction::Tab(t) => match t {
@@ -302,9 +276,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     expr,
                     ..Default::default()
                 }))?;
-                if json {
-                    print_json(&v);
-                } else {
+                result(v, &|v| {
                     let rows = decode::<Vec<TabInfo>>(v)?
                         .into_iter()
                         .map(|t| {
@@ -317,8 +289,18 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                             ]
                         })
                         .collect();
-                    print_table(&["FOCUSED", "ID", "WINDOW", "DOMAIN", "TITLE"], rows);
-                }
+                    Ok(table(
+                        vec![
+                            Column::new("FOCUSED", ColKind::Flag),
+                            Column::new("ID", ColKind::Id),
+                            Column::new("WINDOW", ColKind::Id),
+                            Column::low("DOMAIN", ColKind::Text, 1),
+                            Column::new("TITLE", ColKind::Text),
+                        ],
+                        rows,
+                        "tab",
+                    ))
+                })
             }
             TabCmd::New {
                 window,
@@ -337,11 +319,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     command: (!command.is_empty()).then_some(command),
                     ..Default::default()
                 }))?;
-                if json {
-                    print_json(&v);
-                } else {
-                    print_spawned(&decode(v)?);
-                }
+                result(v, &|v| spawned("tab", v))
             }
             TabCmd::Focus {
                 target,
@@ -365,7 +343,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                         ..Default::default()
                     }
                 };
-                quiet(call(Request::TabFocus(params))?);
+                quiet(call(Request::TabFocus(params))?)
             }
             TabCmd::Rename { target, title } => quiet(call(Request::TabRename(TabRenameParams {
                 target: tab_target(target, env),
@@ -377,7 +355,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     all,
                     ..tab_target(target, env)
                 };
-                quiet(call(Request::TabClose(t))?);
+                quiet(call(Request::TabClose(t))?)
             }
         },
         CtlAction::Pane(p) => match p {
@@ -388,10 +366,10 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     expr,
                     ..Default::default()
                 }))?;
-                if json {
-                    print_json(&v);
-                } else {
-                    let rows = decode::<Vec<PaneInfo>>(v)?
+                result(v, &|v| {
+                    let panes = decode::<Vec<PaneInfo>>(v)?;
+                    let dim_rows = panes.iter().map(|p| p.exited).collect();
+                    let rows = panes
                         .into_iter()
                         .map(|p| {
                             vec![
@@ -407,36 +385,45 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                             ]
                         })
                         .collect();
-                    print_table(
-                        &[
-                            "FOCUSED", "ID", "TAB", "WINDOW", "DOMAIN", "PROCESS", "STATUS",
-                            "TITLE",
+                    Ok(Output::new(Body::Table(Table {
+                        columns: vec![
+                            Column::new("FOCUSED", ColKind::Flag),
+                            Column::new("ID", ColKind::Id),
+                            Column::new("TAB", ColKind::Id),
+                            Column::new("WINDOW", ColKind::Id),
+                            Column::low("DOMAIN", ColKind::Text, 1),
+                            Column::new("PROCESS", ColKind::Text),
+                            Column::new("STATUS", ColKind::Status),
+                            Column::new("TITLE", ColKind::Text),
                         ],
                         rows,
-                    );
-                }
+                        dim_rows,
+                        noun: "pane",
+                    })))
+                })
             }
             PaneCmd::Get(t) => {
                 let v = call(Request::PaneGet(pane_target(t, env)))?;
-                if json {
-                    print_json(&v);
-                } else {
+                result(v, &|v| {
                     let p: PaneInfo = decode(v)?;
-                    println!("id\t{}", p.id);
-                    println!("tab\t{}", p.tab);
-                    println!("window\t{}", p.window);
-                    println!("workspace\t{}", p.workspace);
-                    println!("domain\t{}", p.domain);
-                    println!("title\t{}", p.title);
-                    println!("cwd\t{}", p.cwd.unwrap_or_default());
-                    println!("process\t{}", p.process.unwrap_or_default());
-                    println!("size\t{}x{}", p.size.cols, p.size.rows);
-                    println!("focused\t{}", p.focused);
-                    println!("exited\t{}", p.exited);
+                    let mut kv = vec![
+                        ("id".to_string(), p.id.to_string()),
+                        ("tab".into(), p.tab.to_string()),
+                        ("window".into(), p.window.to_string()),
+                        ("workspace".into(), p.workspace),
+                        ("domain".into(), p.domain),
+                        ("title".into(), p.title),
+                        ("cwd".into(), p.cwd.unwrap_or_default()),
+                        ("process".into(), p.process.unwrap_or_default()),
+                        ("size".into(), format!("{}x{}", p.size.cols, p.size.rows)),
+                        ("focused".into(), p.focused.to_string()),
+                        ("exited".into(), p.exited.to_string()),
+                    ];
                     if let Some(st) = p.status {
-                        println!("status\t{}", status_line(&st));
+                        kv.push(("status".into(), status_line(&st)));
                     }
-                }
+                    Ok(Output::new(Body::Card(kv)))
+                })
             }
             PaneCmd::SendText {
                 target,
@@ -446,11 +433,16 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
             } => {
                 let text = match text {
                     Some(t) => t,
+                    None if !ctx.allow_stdin => {
+                        return Err(CtlError::usage(
+                            "send-text needs TEXT here (use -f FILE or < FILE)",
+                        ))
+                    }
                     None => {
                         let mut s = String::new();
                         std::io::stdin()
                             .read_to_string(&mut s)
-                            .map_err(|e| fail(exit::USAGE, format!("cannot read stdin: {e}")))?;
+                            .map_err(|e| CtlError::usage(format!("cannot read stdin: {e}")))?;
                         s
                     }
                 };
@@ -461,7 +453,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     },
                     text,
                     paste: !no_paste,
-                }))?);
+                }))?)
             }
             PaneCmd::GetText {
                 target,
@@ -477,16 +469,14 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     escapes,
                     last_command,
                 }))?;
-                if json {
-                    print_json(&v);
-                } else if last_command.is_some() {
-                    let t: CommandText = decode(v)?;
-                    let _ = std::io::stdout().lock().write_all(t.text.as_bytes());
-                } else {
-                    let t: Text = decode(v)?;
-                    let mut out = std::io::stdout().lock();
-                    let _ = out.write_all(t.text.as_bytes());
-                }
+                result(v, &|v| {
+                    let text = if last_command.is_some() {
+                        decode::<CommandText>(v)?.text
+                    } else {
+                        decode::<Text>(v)?.text
+                    };
+                    Ok(Output::new(Body::Raw(text)))
+                })
             }
             PaneCmd::Run {
                 window,
@@ -528,19 +518,24 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                 }
                 let v = call(Request::PaneRun(params))?;
                 let r: RunResult = decode(v.clone())?;
-                if json {
-                    print_json(&v);
+                let mut out = if json {
+                    Output::new(Body::Json(v))
                 } else if detach {
-                    println!("pane={} tab={}", r.pane, r.tab.unwrap_or_default());
+                    Output::text(format!("pane={} tab={}", r.pane, r.tab.unwrap_or_default()))
                 } else if let Some(o) = &r.output {
-                    let _ = std::io::stdout().lock().write_all(o.as_bytes());
-                }
+                    Output::new(Body::Raw(o.clone()))
+                } else {
+                    Output::none()
+                };
+                // The output is printed first; the exit code says how the command went.
                 if r.timed_out {
-                    return Err(exit::TIMEOUT);
+                    out.code = exit::TIMEOUT;
+                } else if propagate_exit {
+                    if let Err(code) = propagated(&r) {
+                        out.code = code;
+                    }
                 }
-                if propagate_exit {
-                    return propagated(&r);
-                }
+                Ok(out)
             }
             PaneCmd::Wait {
                 target,
@@ -569,10 +564,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     },
                     env,
                 );
-                let v = call(Request::PaneWait(params))?;
-                if json {
-                    print_json(&v);
-                }
+                quiet(call(Request::PaneWait(params))?)
             }
             PaneCmd::Notify {
                 target,
@@ -584,10 +576,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
             } => {
                 let message = message.unwrap_or_default();
                 if message.trim().is_empty() && title.as_deref().unwrap_or("").trim().is_empty() {
-                    return Err(fail(
-                        exit::USAGE,
-                        "nothing to say: give a MESSAGE or --title",
-                    ));
+                    return Err(CtlError::usage("nothing to say: give a MESSAGE or --title"));
                 }
                 let v = call(Request::PaneNotify(NotifyParams {
                     target: Target {
@@ -600,11 +589,11 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     message,
                 }))?;
                 let dropped = v["dropped"].as_u64().unwrap_or(0);
-                if json {
-                    print_json(&v);
-                } else if dropped > 0 {
-                    eprintln!("microterm: {dropped} notification(s) dropped (rate limit)");
+                let mut out = quiet(v)?;
+                if !json && dropped > 0 {
+                    out = out.with_note(format!("{dropped} notification(s) dropped (rate limit)"));
                 }
+                Ok(out)
             }
             PaneCmd::Status(cmd) => match cmd {
                 StatusCmd::Set {
@@ -632,15 +621,13 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                 }
                 StatusCmd::Get(t) => {
                     let v = call(Request::PaneStatusGet(pane_target(t, env)))?;
-                    if json {
-                        print_json(&v);
-                    } else {
+                    result(v, &|v| {
                         let r: StatusResult = decode(v)?;
-                        match r.status {
-                            Some(st) => println!("{}", status_line(&st)),
-                            None => println!("idle"),
-                        }
-                    }
+                        Ok(Output::text(match r.status {
+                            Some(st) => status_line(&st),
+                            None => "idle".to_string(),
+                        }))
+                    })
                 }
             },
             PaneCmd::Close { target, force, all } => {
@@ -649,7 +636,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                     all,
                     ..pane_target(target, env)
                 };
-                quiet(call(Request::PaneClose(t))?);
+                quiet(call(Request::PaneClose(t))?)
             }
         },
         CtlAction::Events {
@@ -657,11 +644,15 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
             expr,
             snapshot,
         } => {
-            return events(SubscribeParams {
-                types,
-                expr,
-                snapshot,
-            })
+            events(
+                ctx,
+                SubscribeParams {
+                    types,
+                    expr,
+                    snapshot,
+                },
+            )?;
+            Ok(Output::none())
         }
         CtlAction::Record {
             pane,
@@ -672,8 +663,7 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
             let pane = match pane.or(env.pane) {
                 Some(p) => p,
                 None => {
-                    return Err(fail(
-                        exit::USAGE,
+                    return Err(CtlError::usage(
                         "no pane given: pass --pane ID (or run this inside a microterm pane)",
                     ))
                 }
@@ -684,17 +674,19 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
                 path: path.clone(),
                 input,
             }))?;
-            let waited = wait_for_pane_exit(pane, duration.map(Duration::from_secs));
+            let waited = wait_for_pane_exit(ctx, pane, duration.map(Duration::from_secs));
             // The pane may already be gone (its recording finished by itself).
             let stopped = c.call(&Request::RecordStop { pane });
             match (waited, stopped) {
-                (Err(code), _) => return Err(code),
-                (Ok(_), Err(e)) if e.exit_code() != exit::NOT_FOUND => return Err(client_err(e)),
+                (Err(e), _) => return Err(e),
+                (Ok(_), Err(e)) if e.exit_code() != exit::NOT_FOUND => return Err(e.into()),
                 _ => {}
             }
-            if json {
-                print_json(&serde_json::json!({ "path": path }));
-            }
+            Ok(if json {
+                Output::new(Body::Json(serde_json::json!({ "path": path })))
+            } else {
+                Output::none()
+            })
         }
         CtlAction::Replay {
             file,
@@ -702,37 +694,75 @@ fn dispatch(c: &mut Client, action: CtlAction, json: bool, env: CallerEnv) -> Re
             new_window,
         } => {
             if !(speed.is_finite() && speed > 0.0) {
-                return Err(fail(exit::USAGE, "--speed must be greater than 0"));
+                return Err(CtlError::usage("--speed must be greater than 0"));
             }
             let v = call(Request::ReplayStart(ReplayParams {
                 path: abs(&file),
                 speed,
                 new_window,
             }))?;
-            if json {
-                print_json(&v);
-            } else {
-                print_spawned(&decode(v)?);
-            }
+            result(v, &|v| spawned("replay", v))
         }
         CtlAction::ReloadConfig => quiet(call(Request::ConfigReload)?),
         CtlAction::Skill(_) | CtlAction::Mcp => unreachable!("handled in run()"),
     }
-    Ok(())
+}
+
+/// `new` / `replay` results: `tab=5 pane=6 window=2`, safe to feed to `eval`.
+fn spawned(kind: &'static str, v: Value) -> Result<Output, CtlError> {
+    let s: Spawned = decode(v)?;
+    // A replay opens a tab, so it reads as one.
+    let kind = if kind == "replay" { "tab" } else { kind };
+    Ok(Output::new(Body::Spawned { kind, spawned: s }))
 }
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+/// The connection a foreground `sh` verb is blocked on; Ctrl-C shuts it down so the read returns
+/// (the server then cancels a wait, never the command it waits for).
+static INTERRUPT_FD: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn on_sigint(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
+    let fd = INTERRUPT_FD.load(Ordering::Relaxed);
+    if fd >= 0 {
+        // SAFETY: shutdown(2) is async-signal-safe and only affects that socket.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::shutdown(fd, libc::SHUT_RDWR);
+        }
+    }
 }
 
 fn catch_sigint() {
+    INTERRUPTED.store(false, Ordering::Relaxed);
     // SAFETY: the handler only stores to an atomic.
     #[allow(unsafe_code)]
     unsafe {
         libc::signal(libc::SIGINT, on_sigint as libc::sighandler_t);
     }
+}
+
+/// Starts a foreground verb in an interactive shell: Ctrl-C sets the interrupted flag and, when
+/// `fd` is given, shuts that connection down instead of killing the process.
+pub fn begin_foreground(fd: Option<std::os::unix::io::RawFd>) {
+    INTERRUPTED.store(false, Ordering::Relaxed);
+    INTERRUPT_FD.store(fd.unwrap_or(-1), Ordering::Relaxed);
+    // SAFETY: the handler only touches atomics and calls shutdown(2).
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::signal(libc::SIGINT, on_sigint as libc::sighandler_t);
+    }
+}
+
+/// Ends a foreground verb: restores SIGINT and says whether Ctrl-C arrived meanwhile.
+pub fn end_foreground() -> bool {
+    INTERRUPT_FD.store(-1, Ordering::Relaxed);
+    // SAFETY: restoring the default disposition.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+    INTERRUPTED.swap(false, Ordering::Relaxed)
 }
 
 /// `state [progress%] [text]`, the plain form of a pane status.
@@ -748,13 +778,11 @@ fn status_line(st: &mt_proto::PaneStatus) -> String {
     line
 }
 
-/// `ctl events`: prints one JSON line per event until interrupted. Exits 2 when the GUI quits.
-fn events(params: SubscribeParams) -> Result<(), i32> {
-    let mut events = Client::connect()
-        .and_then(|c| c.subscribe_with(params))
-        .map_err(client_err)?;
+/// `ctl events`: writes one JSON line per event until interrupted. Fails with exit 2 (silently)
+/// when the GUI quits.
+fn events(ctx: &mut Ctx<'_>, params: SubscribeParams) -> Result<(), CtlError> {
+    let mut events = ctx.connect().and_then(|c| c.subscribe_with(params))?;
     catch_sigint();
-    let stdout = std::io::stdout();
     loop {
         if INTERRUPTED.load(Ordering::Relaxed) {
             return Ok(());
@@ -762,43 +790,51 @@ fn events(params: SubscribeParams) -> Result<(), i32> {
         match events.next_event() {
             Ok(Some(ev)) => {
                 let line = ev.stream_json(mt_term::now_ms());
-                let mut out = stdout.lock();
                 // A closed pipe (`| head -1`) ends the stream quietly.
-                if writeln!(out, "{line}").and_then(|()| out.flush()).is_err() {
+                if writeln!(ctx.stream, "{line}")
+                    .and_then(|()| ctx.stream.flush())
+                    .is_err()
+                {
                     return Ok(());
                 }
             }
             Ok(None) => {}
             // The server hung up: the GUI quit.
-            Err(ClientError::Io(_)) => return Err(exit::NO_INSTANCE),
-            Err(e) => return Err(client_err(e)),
+            Err(ClientError::Io(_)) => return Err(CtlError::silent(exit::NO_INSTANCE)),
+            Err(e) => return Err(e.into()),
         }
     }
 }
 
 /// Blocks until `pane` is removed, `limit` passes, or the user presses Ctrl-C.
-fn wait_for_pane_exit(pane: u64, limit: Option<Duration>) -> Result<(), i32> {
-    let mut events = Client::connect()
-        .and_then(Client::subscribe)
-        .map_err(client_err)?;
+fn wait_for_pane_exit(ctx: &Ctx<'_>, pane: u64, limit: Option<Duration>) -> Result<(), CtlError> {
+    let mut events = ctx.connect().and_then(Client::subscribe)?;
     catch_sigint();
     let t0 = Instant::now();
     loop {
         if INTERRUPTED.load(Ordering::Relaxed) || limit.is_some_and(|l| t0.elapsed() >= l) {
             return Ok(());
         }
-        match events.next_event().map_err(client_err)? {
+        match events.next_event()? {
             Some(Event::PaneRemoved { pane: p }) if p == pane => return Ok(()),
             _ => {}
         }
     }
 }
 
+/// Prints `e` on stderr and returns its exit code, for the commands that are not `dispatch`ed.
+fn fail(e: impl Into<CtlError>) -> i32 {
+    let e = e.into();
+    let opts = RenderOpts::detect(false, false);
+    let _ = std::io::stderr().write_all(render_error(&e, false, &opts).as_bytes());
+    e.code
+}
+
 /// `microterm record -o FILE -- CMD`: runs CMD in a new tab and records it until it exits.
 pub fn record(args: RecordArgs) -> i32 {
     let mut c = match Client::connect() {
         Ok(c) => c,
-        Err(e) => return client_err(e),
+        Err(e) => return fail(e),
     };
     let path = abs(&args.output);
     // CMD starts only once the recording is armed: the tab first runs a gate that waits for a
@@ -817,7 +853,7 @@ pub fn record(args: RecordArgs) -> i32 {
     command.extend(args.command.iter().cloned());
     let mut events = match Client::connect().and_then(Client::subscribe) {
         Ok(e) => e,
-        Err(e) => return client_err(e),
+        Err(e) => return fail(e),
     };
     let spawned = c
         .call(&Request::TabNew(SpawnParams {
@@ -827,11 +863,11 @@ pub fn record(args: RecordArgs) -> i32 {
             rows: args.rows,
             ..Default::default()
         }))
-        .map_err(client_err)
+        .map_err(CtlError::from)
         .and_then(decode::<Spawned>);
     let pane = match spawned {
         Ok(s) => s.pane,
-        Err(code) => return code,
+        Err(e) => return fail(e),
     };
     let started = c.call(&Request::RecordStart(RecordStartParams {
         pane,
@@ -844,7 +880,7 @@ pub fn record(args: RecordArgs) -> i32 {
             force: true,
             ..Target::pane(pane)
         }));
-        return client_err(e);
+        return fail(e);
     }
     catch_sigint();
     loop {
@@ -855,7 +891,7 @@ pub fn record(args: RecordArgs) -> i32 {
         match events.next_event() {
             Ok(Some(Event::PaneRemoved { pane: p })) if p == pane => return exit::OK,
             Ok(_) => {}
-            Err(e) => return client_err(e),
+            Err(e) => return fail(e),
         }
     }
 }
@@ -866,15 +902,15 @@ pub fn replay_internal(file: &Path, speed: f64) -> i32 {
     let f = match std::fs::File::open(file) {
         Ok(f) => f,
         Err(e) => {
-            return fail(
+            return fail(CtlError::new(
                 exit::NOT_FOUND,
                 format!("cannot open {}: {e}", file.display()),
-            )
+            ))
         }
     };
     let reader = match mt_record::Reader::new(std::io::BufReader::new(f)) {
         Ok(r) => r,
-        Err(e) => return fail(exit::USAGE, format!("{}: {e}", file.display())),
+        Err(e) => return fail(CtlError::usage(format!("{}: {e}", file.display()))),
     };
     let speed = if speed.is_finite() && speed > 0.0 {
         speed
@@ -886,7 +922,7 @@ pub fn replay_internal(file: &Path, speed: f64) -> i32 {
     for ev in reader {
         let ev = match ev {
             Ok(e) => e,
-            Err(e) => return fail(exit::USAGE, e),
+            Err(e) => return fail(CtlError::usage(e)),
         };
         if let mt_record::EventKind::Output(data) = ev.kind {
             let due = Duration::from_secs_f64(ev.time / speed);

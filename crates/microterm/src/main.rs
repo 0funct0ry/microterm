@@ -5,6 +5,10 @@ mod ctl_cmd;
 mod headless;
 mod ipc;
 mod mcp;
+mod output;
+mod render;
+#[cfg(feature = "sh")]
+mod sh;
 mod shell_integration;
 
 use std::sync::Arc;
@@ -40,6 +44,8 @@ fn main() {
             std::process::exit(shell_integration::print(shell))
         }
         Some(Command::Ctl(args)) => std::process::exit(ctl_cmd::run(args)),
+        #[cfg(feature = "sh")]
+        Some(Command::Sh(args)) => std::process::exit(sh::run(args, cli.config.as_deref())),
         Some(Command::Record(args)) => std::process::exit(ctl_cmd::record(args)),
         Some(Command::ReplayInternal { file, speed }) => {
             std::process::exit(ctl_cmd::replay_internal(&file, speed))

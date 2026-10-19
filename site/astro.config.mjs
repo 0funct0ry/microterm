@@ -32,6 +32,7 @@ export default defineConfig({
           items: [
             { label: 'CLI overview', slug: 'docs/cli-overview' },
             { label: 'microterm ctl', slug: 'docs/ctl' },
+            { label: 'Interactive shell', slug: 'docs/sh' },
             { label: 'Selectors & targeting', slug: 'docs/selectors-and-targeting' },
             { label: 'Run & wait', slug: 'docs/run-and-wait' },
             { label: 'Notifications & status', slug: 'docs/notifications-and-status' },

@@ -236,3 +236,29 @@ fn notifications_and_status_len_default_and_validate() {
     let l = parse_str("[notifications]\nbadg = true\n").unwrap();
     assert!(!l.warnings.is_empty());
 }
+
+#[test]
+fn sh_section_defaults_values_and_validation() {
+    use mt_config::ShColor;
+    let c = Config::default();
+    assert_eq!(c.sh.color, ShColor::Auto);
+    assert!(!c.sh.history_send_text);
+    assert!(c.sh.confirm_prompts);
+    let cfg =
+        parse_str("[sh]\ncolor = \"never\"\nhistory_send_text = true\nconfirm_prompts = false\n")
+            .unwrap();
+    assert_eq!(cfg.config.sh.color, ShColor::Never);
+    assert!(cfg.config.sh.history_send_text);
+    assert!(!cfg.config.sh.confirm_prompts);
+    let e = parse_str("[sh]\ncolor = \"rainbow\"\n").unwrap_err();
+    assert!(format!("{e:?}").contains("rainbow"), "{e:?}");
+    assert!(format!("{e:?}").contains("line: 2"), "{e:?}");
+    let l = parse_str("[sh]\ncolour = \"auto\"\n").unwrap();
+    assert!(
+        l.warnings
+            .iter()
+            .any(|w| format!("{w:?}").contains("color")),
+        "did-you-mean for the typo: {:?}",
+        l.warnings
+    );
+}

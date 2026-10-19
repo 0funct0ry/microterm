@@ -202,3 +202,8 @@ microterm ctl mcp
 
 Runs an MCP server on stdio that exposes `ctl` as tools. See
 [Agents & automation](/docs/agents-and-automation/).
+
+## Interactive use
+
+`microterm sh` is a REPL over exactly these commands, with aliases, a sticky target and
+completion of IDs and selectors. See [Interactive shell](/docs/sh/).

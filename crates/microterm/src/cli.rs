@@ -94,6 +94,14 @@ pub enum Command {
     /// (confirm_close would prompt and --force was not given; nothing was closed), 9 pane busy
     /// (`pane run --in` while a command is running).
     Ctl(CtlArgs),
+    /// Interactive control shell: a REPL over `ctl` with completion (SPEC §12.7).
+    ///
+    /// Everything `microterm ctl` can do, without retyping the boilerplate: `pane get 7`,
+    /// `use pane 7`, tab completion of IDs and selectors, history, tables and trees on a terminal.
+    /// `sh -c 'CMDS'`, `sh FILE` and `sh < FILE` run commands without a prompt. Exit status is the
+    /// last command's `ctl` exit code (2 when no instance is running).
+    #[cfg(feature = "sh")]
+    Sh(ShArgs),
     /// Internal: plays a `.cast` file on stdout (what `ctl replay` runs in the new tab).
     #[command(name = "__replay", hide = true)]
     ReplayInternal {
@@ -101,6 +109,34 @@ pub enum Command {
         #[arg(long, default_value_t = 1.0)]
         speed: f64,
     },
+}
+
+#[cfg(feature = "sh")]
+#[derive(Args, Debug, Default)]
+pub struct ShArgs {
+    /// Run these commands and exit.
+    #[arg(short = 'c', value_name = "CMDS", conflicts_with = "file")]
+    pub commands: Option<String>,
+    /// Run the commands in this file (`-` or no FILE with piped stdin: read stdin).
+    pub file: Option<PathBuf>,
+    /// Print machine-readable JSON, as `ctl --json`.
+    #[arg(long)]
+    pub json: bool,
+    /// Talk to this socket instead of the newest running instance.
+    #[arg(long, value_name = "PATH")]
+    pub socket: Option<PathBuf>,
+    /// Do not read or write the history file.
+    #[arg(long)]
+    pub no_history: bool,
+    /// No colour (NO_COLOR is honoured too).
+    #[arg(long)]
+    pub no_color: bool,
+    /// Refuse every command that changes state.
+    #[arg(long)]
+    pub readonly: bool,
+    /// Abort a script at the first failing command.
+    #[arg(short = 'e')]
+    pub errexit: bool,
 }
 
 #[derive(Args, Debug)]

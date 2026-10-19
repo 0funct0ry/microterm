@@ -14,7 +14,10 @@ name = "microterm"
 path = "src/main.rs"
 
 [features]
+default = ["sh"]
 runtime-shaders = ["mt_ui/runtime-shaders"]
+# `microterm sh`, the interactive control shell (SPEC §12.7).
+sh = ["dep:rustyline"]
 
 [dependencies]
 clap.workspace = true
@@ -30,6 +33,7 @@ async-channel.workspace = true
 serde_json = "1"
 serde.workspace = true
 libc = "0.2"
+rustyline = { version = "17", optional = true }
 
 [dev-dependencies]
 assert_cmd.workspace = true

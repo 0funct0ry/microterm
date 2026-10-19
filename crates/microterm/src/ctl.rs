@@ -629,6 +629,30 @@ pub fn parse_duration_ms(s: &str) -> Result<u64, String> {
     Ok((n * factor).round() as u64)
 }
 
+impl CtlArgs {
+    /// The top-level command names, for the shell's syntax highlighting.
+    pub fn command_names() -> Vec<String> {
+        use clap::CommandFactory;
+        Self::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect()
+    }
+
+    /// The verbs of a resource (`pane` → `list`, `get`, …); empty for a leaf command.
+    pub fn subcommand_names(resource: &str) -> Vec<String> {
+        use clap::CommandFactory;
+        Self::command()
+            .find_subcommand(resource)
+            .map(|c| {
+                c.get_subcommands()
+                    .map(|s| s.get_name().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -261,6 +261,14 @@ const ROOT: &[(&str, K)] = &[
         "notifications",
         K::Table(&[("badge", K::Leaf), ("toast", K::Leaf), ("desktop", K::Leaf)]),
     ),
+    (
+        "sh",
+        K::Table(&[
+            ("color", K::Leaf),
+            ("history_send_text", K::Leaf),
+            ("confirm_prompts", K::Leaf),
+        ]),
+    ),
 ];
 
 fn suggest<'a>(unknown: &str, known: &'a [(&'static str, K)]) -> Option<&'a str> {

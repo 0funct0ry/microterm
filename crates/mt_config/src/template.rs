@@ -122,6 +122,11 @@ status_max_len = 120             # `pane status` text is truncated to this many 
 badge = true                     # attention badge on the tab until it is focused
 toast = "background"             # "background" | "always" | "never"
 desktop = "unfocused"            # "unfocused" | "always" | "never" (OS notification)
+
+[sh]                             # `microterm sh`, the interactive control shell
+color = "auto"                   # "auto" | "always" | "never" (NO_COLOR is always honoured)
+history_send_text = false        # keep lines containing `send-text` in the history
+confirm_prompts = true           # offer `Close 3 panes? [y/N]` when a close needs confirmation
 "##;
 
 #[cfg(test)]

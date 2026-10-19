@@ -60,6 +60,11 @@ fn dead(e: &io::Error) -> bool {
 }
 
 impl Client {
+    /// The socket's descriptor, so a signal handler can shut the connection down.
+    pub fn raw_fd(&self) -> std::os::unix::io::RawFd {
+        std::os::unix::io::AsRawFd::as_raw_fd(&self.stream)
+    }
+
     /// `$MICROTERM_UNIX_SOCKET`, else the newest live socket in the socket directory.
     pub fn connect() -> Result<Client, ClientError> {
         if let Some(path) = std::env::var_os("MICROTERM_UNIX_SOCKET").map(PathBuf::from) {

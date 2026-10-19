@@ -151,6 +151,8 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
         "notifications",
         &[Repaint],
     );
+    // Read when a `microterm sh` session starts; nothing to rebuild in the GUI.
+    d.mark(old.sh != new.sh, "sh", &[Repaint]);
     d
 }
 

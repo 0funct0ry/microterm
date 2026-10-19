@@ -32,6 +32,7 @@ pub struct Config {
     pub copy_mode: CopyMode,
     pub gpu: Gpu,
     pub ctl: Ctl,
+    pub sh: Sh,
     pub notifications: Notifications,
     pub hyperlink_rules: Vec<HyperlinkRule>,
     pub keys: Vec<KeyEntry>,
@@ -67,6 +68,7 @@ impl Default for Config {
             copy_mode: CopyMode::default(),
             gpu: Gpu::default(),
             ctl: Ctl::default(),
+            sh: Sh::default(),
             notifications: Notifications::default(),
             hyperlink_rules: Vec::new(),
             keys: Vec::new(),
@@ -553,6 +555,37 @@ impl Default for Ctl {
         Self {
             capture_max_bytes: 1_048_576,
             status_max_len: 120,
+        }
+    }
+}
+
+/// `[sh] color`: colour in `microterm sh` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShColor {
+    /// Colour on a terminal, unless `NO_COLOR` is set.
+    Auto,
+    Always,
+    Never,
+}
+
+/// `[sh]`: the interactive control shell (SPEC §12.7, §8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sh {
+    pub color: ShColor,
+    /// Keep lines that contain `send-text` in the history (they can carry secrets).
+    pub history_send_text: bool,
+    /// Offer `Close N panes? [y/N]` when a close needs confirmation (interactive sessions only).
+    pub confirm_prompts: bool,
+}
+
+impl Default for Sh {
+    fn default() -> Self {
+        Self {
+            color: ShColor::Auto,
+            history_send_text: false,
+            confirm_prompts: true,
         }
     }
 }

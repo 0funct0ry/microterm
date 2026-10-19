@@ -26,3 +26,10 @@ either honour `--force` or fail with `8`, so scripts and agents cannot hang.
 `pane wait` also exits `3` when the pane closes while it waits (unless it waits for `--exit`).
 `pane run --propagate-exit` returns the command's own status instead of `0`; statuses that would
 collide with the codes above become `1`. See [Run & wait](/docs/run-and-wait/).
+
+## In `microterm sh`
+
+[`microterm sh`](/docs/sh/) returns the same codes: the status of the last command (or the first
+failing one with `-e`), `2` when no instance can be reached at start, and `0` after `exit`. In an
+interactive session a close that would exit `8` asks `[y/N]` instead; scripts and `-c` still exit `8`.
+`--readonly` rejections are usage errors (`1`).
