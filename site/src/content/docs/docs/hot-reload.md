@@ -16,6 +16,7 @@ The swap is **atomic**: either the whole new config applies or none of it does.
 | `theme`, `cursor`, `text`, `window.opacity`, `scrollbar`, `bell`, `paste`, … | repaint |
 | `font.*`, `window.padding`, `tab_bar.*` | cell size is recomputed and every PTY is resized |
 | `ctl.*`, `notifications.*` | read when the next request arrives; nothing to rebuild |
+| `terminal.*` | pushed to every open pane; applies to sequences received afterwards |
 | `hyperlink_rules`, `hyperlinks`, `quick_select` | link patterns are recompiled |
 | `keys` | the keymap is rebuilt; palette key chips update |
 | `shell`, `env`, `term`, `scrollback_lines`, `launch`, `ssh_domains` | new panes only |

@@ -10,7 +10,10 @@ sends it clicks, drags and wheel events using the encoding the program asked for
 X10-style, SGR (1006) or SGR-pixels (1016), with click (1000), drag (1002) or motion (1003)
 tracking.
 
-Hold **Shift** to bypass reporting and select text instead, in any program.
+Hold **Shift** to bypass reporting and select text instead, in any program. A program can ask
+for the opposite with XTSHIFTESCAPE (`CSI > 1 s`): Shift-modified mouse events then go to it,
+and `CSI > 0 s` restores the bypass. This is per pane, ends with a terminal reset, and only
+works while `terminal.allow_shift_capture` is true (the default).
 
 In the alternate screen, when the program has not enabled mouse tracking, the wheel is
 translated to Up/Down arrow keys (like `less` and `man` expect).
@@ -59,3 +62,12 @@ dimmed.
 An I-beam over the terminal, an arrow while a program is capturing the mouse, a pointing hand
 over a link while the activation modifier is held, and the pointer disappears while you type
 (`mouse.hide_while_typing`) until you move it.
+
+A program can pick another shape with OSC 22 (`printf '\e]22;pointer\e\\'`; an empty name
+resets). Names follow the X11 cursor list used by xterm and Kitty, for example `pointer`, `text`,
+`crosshair`, `grab`, `grabbing`, `not-allowed`, `ew-resize`, `ns-resize` and `col-resize`. A name
+with no equivalent cursor shows the arrow. A link under the pointer wins over OSC 22, and the
+shape ends when the program turns mouse reporting off, on a terminal reset and when the pane
+exits.
+
+See also: [Terminal API (VT) support](/docs/reference/terminal-api/).

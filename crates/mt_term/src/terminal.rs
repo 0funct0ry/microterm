@@ -42,6 +42,8 @@ pub struct SpawnOptions {
     pub palette: Palette,
     /// Cursor shown until the program sets one (`cursor.*` config).
     pub cursor: CursorDefault,
+    /// `[terminal]` settings for VT sequences (colour replies, OSC 9, XTSHIFTESCAPE).
+    pub vt: crate::vt::VtConfig,
 }
 
 impl Default for SpawnOptions {
@@ -61,6 +63,7 @@ impl Default for SpawnOptions {
             osc52: Osc52Policy::Write,
             palette: Palette::default(),
             cursor: CursorDefault::default(),
+            vt: Default::default(),
         }
     }
 }
@@ -154,6 +157,7 @@ impl Terminal {
             window_size,
             opts.osc52,
         );
+        shared.vt.lock().unwrap().cfg = opts.vt;
         let listener = Listener(shared.clone());
         let term = Term::new(
             term_config(opts.scrollback, opts.osc52, opts.cursor),
@@ -262,6 +266,7 @@ impl Terminal {
             window_size,
             opts.osc52,
         );
+        shared.vt.lock().unwrap().cfg = opts.vt;
         let term = Term::new(
             term_config(opts.scrollback, opts.osc52, opts.cursor),
             &Size {
@@ -339,6 +344,7 @@ impl Terminal {
         drive(
             osc,
             &mut tracker,
+            &self.shared,
             &mut term,
             bytes,
             |term, seg| {
@@ -536,6 +542,11 @@ impl Terminal {
             .history_cleared(&term);
     }
 
+    /// Applies the `[terminal]` settings (new output only).
+    pub fn set_vt_config(&self, cfg: crate::vt::VtConfig) {
+        self.shared.vt.lock().unwrap().cfg = cfg;
+    }
+
     /// Takes queued events. Call this before `snapshot` so new output re-arms the waker.
     pub fn drain_events(&self) -> Vec<TermEvent> {
         self.shared.drain()
@@ -547,6 +558,7 @@ impl Terminal {
         let damage = take_damage(&mut term);
         let mut snap = snapshot::build(&term, damage, self.wide_ri.load(Ordering::Relaxed));
         snap.modes.sgr_pixels = self.sgr_pixels.load(Ordering::Relaxed);
+        snap.vt = self.shared.vt.lock().unwrap().view();
         snap
     }
 
@@ -928,6 +940,7 @@ fn run_reader(mut io: LocalIo, exited: ExitSlot) {
             drive(
                 &mut osc,
                 &mut tracker,
+                &shared,
                 &mut term,
                 &buf[..n],
                 |term, seg| parser.advance(term, seg),

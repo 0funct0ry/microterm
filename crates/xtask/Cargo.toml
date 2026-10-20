@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+mt_term = { path = "../mt_term" }
 mt_theme = { path = "../mt_theme" }
 mt_ui = { path = "../mt_ui" }
 microterm = { path = "../microterm" }

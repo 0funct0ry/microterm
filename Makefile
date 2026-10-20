@@ -189,7 +189,7 @@ check-mux-gpui:
 themes: ## Validate the bundled themes (licence, 16 colours, contrast)
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-themes
 
-docs: ## Regenerate generated docs (reference/actions.md) from the action registry
+docs: ## Regenerate generated docs (reference/actions.md, agent-skill.md, terminal-api.md) from the action registry
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- gen-docs
 
 docs-check: ## Fail if generated docs are stale

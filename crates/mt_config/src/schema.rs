@@ -34,6 +34,7 @@ pub struct Config {
     pub ctl: Ctl,
     pub sh: Sh,
     pub notifications: Notifications,
+    pub terminal: Terminal,
     pub hyperlink_rules: Vec<HyperlinkRule>,
     pub keys: Vec<KeyEntry>,
     pub launch: Vec<LaunchProfile>,
@@ -70,6 +71,7 @@ impl Default for Config {
             ctl: Ctl::default(),
             sh: Sh::default(),
             notifications: Notifications::default(),
+            terminal: Terminal::default(),
             hyperlink_rules: Vec::new(),
             keys: Vec::new(),
             launch: Vec::new(),
@@ -626,6 +628,41 @@ impl Default for Notifications {
             badge: true,
             toast: ToastMode::Background,
             desktop: DesktopMode::Unfocused,
+        }
+    }
+}
+
+/// `[terminal] osc_color_report`: reply format for OSC colour queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OscColorReport {
+    /// `rgb:RRRR/GGGG/BBBB` (xterm).
+    #[serde(rename = "16-bit")]
+    Bit16,
+    /// `rgb:RR/GG/BB`.
+    #[serde(rename = "8-bit")]
+    Bit8,
+    /// Queries get no reply.
+    #[serde(rename = "none")]
+    None,
+}
+
+/// `[terminal]`: VT behaviour (SPEC §6.1, §6.3, §8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Terminal {
+    pub osc_color_report: OscColorReport,
+    /// OSC 9 desktop notifications from programs in a pane.
+    pub osc_notifications: bool,
+    /// Let a program turn on XTSHIFTESCAPE (Shift-modified mouse events reach it).
+    pub allow_shift_capture: bool,
+}
+
+impl Default for Terminal {
+    fn default() -> Self {
+        Self {
+            osc_color_report: OscColorReport::Bit16,
+            osc_notifications: true,
+            allow_shift_capture: true,
         }
     }
 }

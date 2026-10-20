@@ -55,6 +55,7 @@ export default defineConfig({
           items: [
             { label: 'Actions', slug: 'docs/reference/actions' },
             { label: 'Agent skill', slug: 'docs/reference/agent-skill' },
+            { label: 'Terminal API (VT) support', slug: 'docs/reference/terminal-api' },
             { label: 'Environment variables', slug: 'docs/reference/environment-variables' },
             { label: 'Exit codes', slug: 'docs/reference/exit-codes' },
           ],

@@ -14,7 +14,8 @@ pub use domain::{
     Domain, DomainId, DomainKind, DomainState, LocalDomain, SpawnSpec, SshDomain, LOCAL_DOMAIN_ID,
 };
 pub use model::{
-    Axis, Error, Id, Mux, MuxEvent, Pane, PaneTree, Tab, Window, Workspace, DEFAULT_WORKSPACE,
+    Axis, Error, Id, Mux, MuxEvent, NotifySource, Pane, PaneTree, Tab, Window, Workspace,
+    DEFAULT_WORKSPACE,
 };
-pub use status::{sanitize, NotifyLimiter, Status, NOTIFY_BURST};
+pub use status::{sanitize, NotifyLimiter, Status, StatusSource, NOTIFY_BURST};
 pub use title::{format_title, should_confirm_close, ConfirmClose, TitleParts};

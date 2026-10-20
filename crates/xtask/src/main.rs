@@ -27,6 +27,10 @@ fn gen_docs(check: bool) -> ExitCode {
             microterm::agent::render::REFERENCE_DOC_PATH,
             microterm::agent::render::reference_markdown(),
         ),
+        (
+            mt_term::vt_doc::REFERENCE_DOC_PATH,
+            mt_term::vt_doc::reference_markdown(),
+        ),
     ];
     let mut stale = 0;
     for (rel, content) in pages {

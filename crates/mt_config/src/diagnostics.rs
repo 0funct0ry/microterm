@@ -262,6 +262,14 @@ const ROOT: &[(&str, K)] = &[
         K::Table(&[("badge", K::Leaf), ("toast", K::Leaf), ("desktop", K::Leaf)]),
     ),
     (
+        "terminal",
+        K::Table(&[
+            ("osc_color_report", K::Leaf),
+            ("osc_notifications", K::Leaf),
+            ("allow_shift_capture", K::Leaf),
+        ]),
+    ),
+    (
         "sh",
         K::Table(&[
             ("color", K::Leaf),

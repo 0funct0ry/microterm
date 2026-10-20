@@ -65,6 +65,7 @@ mod tests {
 
     fn st(state: StatusState, text: &str, progress: Option<u8>) -> Status {
         Status {
+            source: mt_mux::StatusSource::Ctl,
             state,
             text: text.into(),
             progress,

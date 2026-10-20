@@ -780,6 +780,31 @@ pub(crate) fn on_pane_exit(cx: &mut App, pane: Id, term: &Terminal, status: Opti
     h.runtime.on_exit(pane, Some(term), status)
 }
 
+/// OSC 9;4 from a program in `pane`.
+pub(crate) fn on_osc_progress(
+    cx: &mut App,
+    pane: Id,
+    state: mt_term::ProgressState,
+    value: Option<u8>,
+) {
+    let now = mt_term::now_ms();
+    if ipc_ops::osc_progress(&mut host(cx).mux, pane, state, value, now) {
+        refresh_windows(cx);
+    }
+}
+
+/// OSC 9 from a program in `pane`, through the `[notifications]` pipeline.
+pub(crate) fn on_osc_notify(cx: &mut App, pane: Id, text: &str) {
+    if !cx.global::<Settings>().config.terminal.osc_notifications {
+        return;
+    }
+    let max = status_max_len(cx);
+    let now = mt_term::now_ms();
+    if let Some(d) = ipc_ops::osc_notify(&mut host(cx).mux, pane, text, max, now) {
+        deliver(cx, d);
+    }
+}
+
 pub(crate) fn on_command_finished(cx: &mut App, pane: Id, exit_code: Option<i32>) {
     host(cx).mux.notify_command_finished(pane, exit_code);
 }
@@ -1447,5 +1472,81 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fake.sent.lock().unwrap()[0].1, "a]0;xbc…");
+    }
+
+    #[gpui::test]
+    fn osc_progress_shows_on_the_tab_and_a_live_ctl_status_wins(cx: &mut TestAppContext) {
+        use mt_term::ProgressState as P;
+        init(cx);
+        let (a, _b) = two_tabs(cx);
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Normal, Some(40)));
+        let c = chrome_of(cx, a.pane);
+        assert_eq!(c.progress, Some(40));
+        assert_eq!(c.dot, Some(crate::components::StatusKind::Accent));
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Error, Some(10)));
+        assert_eq!(
+            chrome_of(cx, a.pane).dot,
+            Some(crate::components::StatusKind::Error)
+        );
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Paused, Some(55)));
+        assert_eq!(
+            chrome_of(cx, a.pane).dot,
+            Some(crate::components::StatusKind::Warning)
+        );
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Indeterminate, None));
+        assert_eq!(chrome_of(cx, a.pane).progress, None);
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Remove, None));
+        assert_eq!(chrome_of(cx, a.pane), Default::default());
+        // A status set through ctl wins while it is live, and OSC cannot clear it.
+        call(
+            cx,
+            Request::PaneStatusSet(mt_proto::StatusSetParams {
+                target: Target::pane(a.pane),
+                state: Some(mt_proto::StatusState::Waiting),
+                text: Some("approve?".into()),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Normal, Some(90)));
+        let c = chrome_of(cx, a.pane);
+        assert_eq!(c.progress, None);
+        assert_eq!(c.tooltip.as_deref(), Some("waiting: approve?"));
+        cx.update(|cx| on_osc_progress(cx, a.pane, P::Remove, None));
+        assert!(chrome_of(cx, a.pane).tooltip.is_some());
+    }
+
+    #[gpui::test]
+    fn osc_9_goes_through_the_notification_pipeline(cx: &mut TestAppContext) {
+        init(cx);
+        let fake = fake_notifier(cx);
+        let (a, _b) = two_tabs(cx);
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let l = log.clone();
+        cx.update(|cx| {
+            host(cx).mux.subscribe(move |e| {
+                if let mt_mux::MuxEvent::Notification { source, level, .. } = e {
+                    l.lock().unwrap().push((source.as_str(), *level));
+                }
+            })
+        });
+        cx.update(|cx| on_osc_notify(cx, a.pane, "build\u{1b}]0;x\u{7} done"));
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            [("osc9", mt_proto::NotifyLevel::Info)]
+        );
+        assert_eq!(fake.sent.lock().unwrap()[0].1, "build]0;x done");
+        // Badge on the background tab.
+        assert!(chrome_of(cx, a.pane).badge.is_some());
+        // Rate limit: five per second per pane, the rest dropped.
+        for _ in 0..8 {
+            cx.update(|cx| on_osc_notify(cx, a.pane, "spam"));
+        }
+        assert_eq!(log.lock().unwrap().len(), 5);
+        // Off switch.
+        cx.update(|cx| edit_config(cx, |c| c.terminal.osc_notifications = false));
+        let b2 = two_tabs(cx).1;
+        cx.update(|cx| on_osc_notify(cx, b2.pane, "ignored"));
+        assert_eq!(log.lock().unwrap().len(), 5);
     }
 }

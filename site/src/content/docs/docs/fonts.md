@@ -120,3 +120,6 @@ If a family has no bold or italic face, the platform text system synthesises one
 These change the size of the current window only (6 to 72 px), recompute the cell size and
 resize the grid, and the shell receives `SIGWINCH`. Editing `font.size` in the config replaces
 the window's own size.
+
+See also: [Terminal API (VT) support](/docs/reference/terminal-api/) for the control sequences
+microterm understands.

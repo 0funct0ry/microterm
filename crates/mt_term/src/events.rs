@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::term::Osc52;
-use alacritty_terminal::vte::ansi::Rgb as EngineRgb;
 
 /// OSC 52 payloads above this size are dropped (SPEC §6.3).
 pub const OSC52_MAX_BYTES: usize = 100 * 1024;
@@ -45,6 +44,16 @@ pub enum ClipboardKind {
     Primary,
 }
 
+/// OSC 9;4 progress state (ConEmu).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressState {
+    Remove,
+    Normal,
+    Error,
+    Indeterminate,
+    Paused,
+}
+
 #[derive(Clone)]
 pub enum TermEvent {
     /// New content; re-snapshot.
@@ -60,6 +69,13 @@ pub enum TermEvent {
     ChildExit(Option<i32>),
     /// OSC 133 `D`: a command finished with this status (`None` when the shell sent none).
     CommandFinished(Option<i32>),
+    /// OSC 9;4 progress report.
+    Progress {
+        state: ProgressState,
+        value: Option<u8>,
+    },
+    /// OSC 9 notification text (unsanitised; the mux cleans it).
+    Notify(String),
 }
 
 impl std::fmt::Debug for TermEvent {
@@ -74,6 +90,8 @@ impl std::fmt::Debug for TermEvent {
             Self::CursorBlinkingChange => write!(f, "CursorBlinkingChange"),
             Self::ChildExit(c) => write!(f, "ChildExit({c:?})"),
             Self::CommandFinished(c) => write!(f, "CommandFinished({c:?})"),
+            Self::Progress { state, value } => write!(f, "Progress({state:?}, {value:?})"),
+            Self::Notify(t) => write!(f, "Notify({t:?})"),
         }
     }
 }
@@ -148,6 +166,8 @@ pub(crate) struct Shared {
     /// connection for a daemon-backed pane.
     sink: OnceLock<Box<dyn Fn(Vec<u8>) + Send + Sync>>,
     pub(crate) palette: Mutex<Palette>,
+    /// Overrides set by sequences the engine does not model (see `vt.rs`).
+    pub(crate) vt: Mutex<crate::vt::VtState>,
     pub(crate) size: Mutex<WindowSize>,
     policy: Mutex<Osc52Policy>,
     /// Last OSC 0/2 title, kept for VT replay (`None` after a reset).
@@ -170,6 +190,7 @@ impl Shared {
             waker,
             sink: OnceLock::new(),
             palette: Mutex::new(palette),
+            vt: Mutex::new(Default::default()),
             size: Mutex::new(size),
             policy: Mutex::new(policy),
             title: Mutex::new(None),
@@ -194,7 +215,7 @@ impl Shared {
         self.push(ev);
     }
 
-    fn write_pty(&self, bytes: Vec<u8>) {
+    pub(crate) fn write_pty(&self, bytes: Vec<u8>) {
         if let Some(sink) = self.sink.get() {
             sink(bytes);
         }
@@ -255,13 +276,12 @@ impl EventListener for Listener {
                     s.push(TermEvent::ClipboardLoad(kind(t), f));
                 }
             }
+            // DECRQM for SGR-pixels (1016): the engine says "not recognised"; `vt.rs` answers.
+            Event::PtyWrite(text) if text == "\x1b[?1016;0$y" => {}
             Event::PtyWrite(text) => s.write_pty(text.into_bytes()),
-            Event::ColorRequest(idx, f) => {
-                let rgb = s.palette.lock().unwrap().lookup(idx);
-                if let Some([r, g, b]) = rgb {
-                    s.write_pty(f(EngineRgb { r, g, b }).into_bytes());
-                }
-            }
+            // Colour queries are answered by `vt.rs`, which sees the override state and the
+            // reply format setting; the engine's reply would duplicate it.
+            Event::ColorRequest(..) => {}
             Event::TextAreaSizeRequest(f) => {
                 let size = *s.size.lock().unwrap();
                 s.write_pty(f(size).into_bytes());

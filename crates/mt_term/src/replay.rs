@@ -28,7 +28,7 @@ fn push_mark(out: &mut String, m: &Mark) {
             };
         }
         Mark::Cwd(p) => push_cwd(out, p),
-        Mark::Reset | Mark::Restored(_) => {}
+        Mark::Reset | Mark::Restored(_) | Mark::Vt(_) => {}
     }
 }
 
@@ -102,6 +102,7 @@ pub(crate) fn synthesize<T>(
     sgr_pixels: bool,
     max_history: usize,
     tracker: &CommandTracker,
+    vt: &crate::vt::VtState,
 ) -> Vec<u8> {
     let mode = *term.mode();
     let alt = mode.contains(TermMode::ALT_SCREEN);
@@ -146,6 +147,8 @@ pub(crate) fn synthesize<T>(
             }
         }
     }
+    // Overrides from sequences the engine does not model (OSC 5, 13–19, 21, 22, XTSHIFTESCAPE).
+    vt.replay(&mut out);
     if alt {
         out.push_str("\x1b[?1049h");
     }
@@ -283,6 +286,7 @@ mod tests {
         assert_eq!(a.snapshot().cursor, b.snapshot().cursor, "cursor");
         assert_eq!(a.cursor_abs(), b.cursor_abs(), "cursor abs");
         assert_eq!(a.title(), b.title(), "title");
+        assert_eq!(a.snapshot().vt, b.snapshot().vt, "vt overrides");
         if !alt {
             assert_eq!(a.history_size(), b.history_size(), "history size");
         }
@@ -459,6 +463,34 @@ mod tests {
             10,
         );
         round_trip(b"\x1b[?7l\x1b[?6hab\x1b[>5u", 30, 4, 10);
+    }
+
+    #[test]
+    fn colour_overrides_shift_capture_and_pointer_shape_survive() {
+        round_trip(
+            b"\x1b]5;0;rgb:11/22/33\x07\x1b]5;1;rgb:44/55/66\x07\x1b]17;#102030\x07\x1b]19;rgb:ff/00/00\x07\
+\x1b]13;rgb:01/02/03\x07\x1b]21;cursor_text=#fff;visual_bell=#abc\x07\x1b[>1s\x1b]22;pointer\x07\
+\x1b]10;rgb:aa/bb/cc\x07\x1b]4;5;rgb:12/34/56\x07x",
+            30,
+            4,
+            10,
+        );
+        // The replay really carries them (checked on a third terminal, not via `vt` equality).
+        let mut a = Emulator::new(30, 4, 10);
+        a.advance(b"\x1b]5;0;rgb:11/22/33\x07\x1b[>1s\x1b]22;text\x07");
+        let mut b = Emulator::new(30, 4, 10);
+        b.advance(&a.replay_bytes(10));
+        let v = b.snapshot().vt;
+        assert_eq!(v.bold_color, Some([0x11, 0x22, 0x33]));
+        assert!(v.shift_capture);
+        assert_eq!(v.pointer_shape.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn ris_clears_overrides() {
+        let mut a = Emulator::new(30, 4, 10);
+        a.advance(b"\x1b]5;0;rgb:11/22/33\x07\x1b[>1s\x1b]22;text\x07\x1b]17;#102030\x07\x1bc");
+        assert_eq!(a.snapshot().vt, Default::default());
     }
 
     #[test]

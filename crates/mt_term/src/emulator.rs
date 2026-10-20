@@ -172,6 +172,7 @@ impl Emulator {
         crate::commands::drive(
             osc,
             tracker,
+            shared,
             term,
             bytes,
             |term, seg| {
@@ -203,6 +204,7 @@ impl Emulator {
             .sniffer
             .flag()
             .load(std::sync::atomic::Ordering::Relaxed);
+        snap.vt = self.shared.vt.lock().unwrap().view();
         snap
     }
 
@@ -313,6 +315,17 @@ impl Emulator {
         self.shared.drain()
     }
 
+    /// Sends the terminal's replies (DA, DSR, colour queries) to `f`; tests and the daemon use
+    /// it where there is no PTY.
+    pub fn set_reply_sink(&self, f: impl Fn(Vec<u8>) + Send + Sync + 'static) {
+        self.shared.set_sink(Box::new(f));
+    }
+
+    /// Applies the `[terminal]` settings.
+    pub fn set_vt_config(&self, cfg: crate::vt::VtConfig) {
+        self.shared.vt.lock().unwrap().cfg = cfg;
+    }
+
     /// A byte stream that, fed to a fresh emulator of the same size, reproduces this one's
     /// screen, scrollback (at most `max_history` rows), modes, cursor, colours and title
     /// (SPEC D6). Not preserved: scroll region, saved cursor, charsets, tab stops, hyperlinks
@@ -326,7 +339,13 @@ impl Emulator {
                 .load(std::sync::atomic::Ordering::Relaxed),
             max_history,
             &self.tracker,
+            &self.shared.vt.lock().unwrap(),
         )
+    }
+
+    /// The working directory the program reported with OSC 7.
+    pub fn cwd(&self) -> Option<String> {
+        self.tracker.cwd().map(str::to_string)
     }
 
     /// The last OSC 0/2 title the program set.

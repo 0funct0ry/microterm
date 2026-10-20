@@ -324,6 +324,25 @@ mod tests {
     }
 
     #[test]
+    fn daemon_pane_and_local_emulator_agree_on_vt_sequences() {
+        let script = "\\033]5;0;rgb:11/22/33\\007\\033]17;#102030\\007\\033[>1s\\033]22;text\\007\\033]4;2;rgb:01/02/03\\007ab\\r\\nline2\\033[2;3H";
+        let (p, rx) = spawn(&["/bin/sh", "-c", &format!("printf '{script}'")]);
+        collect_until(&rx, |e| matches!(e, PaneEvent::Exited(_)));
+        let (_, replay) = p.replay();
+        let mut remote = Emulator::new(40, 6, 100);
+        remote.advance(&replay);
+        let mut local = Emulator::new(40, 6, 100);
+        local.advance(
+            b"\x1b]5;0;rgb:11/22/33\x07\x1b]17;#102030\x07\x1b[>1s\x1b]22;text\x07\x1b]4;2;rgb:01/02/03\x07ab\r\nline2\x1b[2;3H",
+        );
+        assert_eq!(remote.screen_text(), local.screen_text());
+        assert_eq!(remote.snapshot().vt, local.snapshot().vt);
+        assert_eq!(remote.snapshot().cursor, local.snapshot().cursor);
+        assert!(remote.snapshot().vt.shift_capture);
+        assert_eq!(remote.snapshot().vt.bold_color, Some([0x11, 0x22, 0x33]));
+    }
+
+    #[test]
     fn input_reaches_the_process_and_title_is_reported() {
         let (p, rx) = spawn(&[
             "/bin/sh",

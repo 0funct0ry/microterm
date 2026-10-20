@@ -4311,6 +4311,8 @@ dependencies = [
  "alacritty_terminal",
  "libc",
  "polling",
+ "serde",
+ "toml 0.8.23",
 ]
 
 [[package]]
@@ -9011,6 +9013,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "microterm",
+ "mt_term",
  "mt_theme",
  "mt_ui",
 ]

@@ -22,6 +22,7 @@ pub mod notifier;
 pub mod overlay_stack;
 pub mod picker_state;
 pub mod platform;
+pub mod pointer_shape;
 pub mod quick_select;
 pub mod search;
 pub mod session;

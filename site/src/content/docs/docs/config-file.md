@@ -68,6 +68,11 @@ action = "Disable"          # unbind a default
 | `ctl.capture_max_bytes` | cap on the output `pane run` and `pane get-text` return (default 1048576; the tail is kept); read when a request arrives |
 | `ctl.status_max_len` | `pane status` and `pane notify` text is cut to this many characters (default 120); read when a request arrives |
 | `notifications.badge`, `toast`, `desktop` | how `pane notify` surfaces: tab badge, toast (`background`, `always`, `never`) and OS notification (`unfocused`, `always`, `never`); see [Notifications & status](/docs/notifications-and-status/) |
+| `terminal.osc_color_report` | reply to OSC colour queries (OSC 4, 5, 10–19, 21): `"16-bit"` (default, `rgb:RRRR/GGGG/BBBB`), `"8-bit"` (`rgb:RR/GG/BB`) or `"none"` (no reply) |
+| `terminal.osc_notifications` | `true` (default): a program can raise a notification with OSC 9; `false` ignores it. The text is program-controlled, so it is sanitised, cut to `ctl.status_max_len` and limited to 5 per second per pane |
+| `terminal.allow_shift_capture` | `true` (default): a program can turn on XTSHIFTESCAPE so Shift-modified mouse events reach it; see [Mouse & selection](/docs/mouse-and-selection/) |
+
+These three apply to sequences received after a reload; see [Terminal API (VT) support](/docs/reference/terminal-api/).
 
 Every other key in the schema is accepted and validated now, and starts working in the release
 that implements its feature.

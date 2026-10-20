@@ -8,6 +8,7 @@
 //! lock acquisitions), and reports activity through `TermEvent::Wakeup`, coalesced to one
 //! pending wakeup (SPEC §3.4).
 
+mod color_names;
 mod commands;
 mod emulator;
 mod events;
@@ -22,11 +23,13 @@ mod sgr;
 mod shell;
 mod snapshot;
 mod terminal;
+mod vt;
+pub mod vt_doc;
 mod width_filter;
 
 pub use commands::{now_ms, CommandInfo, CommandTracker, Mark, OscSniffer, MAX_COMMANDS};
 pub use emulator::{CursorDefault, Emulator, ScrollCmd};
-pub use events::{ClipboardKind, Osc52Policy, Palette, TermEvent, OSC52_MAX_BYTES};
+pub use events::{ClipboardKind, Osc52Policy, Palette, ProgressState, TermEvent, OSC52_MAX_BYTES};
 pub use headless::{HeadlessOptions, HeadlessPane, PaneEvent};
 pub use input::{
     encode_key, encode_paste, paste_needs_confirmation, InputMode, Key, KeyEventKind, KeyInput,
@@ -46,3 +49,4 @@ pub use snapshot::{
     Underline,
 };
 pub use terminal::{RemoteIo, SpawnOptions, Terminal};
+pub use vt::{ColorReport, VtConfig, VtSeq, VtView, MAX_OSC_PAYLOAD};

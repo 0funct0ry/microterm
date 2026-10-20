@@ -606,3 +606,93 @@ fn overlay_keys_still_work_if_focus_is_stuck_on_the_viewport(cx: &mut TestAppCon
     cx.simulate_input(&label);
     assert_eq!(top(&view, cx), None, "labels work too");
 }
+
+mod vt_sequences {
+    use super::*;
+    use gpui::{CursorStyle, Modifiers};
+
+    fn pointer(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> CursorStyle {
+        view.read_with(cx, |this, _| this.pointer_style())
+    }
+
+    fn set_shift(view: &Entity<AppWindow>, cx: &mut VisualTestContext, on: bool) {
+        view.update_in(cx, |this, _, _| {
+            this.mouse.mods = Modifiers {
+                shift: on,
+                ..Default::default()
+            };
+        });
+    }
+
+    #[gpui::test]
+    fn osc_22_sets_the_pointer_and_ends_with_mouse_reporting(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        assert_eq!(pointer(&view, cx), CursorStyle::IBeam);
+        write(&view, cx, "printf '\\033]22;pointer\\007one'\n");
+        wait_for(&view, cx, |r| r.ends_with("one"));
+        assert_eq!(pointer(&view, cx), CursorStyle::PointingHand);
+        // A name GPUI has no cursor for shows the arrow.
+        write(&view, cx, "printf '\\033]22;wait\\007two'\n");
+        wait_for(&view, cx, |r| r.ends_with("two"));
+        assert_eq!(pointer(&view, cx), CursorStyle::Arrow);
+        // Empty name resets.
+        write(&view, cx, "printf '\\033]22;\\007three'\n");
+        wait_for(&view, cx, |r| r.ends_with("three"));
+        assert_eq!(pointer(&view, cx), CursorStyle::IBeam);
+        // It beats the arrow shown while the program has mouse reporting on, and ends when the
+        // program turns reporting off.
+        write(
+            &view,
+            cx,
+            "printf '\\033[?1000h\\033]22;crosshair\\007four'\n",
+        );
+        wait_for(&view, cx, |r| r.ends_with("four"));
+        assert_eq!(pointer(&view, cx), CursorStyle::Crosshair);
+        write(&view, cx, "printf '\\033[?1000lfive'\n");
+        wait_for(&view, cx, |r| r.ends_with("five"));
+        assert_eq!(pointer(&view, cx), CursorStyle::IBeam);
+    }
+
+    #[gpui::test]
+    fn hyperlink_hover_beats_osc_22(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        write(&view, cx, "printf '\\033]22;crosshair\\007six'\n");
+        wait_for(&view, cx, |r| r.ends_with("six"));
+        view.update_in(cx, |this, _, _| {
+            this.mouse.hover = Some(crate::mouse_input::HoverLink {
+                row: 0,
+                start: 0,
+                end: 3,
+                target: "https://example.com".into(),
+                show_target: false,
+            });
+            this.mouse.mods = Modifiers {
+                #[cfg(target_os = "macos")]
+                platform: true,
+                #[cfg(not(target_os = "macos"))]
+                control: true,
+                ..Default::default()
+            };
+        });
+        assert_eq!(pointer(&view, cx), CursorStyle::PointingHand);
+    }
+
+    #[gpui::test]
+    fn xtshiftescape_decides_whether_shift_bypasses_mouse_reporting(cx: &mut TestAppContext) {
+        let (view, cx) = setup(cx);
+        write(&view, cx, "printf '\\033[?1000hseven'\n");
+        wait_for(&view, cx, |r| r.ends_with("seven"));
+        // Default: reporting on (arrow), Shift bypasses it (I-beam).
+        assert_eq!(pointer(&view, cx), CursorStyle::Arrow);
+        set_shift(&view, cx, true);
+        assert_eq!(pointer(&view, cx), CursorStyle::IBeam);
+        // `CSI > 1 s`: Shift-modified events go to the program.
+        write(&view, cx, "printf '\\033[>1seight'\n");
+        wait_for(&view, cx, |r| r.ends_with("eight"));
+        assert_eq!(pointer(&view, cx), CursorStyle::Arrow);
+        // `CSI > 0 s` restores the bypass.
+        write(&view, cx, "printf '\\033[>0snine'\n");
+        wait_for(&view, cx, |r| r.ends_with("nine"));
+        assert_eq!(pointer(&view, cx), CursorStyle::IBeam);
+    }
+}

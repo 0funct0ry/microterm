@@ -262,3 +262,37 @@ fn sh_section_defaults_values_and_validation() {
         l.warnings
     );
 }
+
+#[test]
+fn terminal_section_defaults_values_and_validation() {
+    use mt_config::{diff, Effect, OscColorReport};
+    let c = Config::default();
+    assert_eq!(c.terminal.osc_color_report, OscColorReport::Bit16);
+    assert!(c.terminal.osc_notifications);
+    assert!(c.terminal.allow_shift_capture);
+    for (v, want) in [
+        ("16-bit", OscColorReport::Bit16),
+        ("8-bit", OscColorReport::Bit8),
+        ("none", OscColorReport::None),
+    ] {
+        let cfg = parse_str(&format!(
+            "[terminal]\nosc_color_report = \"{v}\"\nosc_notifications = false\nallow_shift_capture = false\n"
+        ))
+        .unwrap();
+        assert_eq!(cfg.config.terminal.osc_color_report, want);
+        assert!(!cfg.config.terminal.osc_notifications);
+        assert!(!cfg.config.terminal.allow_shift_capture);
+        // Round-trips through the serializer.
+        let text = toml::to_string(&cfg.config).unwrap();
+        assert_eq!(
+            parse_str(&text).unwrap().config.terminal,
+            cfg.config.terminal
+        );
+    }
+    assert!(parse_str("[terminal]\nosc_color_report = \"32-bit\"\n").is_err());
+    let l = parse_str("[terminal]\nosc_notification = true\n").unwrap();
+    assert!(!l.warnings.is_empty(), "typo warns with a suggestion");
+    let mut n = c.clone();
+    n.terminal.osc_color_report = OscColorReport::None;
+    assert!(diff(&c, &n).effects.contains(&Effect::Repaint));
+}

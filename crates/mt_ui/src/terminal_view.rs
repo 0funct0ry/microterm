@@ -245,6 +245,58 @@ fn has_visible_bg(cell: &Cell) -> bool {
     cell.bg != CellColor::DefaultBg || cell.flags.has(CellFlags::INVERSE)
 }
 
+/// Applies the program's colour overrides to one row: bold text colour (OSC 5;0), underline
+/// colour (OSC 5;1) and selection foreground (OSC 19). `None` when nothing changes.
+fn adjust_row(
+    row: &[Cell],
+    vt: &mt_term::VtView,
+    sel: Option<(usize, usize)>,
+) -> Option<Vec<Cell>> {
+    if vt.bold_color.is_none() && vt.underline_color.is_none() && vt.selection_fg.is_none() {
+        return None;
+    }
+    let rgb = |[r, g, b]: [u8; 3]| CellColor::Rgb(r, g, b);
+    let mut out: Option<Vec<Cell>> = None;
+    for (c, cell) in row.iter().enumerate() {
+        let mut new = cell.clone();
+        if let Some(bold) = vt.bold_color {
+            if cell.flags.has(CellFlags::BOLD) {
+                new.fg = rgb(bold);
+            }
+        }
+        if let Some(ul) = vt.underline_color {
+            if cell.underline != Underline::None && cell.underline_color.is_none() {
+                new.underline_color = Some(rgb(ul));
+            }
+        }
+        if let (Some(fg), Some((a, b))) = (vt.selection_fg, sel) {
+            if (a..b).contains(&c) {
+                new.fg = rgb(fg);
+                new.flags = CellFlags(new.flags.0 & !CellFlags::INVERSE);
+            }
+        }
+        if new != *cell {
+            out.get_or_insert_with(|| row.to_vec())[c] = new;
+        }
+    }
+    out
+}
+
+/// Cache-key part for rows drawn with overrides: the overrides themselves and the selection.
+fn vt_key(vt: &mt_term::VtView, sel: Option<(usize, usize)>) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut mix = |v: u64| h = (h ^ v).wrapping_mul(0x100000001b3);
+    for c in [vt.bold_color, vt.underline_color, vt.selection_fg] {
+        mix(c.map_or(1 << 40, |[r, g, b]| {
+            u64::from(r) << 16 | u64::from(g) << 8 | u64::from(b)
+        }));
+    }
+    if let Some((a, b)) = sel {
+        mix((a as u64) << 20 | b as u64);
+    }
+    h
+}
+
 fn theme_key(t: &Theme, font_generation: u64) -> u64 {
     // Names are unique per theme; the dark flag guards against same-name variants.
     let mut h = font_generation ^ ((t.is_dark as u64) << 63);
@@ -598,9 +650,15 @@ pub fn paint_terminal(
                 y,
                 (b - a) as f32 * m.width,
                 m.height,
-                t.term.selection_bg,
+                snap.vt
+                    .selection_bg
+                    .map_or(t.term.selection_bg, |[r, g, b]| rgb_hsla(r, g, b)),
             );
         }
+        // OSC 5 / 17 / 19 overrides recolour cells on a private copy of the row.
+        let adjusted = adjust_row(row, &snap.vt, sel);
+        let ovr_key = adjusted.as_ref().map_or(0, |_| vt_key(&snap.vt, sel));
+        let row = adjusted.as_deref().unwrap_or(row);
         let edges: Vec<usize> = sel.map(|(a, b)| vec![a, b]).unwrap_or_default();
 
         // 2. Text.
@@ -609,6 +667,7 @@ pub fn paint_terminal(
         let cursor_col = (p.font.ligatures && snap.cursor.visible && snap.cursor.row == r)
             .then_some(snap.cursor.col);
         let row_key = snap.row_hashes[r]
+            ^ ovr_key
             ^ cursor_col.map_or(0, |c| (c as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
             ^ if p.font.ligatures {
                 edges.iter().fold(0u64, |h, &e| {
@@ -826,6 +885,33 @@ mod tests {
             resolve_color(CellColor::Rgb(1, 2, 3), &t),
             rgb_hsla(1, 2, 3)
         );
+    }
+
+    #[test]
+    fn program_colour_overrides_recolour_bold_underline_and_selection() {
+        let vt = mt_term::VtView {
+            bold_color: Some([1, 2, 3]),
+            underline_color: Some([4, 5, 6]),
+            selection_fg: Some([7, 8, 9]),
+            ..Default::default()
+        };
+        let mut row = vec![Cell::default(); 4];
+        row[0].flags = CellFlags(CellFlags::BOLD);
+        row[1].underline = Underline::Single;
+        // No override, no copy.
+        assert!(adjust_row(&row, &Default::default(), Some((0, 2))).is_none());
+        let out = adjust_row(&row, &vt, Some((2, 4))).unwrap();
+        assert_eq!(out[0].fg, CellColor::Rgb(1, 2, 3), "bold");
+        assert_eq!(out[1].underline_color, Some(CellColor::Rgb(4, 5, 6)));
+        assert_eq!(out[1].fg, CellColor::DefaultFg);
+        assert_eq!(out[2].fg, CellColor::Rgb(7, 8, 9), "selected");
+        assert_eq!(out[3].fg, CellColor::Rgb(7, 8, 9));
+        // An explicit underline colour is kept.
+        row[1].underline_color = Some(CellColor::Rgb(9, 9, 9));
+        let out = adjust_row(&row, &vt, None).unwrap();
+        assert_eq!(out[1].underline_color, Some(CellColor::Rgb(9, 9, 9)));
+        // Overrides and selection change the cache key.
+        assert_ne!(vt_key(&vt, None), vt_key(&vt, Some((0, 1))));
     }
 
     #[test]

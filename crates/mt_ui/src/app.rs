@@ -670,6 +670,8 @@ impl AppWindow {
         let mut exit = None;
         let mut new_title = None;
         let mut finished = Vec::new();
+        let mut progress = Vec::new();
+        let mut notes = Vec::new();
         let term = session.term.clone();
         for ev in session.term.drain_events() {
             match ev {
@@ -697,6 +699,8 @@ impl AppWindow {
                 }
                 TermEvent::ChildExit(code) => exit = Some(code),
                 TermEvent::CommandFinished(code) => finished.push(code),
+                TermEvent::Progress { state, value } => progress.push((state, value)),
+                TermEvent::Notify(text) => notes.push(text),
             }
         }
         session.refresh();
@@ -713,6 +717,12 @@ impl AppWindow {
         }
         for code in finished {
             mux_host::on_command_finished(cx, pane, code);
+        }
+        for (state, value) in progress {
+            mux_host::on_osc_progress(cx, pane, state, value);
+        }
+        for text in notes {
+            mux_host::on_osc_notify(cx, pane, &text);
         }
         if let Some(code) = exit {
             // `pane run --keep` leaves the tab open, showing the exit notice.
@@ -2232,6 +2242,7 @@ impl AppWindow {
             cursor: cursor_default(&cfg.cursor),
             palette: palette_of(cx.global::<Theme>()),
             wide_regional_indicators: cfg.text.wide_regional_indicators,
+            vt: vt_config(cfg),
             ..Default::default()
         }
     }
@@ -2290,6 +2301,7 @@ impl AppWindow {
                 s.term.set_runtime(osc52, cursor);
                 s.term
                     .set_wide_regional_indicators(cfg.text.wide_regional_indicators);
+                s.term.set_vt_config(vt_config(&cfg));
             }
         }
         self.cursor_phase = true;
@@ -2419,6 +2431,19 @@ fn osc52_policy(p: mt_config::Osc52) -> mt_term::Osc52Policy {
         mt_config::Osc52::Write => mt_term::Osc52Policy::Write,
         mt_config::Osc52::ReadWrite => mt_term::Osc52Policy::ReadWrite,
         mt_config::Osc52::Disabled => mt_term::Osc52Policy::Disabled,
+    }
+}
+
+/// `[terminal]` as the terminal facade wants it.
+pub fn vt_config(cfg: &mt_config::Config) -> mt_term::VtConfig {
+    mt_term::VtConfig {
+        report: match cfg.terminal.osc_color_report {
+            mt_config::OscColorReport::Bit16 => mt_term::ColorReport::Bit16,
+            mt_config::OscColorReport::Bit8 => mt_term::ColorReport::Bit8,
+            mt_config::OscColorReport::None => mt_term::ColorReport::None,
+        },
+        osc_notifications: cfg.terminal.osc_notifications,
+        allow_shift_capture: cfg.terminal.allow_shift_capture,
     }
 }
 

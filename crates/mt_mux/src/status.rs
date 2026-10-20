@@ -9,9 +9,18 @@ use mt_proto::{iso8601_utc, PaneStatus, StatusState};
 
 use crate::model::Id;
 
+/// Who set a status: `ctl pane status`, or a program's OSC 9;4 progress report. A live `Ctl`
+/// status wins over `Osc` (SPEC §12.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusSource {
+    Ctl,
+    Osc,
+}
+
 /// A pane's status. Integers only so `Pane` stays `Eq`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
+    pub source: StatusSource,
     pub state: StatusState,
     pub text: String,
     pub progress: Option<u8>,

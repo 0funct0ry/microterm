@@ -123,6 +123,11 @@ badge = true                     # attention badge on the tab until it is focuse
 toast = "background"             # "background" | "always" | "never"
 desktop = "unfocused"            # "unfocused" | "always" | "never" (OS notification)
 
+[terminal]                       # VT behaviour
+osc_color_report = "16-bit"      # reply to OSC colour queries: "16-bit" | "8-bit" | "none"
+osc_notifications = true         # let programs raise notifications with OSC 9
+allow_shift_capture = true       # let programs make Shift-modified mouse events reach them (XTSHIFTESCAPE)
+
 [sh]                             # `microterm sh`, the interactive control shell
 color = "auto"                   # "auto" | "always" | "never" (NO_COLOR is always honoured)
 history_send_text = false        # keep lines containing `send-text` in the history

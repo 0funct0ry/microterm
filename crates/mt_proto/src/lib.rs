@@ -980,6 +980,10 @@ pub fn iso8601_utc(ms: u64) -> String {
     )
 }
 
+fn ctl_source() -> String {
+    "ctl".into()
+}
+
 /// A `MuxEvent` as streamed to `subscribe`rs (SPEC §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -1010,6 +1014,9 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         message: String,
+        /// `ctl` or `osc9`.
+        #[serde(default = "ctl_source")]
+        source: String,
     },
     /// The pane's process ended (`None` when killed by a signal).
     PaneExited {
@@ -1508,9 +1515,11 @@ mod tests {
             level: NotifyLevel::Error,
             title: None,
             message: "x".into(),
+            source: "osc9".into(),
         };
         assert_eq!(n.stream_json(0)["type"], "pane.notification");
         assert_eq!(n.stream_json(0)["level"], "error");
+        assert_eq!(n.stream_json(0)["source"], "osc9");
         assert!(Event::PaneExited {
             pane: 1,
             status: None

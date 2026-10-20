@@ -33,11 +33,13 @@ pub fn event_of(e: &MuxEvent) -> Event {
             level,
             ref title,
             ref message,
+            source,
         } => Event::Notification {
             pane,
             level,
             title: title.clone(),
             message: message.clone(),
+            source: source.as_str().into(),
         },
         MuxEvent::PaneExited { pane, status } => Event::PaneExited { pane, status },
         MuxEvent::CommandFinished { pane, exit_code } => Event::CommandFinished { pane, exit_code },
@@ -261,7 +263,14 @@ pub fn notify(
         .filter(|t| !t.is_empty());
     let (mut delivered, mut dropped) = (Vec::new(), 0);
     for &pane in &panes {
-        if mux.notify_pane(pane, p.level, title.clone(), message.clone(), now_ms) {
+        if mux.notify_pane(
+            pane,
+            p.level,
+            title.clone(),
+            message.clone(),
+            mt_mux::NotifySource::Ctl,
+            now_ms,
+        ) {
             delivered.push(Delivered {
                 pane,
                 level: p.level,
@@ -644,6 +653,59 @@ impl Recorders {
     pub fn finish(&mut self, pane: Id, term: Option<&Terminal>) {
         let _ = self.stop(pane, term);
     }
+}
+
+/// OSC 9;4 progress as pane status (SPEC §12.4): normal and indeterminate show as working, an
+/// error as error, paused as waiting; removal clears only a status that came from OSC. A live
+/// `ctl pane status` is never overwritten. Returns whether the pane's status changed.
+pub fn osc_progress(
+    mux: &mut mt_mux::Mux,
+    pane: u64,
+    state: mt_term::ProgressState,
+    value: Option<u8>,
+    now_ms: u64,
+) -> bool {
+    use mt_proto::StatusState;
+    use mt_term::ProgressState as P;
+    let (state, value) = match state {
+        P::Remove => return mux.clear_osc_progress(pane),
+        P::Normal => (StatusState::Working, value),
+        P::Indeterminate => (StatusState::Working, None),
+        P::Error => (StatusState::Error, value),
+        P::Paused => (StatusState::Waiting, value),
+    };
+    mux.set_osc_progress(pane, state, value, now_ms)
+}
+
+/// OSC 9 text as a notification: sanitised, truncated and rate-limited like `pane notify`, level
+/// `info`, source `osc9`. `None` when it was empty or dropped by the limit.
+pub fn osc_notify(
+    mux: &mut mt_mux::Mux,
+    pane: u64,
+    text: &str,
+    max_len: usize,
+    now_ms: u64,
+) -> Option<Delivered> {
+    let message = mt_mux::sanitize(text, max_len);
+    if message.is_empty() {
+        return None;
+    }
+    let level = mt_proto::NotifyLevel::Info;
+    mux.notify_pane(
+        pane,
+        level,
+        None,
+        message.clone(),
+        mt_mux::NotifySource::Osc9,
+        now_ms,
+    )
+    .then_some(Delivered {
+        pane,
+        level,
+        title: None,
+        message,
+        desktop: false,
+    })
 }
 
 #[cfg(test)]

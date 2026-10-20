@@ -1,0 +1,1218 @@
+# Work list for M10.6: every sequence in Ghostty's VT reference
+# (https://ghostty.org/docs/vt/reference and /external).
+# Each [[row]] is one sequence; each [[row.case]] feeds `input` to an emulator (20x5, One Dark
+# palette) and asserts the optional fields. Statuses: supported | partial | unsupported.
+# Rendered by `xtask gen-docs` into reference/terminal-api.md.
+
+[[row]]
+kind = "Control"
+code = "BEL"
+name = "Bell"
+status = "supported"
+url = "https://ghostty.org/docs/vt/control/bel"
+  [[row.case]]
+  input = "\u0007"
+  events = ["bell"]
+
+[[row]]
+kind = "Control"
+code = "BS"
+name = "Backspace"
+status = "supported"
+url = "https://ghostty.org/docs/vt/control/bs"
+  [[row.case]]
+  input = "ab\b"
+  cursor = [0, 1]
+  [[row.case]]
+  input = "\b"
+  cursor = [0, 0]
+
+[[row]]
+kind = "Control"
+code = "TAB"
+name = "Horizontal tab"
+status = "supported"
+url = "https://ghostty.org/docs/vt/control/tab"
+  [[row.case]]
+  input = "\t"
+  cursor = [0, 8]
+  [[row.case]]
+  input = "a\t\t"
+  cursor = [0, 16]
+
+[[row]]
+kind = "Control"
+code = "LF"
+name = "Line feed"
+status = "supported"
+url = "https://ghostty.org/docs/vt/control/lf"
+  [[row.case]]
+  input = "a\n"
+  cursor = [1, 1]
+
+[[row]]
+kind = "Control"
+code = "CR"
+name = "Carriage return"
+status = "supported"
+url = "https://ghostty.org/docs/vt/control/cr"
+  [[row.case]]
+  input = "abc\r"
+  cursor = [0, 0]
+
+[[row]]
+kind = "ESC"
+code = "ESC 7"
+name = "DECSC"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/decsc"
+  [[row.case]]
+  input = "\u001b[3;4H\u001b7\u001b[1;1H\u001b8"
+  cursor = [2, 3]
+
+[[row]]
+kind = "ESC"
+code = "ESC 8"
+name = "DECRC"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/decrc"
+  [[row.case]]
+  input = "\u001b[3;4H\u001b7\u001b[1;1H\u001b8"
+  cursor = [2, 3]
+
+[[row]]
+kind = "ESC"
+code = "ESC D"
+name = "IND"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/ind"
+  [[row.case]]
+  input = "\u001bD"
+  cursor = [1, 0]
+  [[row.case]]
+  input = "\u001b[5;1Ha\u001bD"
+  lines = ["", "", "", "a", ""]
+  cursor = [4, 1]
+
+[[row]]
+kind = "ESC"
+code = "ESC M"
+name = "RI"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/ri"
+  [[row.case]]
+  input = "\u001b[2;1H\u001bM"
+  cursor = [0, 0]
+  [[row.case]]
+  input = "a\u001bM"
+  lines = ["", "a"]
+  cursor = [0, 1]
+
+[[row]]
+kind = "ESC"
+code = "ESC c"
+name = "RIS"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/ris"
+  [[row.case]]
+  input = "ab\r\ncd\u001bc"
+  lines = ["", ""]
+  cursor = [0, 0]
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00\u0007\u001bc\u001b]4;1;?\u0007"
+  reply = "\u001b]4;1;rgb:e0e0/6c6c/7575\u0007"
+  [[row.case]]
+  input = "\u001b]5;0;rgb:ff/00/00\u0007\u001bc\u001b]5;0;?\u0007"
+  reply = "\u001b]5;0;rgb:abab/b2b2/bfbf\u0007"
+  [[row.case]]
+  input = "\u001b[>1s\u001bc"
+  modes_off = ["shift_capture"]
+  [[row.case]]
+  input = "\u001b]22;pointer\u0007\u001bc"
+  pointer = ""
+  [[row.case]]
+  input = "\u001b]17;rgb:ff/00/00\u0007\u001bc\u001b]17;?\u0007"
+  reply = "\u001b]17;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "ESC"
+code = "ESC ="
+name = "DECKPAM"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/deckpam"
+  [[row.case]]
+  input = "\u001b="
+  modes_on = ["app_keypad"]
+
+[[row]]
+kind = "ESC"
+code = "ESC >"
+name = "DECKPNM"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/deckpnm"
+  [[row.case]]
+  input = "\u001b=\u001b>"
+  modes_off = ["app_keypad"]
+
+[[row]]
+kind = "ESC"
+code = "ESC # 8"
+name = "DECALN"
+status = "supported"
+url = "https://ghostty.org/docs/vt/esc/decaln"
+  [[row.case]]
+  input = "\u001b#8"
+  lines = ["EEEEEEEEEEEEEEEEEEEE", "EEEEEEEEEEEEEEEEEEEE"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn SP q"
+name = "DECSCUSR"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/decscusr"
+  [[row.case]]
+  input = "\u001b[6 q"
+  cursor_shape = "beam"
+  [[row.case]]
+  input = "\u001b[4 q"
+  cursor_shape = "underline"
+  [[row.case]]
+  input = "\u001b[2 q"
+  cursor_shape = "block"
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn A"
+name = "CUU"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cuu"
+  [[row.case]]
+  input = "\u001b[3;1H\u001b[2A"
+  cursor = [0, 0]
+  [[row.case]]
+  input = "\u001b[3;1H\u001b[A"
+  cursor = [1, 0]
+  [[row.case]]
+  input = "\u001b[1;1H\u001b[9A"
+  cursor = [0, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn B"
+name = "CUD"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cud"
+  [[row.case]]
+  input = "\u001b[2B"
+  cursor = [2, 0]
+  [[row.case]]
+  input = "\u001b[B"
+  cursor = [1, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn C"
+name = "CUF"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cuf"
+  [[row.case]]
+  input = "\u001b[3C"
+  cursor = [0, 3]
+  [[row.case]]
+  input = "\u001b[99C"
+  cursor = [0, 19]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn D"
+name = "CUB"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cub"
+  [[row.case]]
+  input = "\u001b[5C\u001b[2D"
+  cursor = [0, 3]
+  [[row.case]]
+  input = "\u001b[3D"
+  cursor = [0, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn E"
+name = "CNL"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cnl"
+  [[row.case]]
+  input = "ab\u001b[2E"
+  cursor = [2, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn F"
+name = "CPL"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cpl"
+  [[row.case]]
+  input = "\u001b[3;5H\u001b[2F"
+  cursor = [0, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Py ; Px H"
+name = "CUP"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cup"
+  [[row.case]]
+  input = "\u001b[2;3H"
+  cursor = [1, 2]
+  [[row.case]]
+  input = "\u001b[H"
+  cursor = [0, 0]
+  [[row.case]]
+  input = "\u001b[99;99H"
+  cursor = [4, 19]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn I"
+name = "CHT"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cht"
+  [[row.case]]
+  input = "\u001b[2I"
+  cursor = [0, 16]
+  [[row.case]]
+  input = "\u001b[I"
+  cursor = [0, 8]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn J"
+name = "ED"
+status = "partial"
+notes = "`CSI 1 J` with the cursor on the second row leaves the first row intact (alacritty_terminal 0.26 only clears whole rows above when the cursor is below row 1)."
+url = "https://ghostty.org/docs/vt/csi/ed"
+  [[row.case]]
+  input = "abc\u001b[1;2H\u001b[J"
+  lines = ["a"]
+  [[row.case]]
+  input = "abc\r\ndef\r\nghi\u001b[3;2H\u001b[1J"
+  lines = ["", "", "  i"]
+  [[row.case]]
+  input = "abc\u001b[2J"
+  lines = [""]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn K"
+name = "EL"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/el"
+  [[row.case]]
+  input = "abc\u001b[1;2H\u001b[K"
+  lines = ["a"]
+  [[row.case]]
+  input = "abcd\u001b[1;3H\u001b[1K"
+  lines = ["   d"]
+  [[row.case]]
+  input = "abc\u001b[1;2H\u001b[2K"
+  lines = [""]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn M"
+name = "DL"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/dl"
+  [[row.case]]
+  input = "1\r\n2\r\n3\u001b[2;1H\u001b[M"
+  lines = ["1", "3"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn L"
+name = "IL"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/il"
+  [[row.case]]
+  input = "1\r\n2\u001b[2;1H\u001b[L"
+  lines = ["1", "", "2"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn P"
+name = "DCH"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/dch"
+  [[row.case]]
+  input = "abcd\u001b[1;2H\u001b[P"
+  lines = ["acd"]
+  [[row.case]]
+  input = "abcd\u001b[1;2H\u001b[2P"
+  lines = ["ad"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn S"
+name = "SU"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/su"
+  [[row.case]]
+  input = "1\r\n2\r\n3\u001b[S"
+  lines = ["2", "3"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn T"
+name = "SD"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/sd"
+  [[row.case]]
+  input = "1\r\n2\u001b[T"
+  lines = ["", "1", "2"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn X"
+name = "ECH"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/ech"
+  [[row.case]]
+  input = "abcd\u001b[1;2H\u001b[2X"
+  lines = ["a  d"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn Z"
+name = "CBT"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/cbt"
+  [[row.case]]
+  input = "\u001b[1;10H\u001b[Z"
+  cursor = [0, 8]
+  [[row.case]]
+  input = "\u001b[1;20H\u001b[2Z"
+  cursor = [0, 8]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn a"
+name = "HPR"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/hpr"
+  [[row.case]]
+  input = "\u001b[3a"
+  cursor = [0, 3]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn b"
+name = "REP"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/rep"
+  [[row.case]]
+  input = "a\u001b[3b"
+  lines = ["aaaa"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Py d"
+name = "VPA"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/vpa"
+  [[row.case]]
+  input = "\u001b[3d"
+  cursor = [2, 0]
+  [[row.case]]
+  input = "ab\u001b[3d"
+  cursor = [2, 2]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn e"
+name = "VPR"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/vpr"
+  [[row.case]]
+  input = "\u001b[2e"
+  cursor = [2, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn g"
+name = "TBC"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/tbc"
+  [[row.case]]
+  input = "\u001b[3g\u001b[1;1H\t"
+  cursor = [0, 19]
+  [[row.case]]
+  input = "\u001b[1;9H\u001b[g\u001b[1;1H\t"
+  cursor = [0, 16]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn n"
+name = "DSR"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/dsr"
+  [[row.case]]
+  input = "\u001b[5n"
+  reply = "\u001b[0n"
+  [[row.case]]
+  input = "\u001b[2;3H\u001b[6n"
+  reply = "\u001b[2;3R"
+
+[[row]]
+kind = "CSI"
+code = "CSI Pt ; Pb r"
+name = "DECSTBM"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/decstbm"
+  [[row.case]]
+  input = "1\r\n2\r\n3\r\n4\u001b[2;3r\u001b[3;1H\n"
+  lines = ["1", "3", "", "4"]
+  [[row.case]]
+  input = "\u001b[2;3r"
+  cursor = [0, 0]
+
+[[row]]
+kind = "CSI"
+code = "CSI Pl ; Pr s"
+name = "DECSLRM"
+status = "unsupported"
+notes = "alacritty_terminal has no left/right margins; see docs/adr/0002-decslrm-margins.md. With mode 69 unset `CSI s` stays save-cursor and DECRQM reports mode 69 as not recognised."
+url = "https://ghostty.org/docs/vt/csi/decslrm"
+  [[row.case]]
+  input = "\u001b[?69$p"
+  reply = "\u001b[?69;0$y"
+  [[row.case]]
+  input = "\u001b[3;4H\u001b[s\u001b[1;1H\u001b[u"
+  cursor = [2, 3]
+  [[row.case]]
+  input = "\u001b[?69h\u001b[2;5sabcdefgh"
+  lines = ["abcdefgh"]
+
+[[row]]
+kind = "CSI"
+code = "CSI ? Pm $ p"
+name = "DECRQM (SGR-pixels, 1016)"
+status = "supported"
+notes = "Only mode 1016 is answered by microterm itself; other private modes are answered by the engine (1015, 47 and 1047 are not implemented and report 0)."
+url = "https://ghostty.org/docs/vt/csi/xtshiftescape"
+  [[row.case]]
+  input = "\u001b[?1016$p"
+  reply = "\u001b[?1016;2$y"
+  [[row.case]]
+  input = "\u001b[?1016h\u001b[?1016$p"
+  reply = "\u001b[?1016;1$y"
+  [[row.case]]
+  input = "\u001b[?1016h\u001b[?1016l\u001b[?1016$p"
+  reply = "\u001b[?1016;2$y"
+  [[row.case]]
+  input = "\u001b[?1006;1016h\u001b[?1016$p"
+  reply = "\u001b[?1016;1$y"
+  [[row.case]]
+  input = "\u001b[?1016h\u001b[?1000h\u001b[?1016$p\u001b[?1000$p"
+  reply = "\u001b[?1016;1$y\u001b[?1000;1$y"
+  [[row.case]]
+  input = "\u001b[?1016h\u001bc\u001b[?1016$p"
+  reply = "\u001b[?1016;2$y"
+  [[row.case]]
+  input = "\u001b[?1015$p"
+  reply = "\u001b[?1015;0$y"
+
+[[row]]
+kind = "CSI"
+code = "CSI > Pn q"
+name = "XTVERSION"
+status = "supported"
+notes = "Replies `DCS > | microterm <version> ST`. Not in Ghostty's reference list; Ghostty answers it the same way."
+url = "https://invisible-island.net/xterm/ctlseqs/ctlseqs.html"
+  [[row.case]]
+  input = "\u001b[>q"
+  reply = "\u001bP>|microterm {version}\u001b\\"
+  [[row.case]]
+  input = "\u001b[>0q"
+  reply = "\u001bP>|microterm {version}\u001b\\"
+  [[row.case]]
+  input = "\u001b[>1q"
+  reply = ""
+  [[row.case]]
+  input = "\u001b[>q\u001b[>0q"
+  reply = "\u001bP>|microterm {version}\u001b\\\u001bP>|microterm {version}\u001b\\"
+  [[row.case]]
+  input = "\u001b[q"
+  reply = ""
+
+[[row]]
+kind = "CSI"
+code = "CSI Pn @"
+name = "ICH"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/ich"
+  [[row.case]]
+  input = "abc\u001b[1;2H\u001b[@"
+  lines = ["a bc"]
+
+[[row]]
+kind = "CSI"
+code = "CSI Px `"
+name = "HPA"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/hpa"
+  [[row.case]]
+  input = "\u001b[5`"
+  cursor = [0, 4]
+
+[[row]]
+kind = "CSI"
+code = "CSI > Pn s"
+name = "XTSHIFTESCAPE"
+status = "supported"
+url = "https://ghostty.org/docs/vt/csi/xtshiftescape"
+  [[row.case]]
+  input = "\u001b[>1s"
+  modes_on = ["shift_capture"]
+  [[row.case]]
+  input = "\u001b[>1s\u001b[>0s"
+  modes_off = ["shift_capture"]
+  [[row.case]]
+  input = "\u001b[>s"
+  modes_off = ["shift_capture"]
+  [[row.case]]
+  input = "\u001b[>1s"
+  allow_shift_capture = false
+  modes_off = ["shift_capture"]
+  [[row.case]]
+  input = "\u001b[3;4H\u001b[s\u001b[1;1H\u001b[u"
+  cursor = [2, 3]
+  modes_off = ["shift_capture"]
+
+[[row]]
+kind = "OSC"
+code = "OSC 0"
+name = "Window icon and title"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/0"
+  [[row.case]]
+  input = "\u001b]0;hi\u0007"
+  events = ["title:hi"]
+  [[row.case]]
+  input = "\u001b]0;hi\u001b\\"
+  events = ["title:hi"]
+
+[[row]]
+kind = "OSC"
+code = "OSC 1"
+name = "Window icon"
+status = "supported"
+notes = "Accepted and ignored: there is no icon name to show."
+url = "https://ghostty.org/docs/vt/osc/1"
+  [[row.case]]
+  input = "\u001b]1;hi\u0007"
+  events = []
+
+[[row]]
+kind = "OSC"
+code = "OSC 2"
+name = "Window title"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/2"
+  [[row.case]]
+  input = "\u001b]2;a title\u0007"
+  events = ["title:a title"]
+
+[[row]]
+kind = "OSC"
+code = "OSC 4"
+name = "Palette colors"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/4"
+  [[row.case]]
+  input = "\u001b]4;1;?\u001b\\"
+  reply = "\u001b]4;1;rgb:e0e0/6c6c/7575\u001b\\"
+  [[row.case]]
+  input = "\u001b]4;1;?\u0007"
+  reply = "\u001b]4;1;rgb:e0e0/6c6c/7575\u0007"
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00\u0007\u001b]4;1;?\u0007"
+  reply = "\u001b]4;1;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00;2;rgb:00/ff/00\u0007\u001b]4;1;?;2;?\u0007"
+  reply = "\u001b]4;1;rgb:ffff/0000/0000\u0007\u001b]4;2;rgb:0000/ffff/0000\u0007"
+  [[row.case]]
+  input = "\u001b]4;1;?\u0007"
+  report = "8-bit"
+  reply = "\u001b]4;1;rgb:e0/6c/75\u0007"
+  [[row.case]]
+  input = "\u001b]4;1;?\u0007"
+  report = "none"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]4;1\u0007\u001b]4\u0007\u001b]4;;?\u0007\u001b]4;999;?\u0007\u001b]4;x;?\u0007"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]4;16;?\u0007"
+  reply = "\u001b]4;16;rgb:0000/0000/0000\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 5"
+name = "Special colors"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/5"
+  [[row.case]]
+  input = "\u001b]5;0;rgb:ff/00/00\u0007\u001b]5;0;?\u0007"
+  reply = "\u001b]5;0;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]5;1;#00ff00\u001b\\\u001b]5;1;?\u001b\\"
+  reply = "\u001b]5;1;rgb:0000/ffff/0000\u001b\\"
+  [[row.case]]
+  input = "\u001b]5;4;?\u0007"
+  reply = "\u001b]5;4;rgb:abab/b2b2/bfbf\u0007"
+  [[row.case]]
+  input = "\u001b]5;0;rgb:ff/00/00;1;rgb:00/ff/00\u0007\u001b]5;1;?\u0007"
+  reply = "\u001b]5;1;rgb:0000/ffff/0000\u0007"
+  [[row.case]]
+  input = "\u001b]5;9;?\u0007\u001b]5;0\u0007\u001b]5\u0007"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]5;0;?\u0007"
+  report = "none"
+  reply = ""
+
+[[row]]
+kind = "OSC"
+code = "OSC 7"
+name = "Working directory"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/7"
+  [[row.case]]
+  input = "\u001b]7;file://host/tmp/a%20b\u0007"
+  cwd = "/tmp/a b"
+
+[[row]]
+kind = "OSC"
+code = "OSC 8"
+name = "Hyperlink"
+status = "supported"
+url = "https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda"
+  [[row.case]]
+  input = "\u001b]8;;http://x.test\u0007hi\u001b]8;;\u0007"
+  lines = ["hi"]
+
+[[row]]
+kind = "OSC"
+code = "OSC 9"
+name = "Desktop notification"
+status = "supported"
+notes = "`9;4` progress feeds the pane status; other ConEmu subcommands (9;1\u20139;3, 9;5\u20139;12) are parsed and ignored. Notifications go through the `[notifications]` pipeline when `terminal.osc_notifications` is on."
+url = "https://ghostty.org/docs/vt/osc/9"
+  [[row.case]]
+  input = "\u001b]9;build done\u0007"
+  events = ["notify:build done"]
+  [[row.case]]
+  input = "\u001b]9;build done\u001b\\"
+  events = ["notify:build done"]
+  [[row.case]]
+  input = "\u001b]9;4;1;40\u0007"
+  events = ["progress:Normal:40"]
+  [[row.case]]
+  input = "\u001b]9;4;1;400\u0007"
+  events = ["progress:Normal:100"]
+  [[row.case]]
+  input = "\u001b]9;4;2;10\u0007"
+  events = ["progress:Error:10"]
+  [[row.case]]
+  input = "\u001b]9;4;3\u0007"
+  events = ["progress:Indeterminate"]
+  [[row.case]]
+  input = "\u001b]9;4;4;55\u0007"
+  events = ["progress:Paused:55"]
+  [[row.case]]
+  input = "\u001b]9;4;1;40\u0007\u001b]9;4;0\u0007"
+  events = ["progress:Normal:40", "progress:Remove"]
+  [[row.case]]
+  input = "\u001b]9;4;3;77\u0007"
+  events = ["progress:Indeterminate"]
+  [[row.case]]
+  input = "\u001b]9;4;9;1\u0007\u001b]9;4\u0007\u001b]9;4;x\u0007"
+  events = []
+  [[row.case]]
+  input = "\u001b]9;1;100\u0007\u001b]9;2;msg\u0007\u001b]9;3;t\u0007\u001b]9;5\u0007\u001b]9;6;x\u0007\u001b]9;7;x\u0007\u001b]9;8;x\u0007\u001b]9;9;/tmp\u0007\u001b]9;10\u0007\u001b]9;11;x\u0007\u001b]9;12\u0007"
+  events = []
+  [[row.case]]
+  input = "\u001b]9;4 files built\u0007"
+  events = ["notify:4 files built"]
+  [[row.case]]
+  input = "\u001b]9;13;x\u0007"
+  events = ["notify:13;x"]
+  [[row.case]]
+  input = "\u001b]9;build done\u0007"
+  osc_notifications = false
+  events = []
+  [[row.case]]
+  input = "\u001b]9;4;1;40\u0007"
+  osc_notifications = false
+  events = ["progress:Normal:40"]
+
+[[row]]
+kind = "OSC"
+code = "OSC 10"
+name = "Foreground color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]10;?\u001b\\"
+  reply = "\u001b]10;rgb:abab/b2b2/bfbf\u001b\\"
+  [[row.case]]
+  input = "\u001b]10;rgb:ff/00/00\u0007\u001b]10;?\u0007"
+  reply = "\u001b]10;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]10;#00ff00\u0007\u001b]110\u0007\u001b]10;?\u0007"
+  reply = "\u001b]10;rgb:abab/b2b2/bfbf\u0007"
+  [[row.case]]
+  input = "\u001b]10;?\u0007"
+  report = "8-bit"
+  reply = "\u001b]10;rgb:ab/b2/bf\u0007"
+  [[row.case]]
+  input = "\u001b]10;?\u0007"
+  report = "none"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]10;\u0007\u001b]10\u0007"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]10;?;?\u0007"
+  reply = "\u001b]10;rgb:abab/b2b2/bfbf\u0007\u001b]11;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 11"
+name = "Background color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]11;?\u001b\\"
+  reply = "\u001b]11;rgb:2828/2c2c/3434\u001b\\"
+  [[row.case]]
+  input = "\u001b]11;rgb:ff/00/00\u0007\u001b]11;?\u0007"
+  reply = "\u001b]11;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]11;#00ff00\u0007\u001b]111\u0007\u001b]11;?\u0007"
+  reply = "\u001b]11;rgb:2828/2c2c/3434\u0007"
+  [[row.case]]
+  input = "\u001b]11;?\u0007"
+  report = "8-bit"
+  reply = "\u001b]11;rgb:28/2c/34\u0007"
+  [[row.case]]
+  input = "\u001b]11;?\u0007"
+  report = "none"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]11;\u0007\u001b]11\u0007"
+  reply = ""
+
+[[row]]
+kind = "OSC"
+code = "OSC 12"
+name = "Cursor color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]12;?\u001b\\"
+  reply = "\u001b]12;rgb:5252/8b8b/ffff\u001b\\"
+  [[row.case]]
+  input = "\u001b]12;rgb:ff/00/00\u0007\u001b]12;?\u0007"
+  reply = "\u001b]12;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]12;#00ff00\u0007\u001b]112\u0007\u001b]12;?\u0007"
+  reply = "\u001b]12;rgb:5252/8b8b/ffff\u0007"
+  [[row.case]]
+  input = "\u001b]12;?\u0007"
+  report = "8-bit"
+  reply = "\u001b]12;rgb:52/8b/ff\u0007"
+  [[row.case]]
+  input = "\u001b]12;?\u0007"
+  report = "none"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]12;\u0007\u001b]12\u0007"
+  reply = ""
+
+[[row]]
+kind = "OSC"
+code = "OSC 13"
+name = "Pointer foreground color"
+status = "supported"
+notes = "Stored and answered; no visual effect."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]13;?\u001b\\"
+  reply = "\u001b]13;rgb:abab/b2b2/bfbf\u001b\\"
+  [[row.case]]
+  input = "\u001b]13;rgb:ff/00/00\u0007\u001b]13;?\u0007"
+  reply = "\u001b]13;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]13;rgb:ff/00/00\u0007\u001b]113\u0007\u001b]13;?\u0007"
+  reply = "\u001b]13;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 14"
+name = "Pointer background color"
+status = "supported"
+notes = "Stored and answered; no visual effect."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]14;?\u001b\\"
+  reply = "\u001b]14;rgb:2828/2c2c/3434\u001b\\"
+  [[row.case]]
+  input = "\u001b]14;rgb:ff/00/00\u0007\u001b]14;?\u0007"
+  reply = "\u001b]14;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]14;rgb:ff/00/00\u0007\u001b]114\u0007\u001b]14;?\u0007"
+  reply = "\u001b]14;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 15"
+name = "Tektronix foreground color"
+status = "supported"
+notes = "Stored and answered; no visual effect."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]15;?\u001b\\"
+  reply = "\u001b]15;rgb:abab/b2b2/bfbf\u001b\\"
+  [[row.case]]
+  input = "\u001b]15;rgb:ff/00/00\u0007\u001b]15;?\u0007"
+  reply = "\u001b]15;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]15;rgb:ff/00/00\u0007\u001b]115\u0007\u001b]15;?\u0007"
+  reply = "\u001b]15;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 16"
+name = "Tektronix background color"
+status = "supported"
+notes = "Stored and answered; no visual effect."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]16;?\u001b\\"
+  reply = "\u001b]16;rgb:2828/2c2c/3434\u001b\\"
+  [[row.case]]
+  input = "\u001b]16;rgb:ff/00/00\u0007\u001b]16;?\u0007"
+  reply = "\u001b]16;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]16;rgb:ff/00/00\u0007\u001b]116\u0007\u001b]16;?\u0007"
+  reply = "\u001b]16;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 17"
+name = "Highlight background color"
+status = "supported"
+notes = "Overrides the selection background for this pane."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]17;?\u001b\\"
+  reply = "\u001b]17;rgb:abab/b2b2/bfbf\u001b\\"
+  [[row.case]]
+  input = "\u001b]17;rgb:ff/00/00\u0007\u001b]17;?\u0007"
+  reply = "\u001b]17;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]17;rgb:ff/00/00\u0007\u001b]117\u0007\u001b]17;?\u0007"
+  reply = "\u001b]17;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 18"
+name = "Tektronix cursor color"
+status = "supported"
+notes = "Stored and answered; no visual effect."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]18;?\u001b\\"
+  reply = "\u001b]18;rgb:5252/8b8b/ffff\u001b\\"
+  [[row.case]]
+  input = "\u001b]18;rgb:ff/00/00\u0007\u001b]18;?\u0007"
+  reply = "\u001b]18;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]18;rgb:ff/00/00\u0007\u001b]118\u0007\u001b]18;?\u0007"
+  reply = "\u001b]18;rgb:5252/8b8b/ffff\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 19"
+name = "Highlight foreground color"
+status = "supported"
+notes = "Overrides the selection foreground for this pane."
+url = "https://ghostty.org/docs/vt/osc/1x"
+  [[row.case]]
+  input = "\u001b]19;?\u001b\\"
+  reply = "\u001b]19;rgb:2828/2c2c/3434\u001b\\"
+  [[row.case]]
+  input = "\u001b]19;rgb:ff/00/00\u0007\u001b]19;?\u0007"
+  reply = "\u001b]19;rgb:ffff/0000/0000\u0007"
+  [[row.case]]
+  input = "\u001b]19;rgb:ff/00/00\u0007\u001b]119\u0007\u001b]19;?\u0007"
+  reply = "\u001b]19;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 21"
+name = "Kitty color protocol"
+status = "supported"
+notes = "Keys without a visual meaning (`cursor_text`, `visual_bell`, `transparent_background_colorN`) are stored and reported only. Replies use the 8-bit `rgb:rr/gg/bb` form."
+url = "https://sw.kovidgoyal.net/kitty/color-stack/"
+  [[row.case]]
+  input = "\u001b]21;foreground=?\u0007"
+  reply = "\u001b]21;foreground=rgb:ab/b2/bf\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=?;cursor=?\u001b\\"
+  reply = "\u001b]21;foreground=rgb:ab/b2/bf;cursor=rgb:52/8b/ff\u001b\\"
+  [[row.case]]
+  input = "\u001b]21;foreground=rgb:ff/00/00;foreground=?\u0007"
+  reply = "\u001b]21;foreground=rgb:ff/00/00\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=red\u0007\u001b]21;foreground=?\u0007"
+  reply = "\u001b]21;foreground=rgb:ff/00/00\u0007"
+  [[row.case]]
+  input = "\u001b]21;background=Light Goldenrod\u0007\u001b]21;background=?\u0007"
+  reply = "\u001b]21;background=rgb:ee/dd/82\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=GREY50\u0007\u001b]10;?\u0007"
+  reply = "\u001b]10;rgb:7f7f/7f7f/7f7f\u0007"
+  [[row.case]]
+  input = "\u001b]21;cursor=gold;cursor=?\u0007"
+  reply = "\u001b]21;cursor=rgb:ff/d7/00\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=notacolour\u0007\u001b]21;foreground=?\u0007"
+  reply = "\u001b]21;foreground=rgb:ab/b2/bf\u0007"
+  [[row.case]]
+  input = "\u001b]10;rgb:00/ff/00\u0007\u001b]21;foreground=?\u0007"
+  reply = "\u001b]21;foreground=rgb:00/ff/00\u0007"
+  [[row.case]]
+  input = "\u001b]21;background=#0000ff\u0007\u001b]11;?\u0007"
+  reply = "\u001b]11;rgb:0000/0000/ffff\u0007"
+  [[row.case]]
+  input = "\u001b]21;1=rgb:11/22/33\u0007\u001b]4;1;?\u0007"
+  reply = "\u001b]4;1;rgb:1111/2222/3333\u0007"
+  [[row.case]]
+  input = "\u001b]4;2;rgb:11/22/33\u0007\u001b]21;2=?\u0007"
+  reply = "\u001b]21;2=rgb:11/22/33\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=rgb:ff/00/00;foreground\u0007\u001b]21;foreground=?\u0007"
+  reply = "\u001b]21;foreground=rgb:ab/b2/bf\u0007"
+  [[row.case]]
+  input = "\u001b]21;cursor_text=?\u0007"
+  reply = "\u001b]21;cursor_text=\u0007"
+  [[row.case]]
+  input = "\u001b]21;cursor_text=#fff;cursor_text=?\u0007"
+  reply = "\u001b]21;cursor_text=rgb:f0/f0/f0\u0007"
+  [[row.case]]
+  input = "\u001b]21;selection_background=rgb:11/22/33\u0007\u001b]17;?\u0007"
+  reply = "\u001b]17;rgb:1111/2222/3333\u0007"
+  [[row.case]]
+  input = "\u001b]19;rgb:44/55/66\u0007\u001b]21;selection_foreground=?\u0007"
+  reply = "\u001b]21;selection_foreground=rgb:44/55/66\u0007"
+  [[row.case]]
+  input = "\u001b]21;visual_bell=#abc;visual_bell=?\u0007"
+  reply = "\u001b]21;visual_bell=rgb:a0/b0/c0\u0007"
+  [[row.case]]
+  input = "\u001b]21;nonsense=?\u0007"
+  reply = "\u001b]21;unknown=bm9uc2Vuc2U\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=?;nonsense=?;cursor=?\u0007"
+  reply = "\u001b]21;foreground=rgb:ab/b2/bf;unknown=bm9uc2Vuc2U;cursor=rgb:52/8b/ff\u0007"
+  [[row.case]]
+  input = "\u001b]21;foreground=?\u0007"
+  report = "none"
+  reply = ""
+  [[row.case]]
+  input = "\u001b]21\u0007\u001b]21;\u0007"
+  reply = ""
+
+[[row]]
+kind = "OSC"
+code = "OSC 22"
+name = "Pointer shape"
+status = "supported"
+notes = "Names follow the X11 cursor-name list used by xterm and Kitty; a name with no GPUI equivalent shows the arrow."
+url = "https://ghostty.org/docs/vt/osc/22"
+  [[row.case]]
+  input = "\u001b]22;pointer\u0007"
+  pointer = "pointer"
+  [[row.case]]
+  input = "\u001b]22;pointer\u001b\\"
+  pointer = "pointer"
+  [[row.case]]
+  input = "\u001b]22;pointer\u0007\u001b]22;\u0007"
+  pointer = ""
+  [[row.case]]
+  input = "\u001b]22;text,pointer\u0007"
+  pointer = "text"
+  [[row.case]]
+  input = "\u001b]22;wait\u0001x\u0007"
+  pointer = "waitx"
+
+[[row]]
+kind = "OSC"
+code = "OSC 52"
+name = "Clipboard data"
+status = "supported"
+notes = "Write is allowed (100 KiB cap) and read is off unless `clipboard.osc52 = \"read-write\"` (SPEC \u00a76.3). An empty payload clears the clipboard."
+url = "https://ghostty.org/docs/vt/osc/52"
+  [[row.case]]
+  input = "\u001b]52;c;aGk=\u0007"
+  events = ["clipboard:hi"]
+  [[row.case]]
+  input = "\u001b]52;c;\u0007"
+  events = ["clipboard:"]
+  [[row.case]]
+  input = "\u001b]52;c;?\u0007"
+  events = []
+
+[[row]]
+kind = "OSC"
+code = "OSC 104"
+name = "Reset palette colors"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/104"
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00\u0007\u001b]104;1\u0007\u001b]4;1;?\u0007"
+  reply = "\u001b]4;1;rgb:e0e0/6c6c/7575\u0007"
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00;2;rgb:00/ff/00\u0007\u001b]104\u0007\u001b]4;1;?;2;?\u0007"
+  reply = "\u001b]4;1;rgb:e0e0/6c6c/7575\u0007\u001b]4;2;rgb:9898/c3c3/7979\u0007"
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00;2;rgb:00/ff/00\u0007\u001b]104;1;2\u0007\u001b]4;1;?;2;?\u0007"
+  reply = "\u001b]4;1;rgb:e0e0/6c6c/7575\u0007\u001b]4;2;rgb:9898/c3c3/7979\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 105"
+name = "Reset special colors"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/105"
+  [[row.case]]
+  input = "\u001b]5;0;rgb:ff/00/00\u0007\u001b]105;0\u0007\u001b]5;0;?\u0007"
+  reply = "\u001b]5;0;rgb:abab/b2b2/bfbf\u0007"
+  [[row.case]]
+  input = "\u001b]5;0;rgb:ff/00/00;1;rgb:00/ff/00\u0007\u001b]105\u0007\u001b]5;0;?;1;?\u0007"
+  reply = "\u001b]5;0;rgb:abab/b2b2/bfbf\u0007\u001b]5;1;rgb:abab/b2b2/bfbf\u0007"
+  [[row.case]]
+  input = "\u001b]105;9\u0007"
+  reply = ""
+
+[[row]]
+kind = "OSC"
+code = "OSC 110"
+name = "Reset foreground color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]10;rgb:ff/00/00\u0007\u001b]110\u0007\u001b]10;?\u0007"
+  reply = "\u001b]10;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 111"
+name = "Reset background color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]11;rgb:ff/00/00\u0007\u001b]111\u0007\u001b]11;?\u0007"
+  reply = "\u001b]11;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 112"
+name = "Reset cursor color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]12;rgb:ff/00/00\u0007\u001b]112\u0007\u001b]12;?\u0007"
+  reply = "\u001b]12;rgb:5252/8b8b/ffff\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 113"
+name = "Reset pointer foreground color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]13;rgb:ff/00/00\u0007\u001b]113\u0007\u001b]13;?\u0007"
+  reply = "\u001b]13;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 114"
+name = "Reset pointer background color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]14;rgb:ff/00/00\u0007\u001b]114\u0007\u001b]14;?\u0007"
+  reply = "\u001b]14;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 115"
+name = "Reset Tektronix foreground color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]15;rgb:ff/00/00\u0007\u001b]115\u0007\u001b]15;?\u0007"
+  reply = "\u001b]15;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 116"
+name = "Reset Tektronix background color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]16;rgb:ff/00/00\u0007\u001b]116\u0007\u001b]16;?\u0007"
+  reply = "\u001b]16;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 117"
+name = "Reset highlight background color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]17;rgb:ff/00/00\u0007\u001b]117\u0007\u001b]17;?\u0007"
+  reply = "\u001b]17;rgb:abab/b2b2/bfbf\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 118"
+name = "Reset Tektronix cursor color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]18;rgb:ff/00/00\u0007\u001b]118\u0007\u001b]18;?\u0007"
+  reply = "\u001b]18;rgb:5252/8b8b/ffff\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 119"
+name = "Reset highlight foreground color"
+status = "supported"
+url = "https://ghostty.org/docs/vt/osc/11x"
+  [[row.case]]
+  input = "\u001b]19;rgb:ff/00/00\u0007\u001b]119\u0007\u001b]19;?\u0007"
+  reply = "\u001b]19;rgb:2828/2c2c/3434\u0007"
+
+[[row]]
+kind = "OSC"
+code = "OSC 4 / 104 multi"
+name = "Several colour specs in one sequence"
+status = "supported"
+notes = "Also covered by the OSC 4 and OSC 104 rows."
+url = "https://ghostty.org/docs/vt/osc/4"
+  [[row.case]]
+  input = "\u001b]4;1;rgb:ff/00/00;2;rgb:00/ff/00;3;rgb:00/00/ff\u0007\u001b]4;3;?\u0007"
+  reply = "\u001b]4;3;rgb:0000/0000/ffff\u0007"

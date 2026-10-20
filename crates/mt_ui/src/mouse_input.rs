@@ -171,12 +171,13 @@ impl AppWindow {
         ev
     }
 
-    /// Mouse reporting is on for the pane and Shift is not held to bypass it.
+    /// Mouse reporting is on for the pane and Shift is not held to bypass it. A program that
+    /// turned on XTSHIFTESCAPE (and `terminal.allow_shift_capture`) gets Shift-modified events.
     fn reporting(&self, mods: &Modifiers) -> bool {
-        !mods.shift
-            && self
-                .live()
-                .is_some_and(|s| s.snapshot.modes.mouse_tracking != mt_term::MouseTracking::None)
+        self.live().is_some_and(|s| {
+            s.snapshot.modes.mouse_tracking != mt_term::MouseTracking::None
+                && (!mods.shift || s.snapshot.vt.shift_capture)
+        })
     }
 
     fn link_modifier(&self, mods: &Modifiers) -> bool {
@@ -189,6 +190,15 @@ impl AppWindow {
         }
         if self.mouse.hover.is_some() && self.link_modifier(&self.mouse.mods) {
             return CursorStyle::PointingHand;
+        }
+        // A shape the program asked for with OSC 22 beats the default, also while it has
+        // mouse reporting on.
+        if let Some(style) = self
+            .live()
+            .and_then(|s| s.snapshot.vt.pointer_shape.as_deref())
+            .map(|n| crate::pointer_shape::cursor_style(n).unwrap_or(CursorStyle::Arrow))
+        {
+            return style;
         }
         if self.reporting(&self.mouse.mods) {
             return CursorStyle::Arrow;

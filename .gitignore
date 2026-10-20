@@ -1,6 +1,8 @@
 internal-docs/
+__pycache__
 .idea/
 .claude/
 target/
 node_modules/
 .tools/
+vt-probe-out/

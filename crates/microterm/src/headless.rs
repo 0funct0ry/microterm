@@ -38,6 +38,9 @@ struct Host {
     status_max_len: usize,
     /// `[notifications].badge`: raise the tab badge on `pane notify`.
     badge: bool,
+    /// `[terminal].osc_notifications` and the rest of the VT settings for new panes.
+    osc_notifications: bool,
+    vt: mt_term::VtConfig,
     runtime: PaneRuntime,
 }
 
@@ -93,6 +96,8 @@ pub fn run(config: Option<PathBuf>) -> i32 {
         capture_max_bytes: cfg.ctl.capture_max_bytes.min(usize::MAX as u64) as usize,
         status_max_len: cfg.ctl.status_max_len as usize,
         badge: cfg.notifications.badge,
+        osc_notifications: cfg.terminal.osc_notifications,
+        vt: mt_ui::app::vt_config(&cfg),
         runtime: PaneRuntime::default(),
     };
     host.mux
@@ -134,7 +139,29 @@ impl Host {
                         self.mux.notify_command_finished(pane, code)
                     }
                     TermEvent::ChildExit(status) => exited.push((pane, status)),
-                    _ => {}
+                    TermEvent::Progress { state, value } => {
+                        ipc_ops::osc_progress(&mut self.mux, pane, state, value, mt_term::now_ms());
+                    }
+                    TermEvent::Notify(text) => {
+                        if self.osc_notifications {
+                            let d = ipc_ops::osc_notify(
+                                &mut self.mux,
+                                pane,
+                                &text,
+                                self.status_max_len,
+                                mt_term::now_ms(),
+                            );
+                            // No window: badge only, like `pane notify`.
+                            if let (Some(d), true) = (d, self.badge) {
+                                self.mux.raise_attention(d.pane, d.level);
+                            }
+                        }
+                    }
+                    TermEvent::Bell
+                    | TermEvent::ResetTitle
+                    | TermEvent::ClipboardStore(..)
+                    | TermEvent::ClipboardLoad(..)
+                    | TermEvent::CursorBlinkingChange => {}
                 }
             }
         }
@@ -263,6 +290,7 @@ impl Host {
             cols: size.0,
             rows: size.1,
             scrollback: self.scrollback,
+            vt: self.vt,
             ..Default::default()
         };
         let term = Terminal::spawn(opts, || {})

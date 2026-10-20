@@ -47,6 +47,8 @@ pub enum Mark {
     Cwd(String),
     /// `ESC c` (RIS): the screen and scrollback are gone, and with them every anchor.
     Reset,
+    /// A sequence the engine does not model (colours, OSC 9, OSC 22, XTSHIFTESCAPE): see `vt.rs`.
+    Vt(crate::vt::VtSeq),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +57,14 @@ enum SniffState {
     Esc,
     Osc,
     OscEsc,
+    /// After `ESC [`.
+    Csi,
+    /// After `ESC [ >`, collecting parameters.
+    CsiGt,
+    /// After `ESC [ ?`, collecting parameters (DECSET/DECRST/DECRQM).
+    CsiQ,
+    /// After `ESC [ ? Pm $`.
+    CsiQDollar,
 }
 
 /// Finds OSC 133 and OSC 7 sequences across arbitrary chunk boundaries.
@@ -91,6 +101,7 @@ impl OscSniffer {
                 }
                 SniffState::Esc => match b {
                     b']' => self.begin(),
+                    b'[' => self.state = SniffState::Csi,
                     b'c' => {
                         out.push((i + 1, Mark::Reset));
                         self.state = SniffState::Ground;
@@ -98,12 +109,68 @@ impl OscSniffer {
                     0x1b => {}
                     _ => self.state = SniffState::Ground,
                 },
+                SniffState::Csi => match b {
+                    b'>' => {
+                        self.buf.clear();
+                        self.state = SniffState::CsiGt;
+                    }
+                    b'?' => {
+                        self.buf.clear();
+                        self.state = SniffState::CsiQ;
+                    }
+                    0x1b => self.state = SniffState::Esc,
+                    _ => self.state = SniffState::Ground,
+                },
+                SniffState::CsiGt => match b {
+                    b'0'..=b'9' | b';' if self.buf.len() < 8 => self.buf.push(b),
+                    b's' => {
+                        self.state = SniffState::Ground;
+                        let n = std::str::from_utf8(&self.buf)
+                            .ok()
+                            .and_then(|p| p.split(';').next().unwrap_or("").parse::<u8>().ok())
+                            .or(if self.buf.is_empty() { Some(0) } else { None });
+                        if let Some(n) = n {
+                            out.push((i + 1, Mark::Vt(crate::vt::VtSeq::ShiftEscape(n))));
+                        }
+                    }
+                    b'q' => {
+                        self.state = SniffState::Ground;
+                        // XTVERSION: `CSI > q` or `CSI > 0 q`.
+                        if self.buf.is_empty() || self.buf == b"0" {
+                            out.push((i + 1, Mark::Vt(crate::vt::VtSeq::Xtversion)));
+                        }
+                    }
+                    0x1b => self.state = SniffState::Esc,
+                    _ => self.state = SniffState::Ground,
+                },
+                SniffState::CsiQ => match b {
+                    b'0'..=b'9' | b';' if self.buf.len() < 64 => self.buf.push(b),
+                    b'h' | b'l' => {
+                        self.state = SniffState::Ground;
+                        if self.buf.split(|c| *c == b';').any(|p| p == b"1016") {
+                            out.push((i + 1, Mark::Vt(crate::vt::VtSeq::PixelMouse(b == b'h'))));
+                        }
+                    }
+                    b'$' => self.state = SniffState::CsiQDollar,
+                    0x1b => self.state = SniffState::Esc,
+                    _ => self.state = SniffState::Ground,
+                },
+                SniffState::CsiQDollar => match b {
+                    b'p' => {
+                        self.state = SniffState::Ground;
+                        if self.buf == b"1016" {
+                            out.push((i + 1, Mark::Vt(crate::vt::VtSeq::QueryPixelMouse)));
+                        }
+                    }
+                    0x1b => self.state = SniffState::Esc,
+                    _ => self.state = SniffState::Ground,
+                },
                 SniffState::Osc => match b {
-                    0x07 => self.finish(i + 1, &mut out),
+                    0x07 => self.finish(i + 1, false, &mut out),
                     0x1b => self.state = SniffState::OscEsc,
                     0x18 | 0x1a => self.state = SniffState::Ground,
                     _ => {
-                        if self.buf.len() < MAX_PAYLOAD {
+                        if self.buf.len() < crate::vt::MAX_OSC_PAYLOAD {
                             self.buf.push(b);
                         } else {
                             self.overflow = true;
@@ -111,7 +178,7 @@ impl OscSniffer {
                     }
                 },
                 SniffState::OscEsc => match b {
-                    b'\\' => self.finish(i + 1, &mut out),
+                    b'\\' => self.finish(i + 1, true, &mut out),
                     b']' => self.begin(),
                     0x1b => {}
                     _ => self.state = SniffState::Ground,
@@ -127,10 +194,10 @@ impl OscSniffer {
         self.overflow = false;
     }
 
-    fn finish(&mut self, end: usize, out: &mut Vec<(usize, Mark)>) {
+    fn finish(&mut self, end: usize, st: bool, out: &mut Vec<(usize, Mark)>) {
         self.state = SniffState::Ground;
         if !self.overflow {
-            if let Some(m) = parse_payload(&self.buf) {
+            if let Some(m) = parse_payload(&self.buf, st) {
                 out.push((end, m));
             }
         }
@@ -138,7 +205,20 @@ impl OscSniffer {
     }
 }
 
-fn parse_payload(p: &[u8]) -> Option<Mark> {
+fn parse_payload(p: &[u8], st: bool) -> Option<Mark> {
+    // Marks carry short payloads; anything longer is not one of ours.
+    if p.len() > MAX_PAYLOAD && (p.starts_with(b"133;") || p.starts_with(b"7;")) {
+        return None;
+    }
+    if !p.starts_with(b"133;") && !p.starts_with(b"7;") {
+        let end = p.iter().position(|b| *b == b';').unwrap_or(p.len());
+        let code = std::str::from_utf8(&p[..end]).ok()?.parse::<u16>().ok()?;
+        if !crate::vt::wants_osc(code) {
+            return None;
+        }
+        let payload = String::from_utf8_lossy(p.get(end + 1..).unwrap_or(&[])).into_owned();
+        return Some(Mark::Vt(crate::vt::VtSeq::Osc { code, payload, st }));
+    }
     if let Some(rest) = p.strip_prefix(b"133;") {
         let s = std::str::from_utf8(rest).ok()?;
         let mut parts = s.split(';');
@@ -435,6 +515,9 @@ impl CommandTracker {
             self.cwd = Some(p);
             return None;
         }
+        if matches!(mark, Mark::Vt(_)) {
+            return None;
+        }
         if mark == Mark::Reset {
             self.cmds.clear();
             self.prompts.clear();
@@ -447,7 +530,7 @@ impl CommandTracker {
         let restored = matches!(mark, Mark::Restored(_));
         let at = self.anchor(term);
         match mark {
-            Mark::Cwd(_) | Mark::Reset => {}
+            Mark::Cwd(_) | Mark::Reset | Mark::Vt(_) => {}
             Mark::PromptStart { secondary: true } => {}
             Mark::PromptStart { .. } => {
                 if self.prompts.back() != Some(&at.id) {
@@ -652,9 +735,10 @@ pub(crate) fn region_text<T>(term: &Term<T>, from: (usize, usize), to: (usize, u
 
 /// Feeds `bytes` to `parse`, stopping after every mark (to apply it) and every [`SUB_CHUNK`]
 /// bytes (to trim history). `on_finished` runs for each `D`.
-pub(crate) fn drive<T>(
+pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
     osc: &mut OscSniffer,
     tracker: &mut CommandTracker,
+    shared: &crate::events::Shared,
     term: &mut Term<T>,
     bytes: &[u8],
     mut parse: impl FnMut(&mut Term<T>, &[u8]),
@@ -670,8 +754,15 @@ pub(crate) fn drive<T>(
             .min(mark_end.unwrap_or(usize::MAX));
         parse(term, &bytes[start..end]);
         tracker.after_segment(term);
+        crate::vt::after_segment(term, shared);
         if mark_end == Some(end) {
-            if let Some(done) = tracker.apply(term, marks[mi].1.clone()) {
+            let mark = marks[mi].1.clone();
+            match &mark {
+                Mark::Vt(seq) => crate::vt::apply(term, shared, seq.clone()),
+                Mark::Reset => crate::vt::reset(term, shared),
+                _ => {}
+            }
+            if let Some(done) = tracker.apply(term, mark) {
                 on_finished(done);
             }
             mi += 1;

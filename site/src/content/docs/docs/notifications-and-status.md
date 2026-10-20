@@ -87,6 +87,32 @@ process that can reach the socket can send one. `ctl` is remote control of every
 access control is the private socket directory and the same-user check.
 :::
 
+## From a program (OSC 9 and OSC 9;4)
+
+A program does not need `microterm` to report progress or raise a notification: it can print
+escape sequences, which also work over SSH.
+
+```sh
+printf '\e]9;4;1;40\e\\'        # progress 40 %: the tab shows the progress line
+printf '\e]9;4;3\e\\'           # indeterminate
+printf '\e]9;4;0\e\\'           # remove
+printf '\e]9;build done\e\\'    # notification
+```
+
+`9;4;<state>;<progress>`: state 0 removes, 1 is normal, 2 error, 3 indeterminate, 4 paused;
+progress is clamped to 0–100 and ignored for states 0 and 3. Normal and indeterminate show as
+`working`, error as `error`, paused as `waiting`, with the progress value on the tab's progress
+line and in `ctl pane list --json`. A status set with `ctl pane status` wins while it is live:
+OSC progress neither replaces nor clears it. Progress also ends on a terminal reset and when the
+pane exits.
+
+Other ConEmu subcommands (`9;1` to `9;3`, `9;5` to `9;12`) are parsed and ignored. Any other
+`OSC 9` text is a notification at level `info`. It goes through the same pipeline as `pane
+notify` (badge, toast, OS notification per `[notifications]`), is sanitised, cut to
+`ctl.status_max_len` and limited to 5 per second per pane, and appears in `ctl events` as
+`pane.notification` with `"source": "osc9"` (`"ctl"` for `pane notify`). The text comes from
+whatever runs in the pane, so set `terminal.osc_notifications = false` to ignore it.
+
 ## Events
 
 ```sh

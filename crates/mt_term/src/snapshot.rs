@@ -205,6 +205,8 @@ pub struct RenderSnapshot {
     pub modes: Modes,
     pub damage: Damage,
     pub selection: Option<crate::selection::SelectionSpan>,
+    /// Overrides set by OSC 5/17/19/21/22 and XTSHIFTESCAPE.
+    pub vt: crate::vt::VtView,
 }
 
 impl RenderSnapshot {
@@ -392,5 +394,6 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
         modes: Modes::from_engine(mode),
         damage,
         selection: crate::selection::span(term),
+        vt: Default::default(),
     }
 }

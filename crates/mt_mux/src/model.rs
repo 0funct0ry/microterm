@@ -7,7 +7,7 @@ use mt_proto::{NotifyLevel, StatusState};
 use crate::domain::{
     Domain, DomainId, DomainKind, DomainState, LocalDomain, SshDomain, LOCAL_DOMAIN_ID,
 };
-use crate::status::{sanitize, NotifyLimiter, Status};
+use crate::status::{sanitize, NotifyLimiter, Status, StatusSource};
 
 pub type Id = u64;
 
@@ -108,6 +108,24 @@ pub struct Workspace {
     pub name: String,
 }
 
+/// Where a notification came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifySource {
+    /// `microterm ctl pane notify`.
+    Ctl,
+    /// A program wrote OSC 9.
+    Osc9,
+}
+
+impl NotifySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ctl => "ctl",
+            Self::Osc9 => "osc9",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxEvent {
     PaneAdded {
@@ -136,6 +154,7 @@ pub enum MuxEvent {
         level: NotifyLevel,
         title: Option<String>,
         message: String,
+        source: NotifySource,
     },
     /// The pane's process ended (`None` status: killed by a signal).
     PaneExited {
@@ -773,6 +792,7 @@ impl Mux {
         now_ms: u64,
     ) -> bool {
         let new = Status {
+            source: StatusSource::Ctl,
             state,
             text: sanitize(text, max_len),
             progress: progress.map(|p| p.min(100)),
@@ -793,6 +813,52 @@ impl Mux {
             self.emit(MuxEvent::StatusChanged { pane });
         }
         true
+    }
+
+    /// Applies an OSC 9;4 progress report as the pane's status. A live `ctl pane status` wins:
+    /// it is left alone and `false` is returned. `value` `None` means no progress bar.
+    pub fn set_osc_progress(
+        &mut self,
+        pane: Id,
+        state: StatusState,
+        value: Option<u8>,
+        now_ms: u64,
+    ) -> bool {
+        let Some(p) = self.pane_mut(pane) else {
+            return false;
+        };
+        if p.status
+            .as_ref()
+            .is_some_and(|s| s.source == StatusSource::Ctl)
+        {
+            return false;
+        }
+        let new = Status {
+            source: StatusSource::Osc,
+            state,
+            text: String::new(),
+            progress: value.map(|v| v.min(100)),
+            updated_at_ms: now_ms,
+            ttl_deadline_ms: None,
+        };
+        let changed = p
+            .status
+            .as_ref()
+            .is_none_or(|old| (old.state, old.progress) != (new.state, new.progress));
+        p.status = Some(new);
+        if changed {
+            self.emit(MuxEvent::StatusChanged { pane });
+        }
+        true
+    }
+
+    /// Ends an OSC 9;4 progress report. A status set through `ctl` is never cleared by it.
+    pub fn clear_osc_progress(&mut self, pane: Id) -> bool {
+        let osc = self
+            .pane(pane)
+            .and_then(|p| p.status.as_ref())
+            .is_some_and(|s| s.source == StatusSource::Osc);
+        osc && self.clear_pane_status(pane)
     }
 
     /// Clears the status. Returns whether there was one.
@@ -865,6 +931,7 @@ impl Mux {
         level: NotifyLevel,
         title: Option<String>,
         message: String,
+        source: NotifySource,
         now_ms: u64,
     ) -> bool {
         if !self.limiter.allow(pane, now_ms) {
@@ -875,6 +942,7 @@ impl Mux {
             level,
             title,
             message,
+            source,
         });
         true
     }
@@ -1397,7 +1465,16 @@ mod tests {
         let log = recorded(&mut mux);
         let p = first_pane(&mux);
         let sent = (0..8)
-            .filter(|_| mux.notify_pane(p, NotifyLevel::Info, None, "hi".into(), 100))
+            .filter(|_| {
+                mux.notify_pane(
+                    p,
+                    NotifyLevel::Info,
+                    None,
+                    "hi".into(),
+                    NotifySource::Ctl,
+                    100,
+                )
+            })
             .count();
         assert_eq!(sent, 5);
         assert_eq!(mux.notifications_dropped(p), 3);
