@@ -34,7 +34,7 @@ pub struct Pane {
     pub attention: Option<NotifyLevel>,
 }
 
-/// `Split` exists in the type from day one (SPEC D4) but is unreachable until M11.
+/// Tree operations live in `tree.rs`; `Axis::Horizontal` puts `a` left of `b` (SPEC §17.1).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PaneTree {
     Leaf(Pane),
@@ -46,8 +46,22 @@ pub enum PaneTree {
     },
 }
 
+impl Pane {
+    pub fn new(id: Id, domain_id: DomainId, cwd: Option<PathBuf>) -> Self {
+        Pane {
+            id,
+            domain_id,
+            remote_pane_id: None,
+            title: String::new(),
+            cwd,
+            status: None,
+            attention: None,
+        }
+    }
+}
+
 impl PaneTree {
-    /// The focused pane. With only leaves in v1 this is the single pane.
+    /// The first leaf in layout order. With only leaves in v1 this is the single pane.
     pub fn first_pane(&self) -> &Pane {
         match self {
             PaneTree::Leaf(p) => p,
@@ -79,11 +93,18 @@ pub struct Tab {
     pub id: Id,
     pub title_override: Option<String>,
     pub tree: PaneTree,
+    /// The focused pane of this tab; always a leaf of `tree`.
+    pub active_pane: Id,
+    /// The pane shown full-size while the tab is zoomed (SPEC §17.1).
+    pub zoomed: Option<Id>,
 }
 
 impl Tab {
+    /// The focused pane.
     pub fn pane(&self) -> &Pane {
-        self.tree.first_pane()
+        self.tree
+            .find(self.active_pane)
+            .unwrap_or_else(|| self.tree.first_pane())
     }
 }
 
@@ -133,6 +154,14 @@ pub enum MuxEvent {
     },
     PaneRemoved {
         pane: Id,
+    },
+    /// The tab's focused pane changed.
+    PaneFocused {
+        pane: Id,
+    },
+    /// Splits, ratios, pane order or zoom of a tab changed.
+    LayoutChanged {
+        tab: Id,
     },
     /// Output arrived; carries no data (wake only).
     PaneOutput {
@@ -615,19 +644,13 @@ impl Mux {
         self.domain_state(domain).ok_or(Error::NoDomain(domain))?;
         let tab_id = self.alloc();
         let pane_id = self.alloc();
-        let pane = Pane {
-            id: pane_id,
-            domain_id: domain,
-            remote_pane_id: None,
-            title: String::new(),
-            cwd,
-            status: None,
-            attention: None,
-        };
+        let pane = Pane::new(pane_id, domain, cwd);
         let tab = Tab {
             id: tab_id,
             title_override: title,
             tree: PaneTree::Leaf(pane),
+            active_pane: pane_id,
+            zoomed: None,
         };
         let win = self.window_mut(window)?;
         let at = if win.tabs.is_empty() {
@@ -724,7 +747,7 @@ impl Mux {
             .find(|t| t.id == tab)
             .ok_or(Error::NoTab(tab))?;
         t.title_override = title.filter(|s| !s.trim().is_empty());
-        let pane = t.tree.first_pane().id;
+        let pane = t.pane().id;
         self.emit(MuxEvent::TitleChanged { pane });
         Ok(())
     }
@@ -735,8 +758,7 @@ impl Mux {
         self.windows
             .iter_mut()
             .flat_map(|w| w.tabs.iter_mut())
-            .find(|t| t.tree.first_pane().id == pane)
-            .map(|t| t.tree.first_pane_mut())
+            .find_map(|t| t.tree.find_mut(pane))
     }
 
     pub fn set_pane_title(&mut self, pane: Id, title: &str) {
@@ -963,16 +985,16 @@ impl Mux {
             .find_map(|w| w.tabs.iter().position(|t| t.id == tab).map(|i| (w.id, i)))
     }
 
-    /// Removes `pane`. While tabs hold a single pane this closes its tab, and its window when
-    /// that was the last tab. Returns `(window, tab, window_closed)`.
+    /// Removes `pane`; see [`Mux::close_pane`]. Returns `(window, tab, window_closed)`.
     pub fn kill_pane(&mut self, pane: Id) -> Result<(Id, Id, bool), Error> {
-        let (window, index) = self.locate_pane(pane).ok_or(Error::NoPane(pane))?;
-        let tab = self.window(window).ok_or(Error::NoWindow(window))?.tabs[index].id;
-        let empty = self.close_tab(window, tab)?;
-        if empty {
-            self.close_window(window)?;
-        }
-        Ok((window, tab, empty))
+        Ok(match self.close_pane(pane)? {
+            PaneClosed::Pane { window, tab } => (window, tab, false),
+            PaneClosed::Tab {
+                window,
+                tab,
+                window_closed,
+            } => (window, tab, window_closed),
+        })
     }
 
     /// `(window id, tab index)` holding `pane`.
@@ -985,6 +1007,9 @@ impl Mux {
         })
     }
 }
+
+mod panes;
+pub use panes::PaneClosed;
 
 #[cfg(test)]
 mod tests {

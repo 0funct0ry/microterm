@@ -99,6 +99,15 @@ pub enum Command {
         pane: u64,
         kill: bool,
     },
+    /// `pane` was split off `parent` (local ids): tell the daemon once both exist there, so
+    /// the layout can be rebuilt by a later client (SPEC §17.1). `axis` is 0 for side by side,
+    /// 1 for stacked.
+    Split {
+        pane: u64,
+        parent: u64,
+        axis: u8,
+        permille: u16,
+    },
     /// Skip the backoff wait (or retry after a fatal failure).
     ReconnectNow,
     Shutdown,
@@ -130,6 +139,37 @@ struct PaneRec {
     size: (u16, u16),
     /// Size the `Spawn` request carried; a different `size` is sent once the pane exists.
     spawned_size: (u16, u16),
+    /// `(parent, axis, permille, sent)` from [`Command::Split`].
+    split: Option<(u64, u8, u16, bool)>,
+}
+
+/// `Split` messages that can go out now (both panes exist on the daemon); marks them sent.
+fn due_splits(panes: &mut BTreeMap<u64, PaneRec>) -> Vec<Msg> {
+    let remotes: BTreeMap<u64, u64> = panes
+        .iter()
+        .filter_map(|(l, p)| p.remote.map(|r| (*l, r)))
+        .collect();
+    let mut out = Vec::new();
+    for (local, p) in panes.iter_mut() {
+        let Some((parent, axis, permille, sent)) =
+            p.split.as_mut().map(|s| (s.0, s.1, s.2, &mut s.3))
+        else {
+            continue;
+        };
+        if *sent {
+            continue;
+        }
+        if let (Some(&pane), Some(&parent)) = (remotes.get(local), remotes.get(&parent)) {
+            *sent = true;
+            out.push(Msg::Split {
+                pane,
+                parent,
+                axis,
+                permille,
+            });
+        }
+    }
+    out
 }
 
 enum End {
@@ -167,8 +207,20 @@ fn apply_offline(c: Command, panes: &mut BTreeMap<u64, PaneRec>) -> Option<bool>
                     spawn: Some(c),
                     size: (cols, rows),
                     spawned_size: (cols, rows),
+                    split: None,
                 },
             );
+            None
+        }
+        Command::Split {
+            pane,
+            parent,
+            axis,
+            permille,
+        } => {
+            if let Some(p) = panes.get_mut(&pane) {
+                p.split = Some((parent, axis, permille, false));
+            }
             None
         }
         Command::Resize { pane, cols, rows } => {
@@ -430,8 +482,17 @@ async fn session(
                             cols, rows,
                             scrollback: cfg.scrollback,
                         };
-                        panes.insert(pane, PaneRec { remote: None, last_seq: 0, size: (cols, rows), spawned_size: (cols, rows), spawn: Some(c) });
+                        panes.insert(pane, PaneRec { remote: None, last_seq: 0, size: (cols, rows), spawned_size: (cols, rows), spawn: Some(c), split: None });
                         Some(Msg::Spawn(req))
+                    }
+                    Command::Split { pane, parent, axis, permille } => {
+                        if let Some(p) = panes.get_mut(&pane) {
+                            p.split = Some((parent, axis, permille, false));
+                        }
+                        for m in due_splits(panes) {
+                            if let Err(e) = send(&mut w, &m).await { return End::Lost(e); }
+                        }
+                        None
                     }
                     Command::Input { pane, bytes } => {
                         panes.get(&pane).and_then(|p| p.remote).map(|id| Msg::Input { pane: id, bytes })
@@ -470,6 +531,7 @@ async fn session(
                                 Err(e) => return End::Lost(e.to_string()),
                             }
                         }
+                        replies.extend(due_splits(panes));
                         for m in &replies {
                             if let Err(e) = send(&mut w, m).await { return End::Lost(e); }
                         }

@@ -17,6 +17,8 @@ pub struct TabChrome {
     pub tooltip: Option<String>,
     /// Attention badge raised by `pane notify`.
     pub badge: Option<StatusKind>,
+    /// A pane of this tab is zoomed (SPEC §17.1).
+    pub zoomed: bool,
 }
 
 pub fn dot_of(state: StatusState) -> Option<StatusKind> {
@@ -56,6 +58,7 @@ pub fn tab_chrome(status: Option<&Status>, attention: Option<NotifyLevel>) -> Ta
         progress: status.and_then(|s| s.progress),
         tooltip: status.map(tooltip_of),
         badge: attention.map(badge_of),
+        zoomed: false,
     }
 }
 

@@ -96,6 +96,12 @@ microterm ctl pane wait [TARGET] [--match REGEX] [--idle DUR] [--exit] [--comman
 microterm ctl pane notify [TARGET] [--title T] [--level info|attention|error] [--desktop] [MESSAGE]
 microterm ctl pane status set [TARGET] [--state S] [--progress N] [--ttl DUR] [TEXT]
 microterm ctl pane status clear|get [TARGET]
+microterm ctl pane split [TARGET] (--horizontal | --vertical) [--percent N] [--cwd DIR] [-- CMD…]
+microterm ctl pane focus [TARGET] [--direction left|right|up|down]
+microterm ctl pane zoom [TARGET]
+microterm ctl pane resize [TARGET] --direction D [--cells N]
+microterm ctl pane swap [TARGET] --direction D
+microterm ctl pane rotate [TARGET]
 microterm ctl pane close [--pane ID | --match EXPR] [--force] [--all]
 ```
 

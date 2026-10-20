@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use mt_proto::{NotifyLevel, StatusState};
 
 #[derive(Parser, Debug)]
@@ -62,7 +62,7 @@ EXAMPLES:
     /// Stream mux events as JSON lines until interrupted.
     ///
     /// One object per line: {"type":"pane.command_finished","pane":12,"exit_code":1,"ts":"…"}.
-    /// --type takes dotted names (workspace.*, window.*, tab.*, pane.added, pane.removed,
+    /// --type takes dotted names (workspace.*, window.*, tab.*, pane.added, pane.removed, pane.focused,
     /// pane.title_changed, pane.cwd_changed, pane.exited, pane.command_finished,
     /// pane.status_changed, pane.notification, domain.state_changed); --match keeps events whose
     /// pane, tab or window the selector matches; --snapshot first prints the current tree as
@@ -590,6 +590,68 @@ EXAMPLES:
     /// Show what a process is doing on its tab: status dot, progress line and tooltip.
     #[command(subcommand)]
     Status(StatusCmd),
+    /// Split a pane in two; the new pane takes focus (SPEC §17.1).
+    ///
+    /// --horizontal puts the new pane to the right, --vertical below. --percent is the new
+    /// pane's share (default 50). The new pane inherits the target's domain and cwd. Prints
+    /// the new pane's ids like `tab new`.
+    #[command(
+        group = clap::ArgGroup::new("axis").required(true),
+        after_help = "\
+EXAMPLES:
+  microterm ctl pane split --horizontal                    # inside a pane: split it
+  eval \"$(microterm ctl pane split --vertical --percent 30 -- htop)\"   # sets tab= pane= window="
+    )]
+    Split {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Side by side: the new pane goes to the right.
+        #[arg(long, group = "axis")]
+        horizontal: bool,
+        /// One above the other: the new pane goes below.
+        #[arg(long, group = "axis")]
+        vertical: bool,
+        /// Share of the space the new pane takes, 1 to 99.
+        #[arg(long, value_name = "N")]
+        percent: Option<u8>,
+        /// Working directory of the new pane (default: the target's).
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<PathBuf>,
+        /// Run this instead of the shell, after `--`.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
+    /// Focus a pane, or the neighbour of one in a direction.
+    ///
+    /// Exits 3 when there is no pane that way.
+    Focus {
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Move focus to the pane on this side of the target (default: focus the target).
+        #[arg(long, value_enum)]
+        direction: Option<DirectionArg>,
+    },
+    /// Show a pane full-size in its tab, or restore the layout.
+    Zoom(PaneTarget),
+    /// Move a pane's border in a direction by a number of cells.
+    Resize {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long, value_enum)]
+        direction: DirectionArg,
+        /// How far to move it, in terminal cells.
+        #[arg(long, value_name = "N", default_value_t = 1)]
+        cells: u32,
+    },
+    /// Swap a pane with its neighbour in a direction.
+    Swap {
+        #[command(flatten)]
+        target: PaneTarget,
+        #[arg(long, value_enum)]
+        direction: DirectionArg,
+    },
+    /// Rotate the positions of the panes in a tab by one.
+    Rotate(PaneTarget),
     /// Close a pane; closing a tab's last pane closes the tab, a window's last tab the window.
     ///
     /// Exits 8 without closing anything when confirm_close would ask, unless --force is given.
@@ -603,6 +665,26 @@ EXAMPLES:
         #[arg(long)]
         all: bool,
     },
+}
+
+/// A side of a pane.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectionArg {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl From<DirectionArg> for mt_proto::Direction {
+    fn from(d: DirectionArg) -> Self {
+        match d {
+            DirectionArg::Left => Self::Left,
+            DirectionArg::Right => Self::Right,
+            DirectionArg::Up => Self::Up,
+            DirectionArg::Down => Self::Down,
+        }
+    }
 }
 
 /// `500ms`, `2s`, `5m` or `1h`; a bare number is seconds.

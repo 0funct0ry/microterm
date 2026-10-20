@@ -630,6 +630,68 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                     })
                 }
             },
+            PaneCmd::Split {
+                target,
+                horizontal,
+                vertical: _,
+                percent,
+                cwd,
+                command,
+            } => {
+                let v = call(Request::PaneSplit(mt_proto::PaneSplitParams {
+                    target: pane_target(target, env),
+                    axis: if horizontal {
+                        mt_proto::SplitAxis::Horizontal
+                    } else {
+                        mt_proto::SplitAxis::Vertical
+                    },
+                    percent,
+                    cwd: cwd.as_deref().map(abs),
+                    command: (!command.is_empty()).then_some(command),
+                }))?;
+                result(v, &|v| {
+                    let r: mt_proto::PaneSplitResult = decode(v)?;
+                    Ok(Output::new(Body::Spawned {
+                        kind: "pane",
+                        spawned: Spawned {
+                            pane: r.pane,
+                            tab: r.tab,
+                            window: r.window,
+                        },
+                    }))
+                })
+            }
+            PaneCmd::Focus { target, direction } => {
+                quiet(call(Request::PaneFocus(mt_proto::PaneFocusParams {
+                    target: pane_target(target, env),
+                    direction: direction.map(Into::into),
+                }))?)
+            }
+            PaneCmd::Zoom(t) => {
+                let v = call(Request::PaneZoom(pane_target(t, env)))?;
+                result(v, &|v| {
+                    let zoomed = v.get("zoomed").and_then(Value::as_bool).unwrap_or(false);
+                    Ok(Output::new(Body::Text(
+                        if zoomed { "zoomed" } else { "unzoomed" }.into(),
+                    )))
+                })
+            }
+            PaneCmd::Resize {
+                target,
+                direction,
+                cells,
+            } => quiet(call(Request::PaneResize(mt_proto::PaneResizeParams {
+                target: pane_target(target, env),
+                direction: direction.into(),
+                cells,
+            }))?),
+            PaneCmd::Swap { target, direction } => {
+                quiet(call(Request::PaneSwap(mt_proto::PaneDirParams {
+                    target: pane_target(target, env),
+                    direction: direction.into(),
+                }))?)
+            }
+            PaneCmd::Rotate(t) => quiet(call(Request::PaneRotate(pane_target(t, env)))?),
             PaneCmd::Close { target, force, all } => {
                 let t = Target {
                     force,

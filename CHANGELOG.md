@@ -3,6 +3,22 @@
 ## Unreleased
 
 ### Added
+- **M11 — Splits and focus follows mouse.** A tab holds a tree of panes (`PaneTree::Split`
+  from M5 is now live): `SplitHorizontal` / `SplitVertical` (`⌘D` / `⌘⇧D`, `Ctrl+Shift+D` /
+  `Ctrl+Shift+E`), `ActivatePaneDirection` (`⌘⌥←↑→↓`, `Ctrl+Alt+←↑→↓`), `ClosePane`,
+  `TogglePaneZoom`, `ResizePane`, `SwapPane` and `RotatePanes`, all in the palette and the
+  generated action reference. The last pane of a tab closes the tab; `confirm_close` covers a
+  busy pane. Each pane has its own shell, size and scrollback; dividers (1 px, 6 px grab area)
+  drag to resize, unfocused panes dim (`panes.inactive_dim`, default 0.15), the focused pane has
+  an accent border, and the wheel scrolls the pane under the pointer. New `mouse.focus_follows_mouse`
+  (accepted since M3, now active) and `panes.focus_delay_ms`; `[panes]` reloads live. Quick
+  select, copy mode and search act on the focused pane and end when focus moves. `[[workspaces]]`
+  tabs accept nested splits (`split`, `percent`, `panes`, four levels). CLI: `ctl pane
+  split|focus|zoom|resize|swap|rotate` (IPC `pane.split|focus|zoom|resize|swap|rotate`), `ctl
+  list` and `tab list --json` carry each tab's `layout`, `pane list|get` have `zoomed`, and
+  mux events gain `pane.focused` and `tab.layout_changed`. SSH panes split on the same host; the
+  mux protocol gains `Split` (kind 20) and `PaneInfo.split`, which the daemon stores so layout
+  hints survive a reconnect. The MCP tool list is unchanged. New docs: Panes & splits.
 - **M1 — UI shell.** Cargo workspace (SPEC §3.2), `microterm` CLI skeleton (`--version`, `--help`,
   stub subcommands), and the full GPUI window chrome running on mock data: title bar with
   workspace chip and domain indicator, Zed-style tab bar, mock terminal viewport, and every v1

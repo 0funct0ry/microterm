@@ -734,6 +734,7 @@ pub fn selector_hint(word: &str, snap: Option<&MuxSnapshot>) -> Option<String> {
                         size: (p.size.cols, p.size.rows),
                         focused: p.focused,
                         active: t.active,
+                        zoomed: p.zoomed,
                         exited: p.exited,
                         exit_code: p.exit_code,
                         status: p.status.clone(),

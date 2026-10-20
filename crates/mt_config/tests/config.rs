@@ -296,3 +296,87 @@ fn terminal_section_defaults_values_and_validation() {
     n.terminal.osc_color_report = OscColorReport::None;
     assert!(diff(&c, &n).effects.contains(&Effect::Repaint));
 }
+
+#[test]
+fn panes_table_and_focus_follows_mouse_parse() {
+    let c = parse_str(
+        "[mouse]\nfocus_follows_mouse = true\n[panes]\ninactive_dim = 0.3\nfocus_delay_ms = 120\n",
+    )
+    .expect("valid")
+    .config;
+    assert!(c.mouse.focus_follows_mouse);
+    assert_eq!((c.panes.inactive_dim, c.panes.focus_delay_ms), (0.3, 120));
+    assert_eq!(Config::default().panes.inactive_dim, 0.15);
+}
+
+#[test]
+fn panes_values_are_range_checked() {
+    let e = err("[panes]\ninactive_dim = 1.5\n");
+    assert!(e[0].message.contains("panes.inactive_dim"), "{e:?}");
+    let e = err("[panes]\nfocus_delay_ms = 9000\n");
+    assert!(e[0].message.contains("focus_delay_ms"), "{e:?}");
+    let w = parse_str("[panes]\ninactive_dimm = 0.1\n").expect("unknown keys only warn");
+    assert!(w.warnings[0]
+        .message
+        .contains("did you mean \"panes.inactive_dim\""));
+}
+
+#[test]
+fn workspaces_accept_nested_splits() {
+    let src = r#"
+[[workspaces]]
+name = "api"
+tabs = [
+  { title = "dev", split = "horizontal", percent = 60, panes = [
+      { cwd = "~/src/api", command = ["nvim"] },
+      { split = "vertical", panes = [ { command = ["cargo", "watch"] }, { command = ["htop"] } ] },
+  ] },
+  { title = "shell" },
+]
+"#;
+    let c = parse_str(src).expect("valid").config;
+    let tab = &c.workspaces[0].tabs[0];
+    assert_eq!(tab.split, Some(SplitKind::Horizontal));
+    assert_eq!(tab.percent, Some(60));
+    assert_eq!(tab.panes[0].command, vec!["nvim"]);
+    assert_eq!(tab.panes[1].split, Some(SplitKind::Vertical));
+    assert_eq!(tab.panes[1].panes.len(), 2);
+    assert!(c.workspaces[0].tabs[1].panes.is_empty());
+}
+
+#[test]
+fn declared_splits_are_validated() {
+    let one = "[[workspaces]]\nname = \"a\"\ntabs = [ { split = \"horizontal\", panes = [ { command = [\"x\"] } ] } ]\n";
+    assert!(err(one)[0].message.contains("exactly 2"));
+    let pct = "[[workspaces]]\nname = \"a\"\ntabs = [ { split = \"vertical\", percent = 100, panes = [ {}, {} ] } ]\n";
+    assert!(err(pct)[0].message.contains("percent"));
+    let orphan = "[[workspaces]]\nname = \"a\"\ntabs = [ { percent = 40 } ]\n";
+    assert!(err(orphan)[0].message.contains("need `split`"));
+    let both = "[[workspaces]]\nname = \"a\"\ntabs = [ { split = \"vertical\", command = [\"x\"], panes = [ {}, {} ] } ]\n";
+    assert!(err(both)[0].message.contains("on its panes"));
+    let leaf = |d: usize| -> String {
+        let mut s = String::from("{}");
+        for _ in 0..d {
+            s = format!("{{ split = \"vertical\", panes = [ {s}, {{}} ] }}");
+        }
+        s
+    };
+    let ok = format!(
+        "[[workspaces]]\nname = \"a\"\ntabs = [ {} ]\n",
+        leaf(1).replace("{ split", "{ title = \"t\", split")
+    );
+    parse_str(&ok).expect("depth 1 is fine");
+    let deep = format!("[[workspaces]]\nname = \"a\"\ntabs = [ {} ]\n", leaf(5));
+    assert!(err(&deep)[0].message.contains("nest at most"));
+}
+
+#[test]
+fn nested_pane_keys_are_checked_for_typos() {
+    let src = "[[workspaces]]\nname = \"a\"\ntabs = [ { split = \"horizontal\", panes = [ { cmd = [\"x\"] }, {} ] } ]\n";
+    let l = parse_str(src).expect("typos only warn");
+    assert!(
+        l.warnings.iter().any(|w| w.message.contains("cmd")),
+        "{:?}",
+        l.warnings
+    );
+}

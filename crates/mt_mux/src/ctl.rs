@@ -6,12 +6,12 @@
 
 use mt_proto::selector::{Key, Resource, Selector};
 use mt_proto::{
-    MuxSnapshot, PaneInfo, PaneStatus, RpcError, Size, TabInfo, TabNode, Target, WindowInfo,
-    WindowNode, WorkspaceInfo, WorkspaceNode,
+    LayoutNode, MuxSnapshot, PaneInfo, PaneStatus, RpcError, Size, SplitAxis, TabInfo, TabNode,
+    Target, WindowInfo, WindowNode, WorkspaceInfo, WorkspaceNode,
 };
 
 use crate::domain::DomainKind;
-use crate::model::{Error, Id, Mux};
+use crate::model::{Axis, Error, Id, Mux, PaneTree};
 use crate::title::{should_confirm_close, ConfirmClose};
 
 impl From<Error> for RpcError {
@@ -49,6 +49,7 @@ pub struct PaneRow {
     pub size: (u16, u16),
     pub focused: bool,
     pub active: bool,
+    pub zoomed: bool,
     pub exited: bool,
     pub exit_code: Option<i32>,
     pub status: Option<PaneStatus>,
@@ -64,6 +65,7 @@ pub struct TabRow {
     pub active: bool,
     pub focused: bool,
     pub panes: Vec<Id>,
+    pub layout: LayoutNode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +96,22 @@ pub struct Rows {
     pub focused_window: Option<Id>,
     pub focused_tab: Option<Id>,
     pub focused_pane: Option<Id>,
+}
+
+/// The wire form of a pane tree.
+pub fn layout_node(tree: &PaneTree) -> LayoutNode {
+    match tree {
+        PaneTree::Leaf(p) => LayoutNode::Leaf { pane: p.id },
+        PaneTree::Split { axis, ratio, a, b } => LayoutNode::Split {
+            axis: match axis {
+                Axis::Horizontal => SplitAxis::Horizontal,
+                Axis::Vertical => SplitAxis::Vertical,
+            },
+            percent: ((ratio * 100.0).round() as i64).clamp(1, 99) as u8,
+            a: Box::new(layout_node(a)),
+            b: Box::new(layout_node(b)),
+        },
+    }
 }
 
 pub fn domain_name(kind: &DomainKind) -> String {
@@ -171,6 +189,7 @@ impl Mux {
                     active,
                     focused,
                     panes: t.tree.panes().iter().map(|p| p.id).collect(),
+                    layout: layout_node(&t.tree),
                 });
                 for p in t.tree.panes() {
                     let l = live(p.id);
@@ -190,6 +209,7 @@ impl Mux {
                         size: l.size,
                         focused: focused && p.id == pane.id,
                         active,
+                        zoomed: t.zoomed == Some(p.id),
                         exited: l.exited,
                         exit_code: l.exit_code,
                         status: p.status.as_ref().map(|s| s.to_wire()),
@@ -219,6 +239,7 @@ impl PaneRow {
                 rows: self.size.1,
             },
             focused: self.focused,
+            zoomed: self.zoomed,
             exited: self.exited,
             exit_code: self.exit_code,
             status: self.status.clone(),
@@ -237,6 +258,7 @@ impl TabRow {
             active: self.active,
             focused: self.focused,
             panes: self.panes.clone(),
+            layout: Some(self.layout.clone()),
         }
     }
 }
@@ -299,6 +321,7 @@ impl Rows {
                                     .filter(|p| p.tab == t.id)
                                     .map(PaneRow::info)
                                     .collect(),
+                                layout: Some(t.layout.clone()),
                             })
                             .collect(),
                     })
@@ -611,6 +634,7 @@ mod tests {
             size: (80, 24),
             focused: id == 1,
             active: id != 2,
+            zoomed: false,
             exited: id == 5,
             exit_code: None,
             status: (id == 2).then(|| PaneStatus {
@@ -689,6 +713,7 @@ mod tests {
                 active: true,
                 focused: true,
                 panes: vec![],
+                layout: LayoutNode::Leaf { pane: 1 },
             }],
         )
         .unwrap_err();

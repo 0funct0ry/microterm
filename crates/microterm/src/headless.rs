@@ -346,6 +346,21 @@ impl Host {
             .map_err(|e| RpcError::internal(e.to_string()))
     }
 
+    fn split(&mut self, p: &mt_proto::PaneSplitParams) -> Reply {
+        let rows = self.rows();
+        let done = ipc_ops::split_model(&mut self.mux, &rows, p)?;
+        let spec = SpawnSpec {
+            cwd: self.mux.pane(done.pane).and_then(|pane| pane.cwd.clone()),
+            command: p.command.clone().filter(|c| !c.is_empty()),
+            ..Default::default()
+        };
+        if let Err(e) = self.start_terminal((done.pane, done.tab, done.window), spec, (120, 34)) {
+            let _ = self.mux.close_pane(done.pane);
+            return Err(e);
+        }
+        serde_json::to_value(done).map_err(|e| RpcError::internal(e.to_string()))
+    }
+
     fn close(&mut self, request: &Request) -> Reply {
         let set = ipc_ops::plan_close(&self.rows(), request, self.confirm_close)?;
         for pane in &set.panes {
@@ -402,6 +417,15 @@ impl Host {
             }
             Request::PaneClose(_) | Request::TabClose(_) | Request::WindowClose(_) => {
                 self.close(&request)
+            }
+            Request::PaneSplit(p) => self.split(&p),
+            Request::PaneFocus(_)
+            | Request::PaneZoom(_)
+            | Request::PaneResize(_)
+            | Request::PaneSwap(_)
+            | Request::PaneRotate(_) => {
+                let rows = self.rows();
+                ipc_ops::layout_op(&mut self.mux, &rows, &request)
             }
             Request::TabFocus(p) => {
                 let (w, i) = ipc_ops::resolve_focus(&self.mux, &self.rows(), &p)?;

@@ -17,6 +17,7 @@ export default defineConfig({
             { label: 'Installation', slug: 'docs/installation' },
             { label: 'Quick start', slug: 'docs/quick-start' },
             { label: 'Tabs & workspaces', slug: 'docs/tabs-and-workspaces' },
+            { label: 'Panes & splits', slug: 'docs/panes-and-splits' },
             { label: 'Command palette & launcher', slug: 'docs/command-palette-and-launcher' },
             { label: 'Mouse & selection', slug: 'docs/mouse-and-selection' },
             { label: 'Hyperlinks', slug: 'docs/hyperlinks' },

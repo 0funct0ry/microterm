@@ -18,6 +18,11 @@ actions!(
         Quit,
         SpawnTab,
         CloseTab,
+        SplitHorizontal,
+        SplitVertical,
+        ClosePane,
+        TogglePaneZoom,
+        RotatePanes,
         SpawnWindow,
         CloseWindow,
         RenameTab,
@@ -67,6 +72,21 @@ pub struct ActivateTabRelative(pub isize);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct SwitchWorkspaceRelative(pub isize);
+
+/// Focus the neighbouring pane (SPEC §17.1).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ActivatePaneDirection(pub mt_mux::Dir);
+
+/// Swap the focused pane with its neighbour.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct SwapPane(pub mt_mux::Dir);
+
+/// Move the focused pane's border by a number of cells.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ResizePane(pub mt_mux::Dir, pub u32);
 
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
@@ -262,6 +282,142 @@ pub static ACTIONS: &[ActionDef] = &[
         &[],
         &[],
         RenameWorkspace
+    ),
+    def!(
+        "SplitHorizontal",
+        "Split pane right",
+        "Split the focused pane into two side by side",
+        &["cmd-d"],
+        &["ctrl-shift-d"],
+        SplitHorizontal
+    ),
+    def!(
+        "SplitVertical",
+        "Split pane down",
+        "Split the focused pane into two, one above the other",
+        &["cmd-shift-d"],
+        &["ctrl-shift-e"],
+        SplitVertical
+    ),
+    def!(
+        "ClosePane",
+        "Close pane",
+        "Close the focused pane; the last pane of a tab closes the tab",
+        &[],
+        &[],
+        ClosePane
+    ),
+    def!(
+        "TogglePaneZoom",
+        "Toggle pane zoom",
+        "Show the focused pane full-size, or restore the layout",
+        &[],
+        &[],
+        TogglePaneZoom
+    ),
+    def!(
+        "RotatePanes",
+        "Rotate panes",
+        "Rotate the positions of the panes in the tab",
+        &[],
+        &[],
+        RotatePanes
+    ),
+    def!(
+        "ActivatePaneDirection(left)",
+        "Focus pane left",
+        "Move focus to the pane left of the focused one",
+        &["cmd-alt-left"],
+        &["ctrl-alt-left"],
+        ActivatePaneDirection(mt_mux::Dir::Left)
+    ),
+    def!(
+        "ActivatePaneDirection(right)",
+        "Focus pane right",
+        "Move focus to the pane right of the focused one",
+        &["cmd-alt-right"],
+        &["ctrl-alt-right"],
+        ActivatePaneDirection(mt_mux::Dir::Right)
+    ),
+    def!(
+        "ActivatePaneDirection(up)",
+        "Focus pane up",
+        "Move focus to the pane up of the focused one",
+        &["cmd-alt-up"],
+        &["ctrl-alt-up"],
+        ActivatePaneDirection(mt_mux::Dir::Up)
+    ),
+    def!(
+        "ActivatePaneDirection(down)",
+        "Focus pane down",
+        "Move focus to the pane down of the focused one",
+        &["cmd-alt-down"],
+        &["ctrl-alt-down"],
+        ActivatePaneDirection(mt_mux::Dir::Down)
+    ),
+    def!(
+        "SwapPane(left)",
+        "Swap pane left",
+        "Swap the focused pane with its neighbour to the left",
+        &[],
+        &[],
+        SwapPane(mt_mux::Dir::Left)
+    ),
+    def!(
+        "SwapPane(right)",
+        "Swap pane right",
+        "Swap the focused pane with its neighbour to the right",
+        &[],
+        &[],
+        SwapPane(mt_mux::Dir::Right)
+    ),
+    def!(
+        "SwapPane(up)",
+        "Swap pane up",
+        "Swap the focused pane with its neighbour to the up",
+        &[],
+        &[],
+        SwapPane(mt_mux::Dir::Up)
+    ),
+    def!(
+        "SwapPane(down)",
+        "Swap pane down",
+        "Swap the focused pane with its neighbour to the down",
+        &[],
+        &[],
+        SwapPane(mt_mux::Dir::Down)
+    ),
+    def!(
+        "ResizePane(left,5)",
+        "Resize pane left",
+        "Move the focused pane's left border by 5 cells",
+        &[],
+        &[],
+        ResizePane(mt_mux::Dir::Left, 5)
+    ),
+    def!(
+        "ResizePane(right,5)",
+        "Resize pane right",
+        "Move the focused pane's right border by 5 cells",
+        &[],
+        &[],
+        ResizePane(mt_mux::Dir::Right, 5)
+    ),
+    def!(
+        "ResizePane(up,5)",
+        "Resize pane up",
+        "Move the focused pane's up border by 5 cells",
+        &[],
+        &[],
+        ResizePane(mt_mux::Dir::Up, 5)
+    ),
+    def!(
+        "ResizePane(down,5)",
+        "Resize pane down",
+        "Move the focused pane's down border by 5 cells",
+        &[],
+        &[],
+        ResizePane(mt_mux::Dir::Down, 5)
     ),
     def!(
         "SpawnWindow",
@@ -546,6 +702,7 @@ pub static ACTIONS: &[ActionDef] = &[
 /// Documentation grouping of the registry (SPEC §9.2).
 pub const CATEGORIES: &[&str] = &[
     "Tabs & windows",
+    "Panes",
     "Workspaces",
     "Clipboard & scroll",
     "Modes",
@@ -570,6 +727,14 @@ impl ActionDef {
             | "SpawnWindow"
             | "CloseWindow"
             | "ToggleFullscreen" => "Tabs & windows",
+            "SplitHorizontal"
+            | "SplitVertical"
+            | "ClosePane"
+            | "TogglePaneZoom"
+            | "RotatePanes"
+            | "ActivatePaneDirection"
+            | "SwapPane"
+            | "ResizePane" => "Panes",
             "ShowWorkspaceSwitcher"
             | "SwitchWorkspace"
             | "SwitchWorkspaceRelative"
@@ -632,6 +797,18 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
             Ok(Box::new(SwitchWorkspaceRelative(*n as isize)))
         }
         ("MoveTabRelative", Some(ActionArg::Int(n))) => Ok(Box::new(MoveTabRelative(*n as isize))),
+        ("ActivatePaneDirection", Some(ActionArg::Str(d))) => Ok(Box::new(ActivatePaneDirection(
+            mt_mux::Dir::parse(d).ok_or("direction must be left, right, up or down")?,
+        ))),
+        ("SwapPane", Some(ActionArg::Str(d))) => Ok(Box::new(SwapPane(
+            mt_mux::Dir::parse(d).ok_or("direction must be left, right, up or down")?,
+        ))),
+        ("ResizePane", Some(ActionArg::Table(t))) => parse_resize_pane(t)
+            .map(|a| Box::new(a) as Box<dyn Action>)
+            .map_err(|e| format!("ResizePane: {e}")),
+        ("ResizePane", _) => {
+            Err("ResizePane takes a table: { direction = \"left\", cells = 5 }".into())
+        }
         ("SwitchWorkspace", Some(ActionArg::Str(name))) => {
             Ok(Box::new(SwitchWorkspace(name.clone())))
         }
@@ -711,6 +888,23 @@ under `[[keys]]` in the config. Actions that take an argument are written as a t
 pub const REFERENCE_DOC_PATH: &str = "site/src/content/docs/docs/reference/actions.md";
 
 /// Parses the table text of a `SpawnCommand = { ... }` config argument.
+pub fn parse_resize_pane(table: &str) -> Result<ResizePane, String> {
+    let t: toml::Table = table
+        .parse()
+        .map_err(|e: toml::de::Error| e.message().to_string())?;
+    let dir = t
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .and_then(mt_mux::Dir::parse)
+        .ok_or("`direction` must be \"left\", \"right\", \"up\" or \"down\"")?;
+    let cells = match t.get("cells") {
+        None => 1,
+        Some(toml::Value::Integer(n)) if (1..=1000).contains(n) => *n as u32,
+        Some(_) => return Err("`cells` must be a number from 1 to 1000".into()),
+    };
+    Ok(ResizePane(dir, cells))
+}
+
 pub fn parse_spawn_command(table: &str) -> Result<SpawnCommand, String> {
     let t: toml::Table = table
         .parse()
@@ -1011,6 +1205,14 @@ mod tests {
             "SpawnTab",
             "SpawnTabInDomain",
             "CloseTab",
+            "SplitHorizontal",
+            "SplitVertical",
+            "ClosePane",
+            "ActivatePaneDirection(left)",
+            "ResizePane(left,5)",
+            "TogglePaneZoom",
+            "SwapPane(left)",
+            "RotatePanes",
             "ActivateTab",
             "ActivateTabRelative(1)",
             "MoveTabRelative(1)",

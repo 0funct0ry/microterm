@@ -73,6 +73,7 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
     // Behaviour settings read live by the UI.
     d.mark(old.selection != new.selection, "selection", &[Repaint]);
     d.mark(old.mouse != new.mouse, "mouse", &[Repaint]);
+    d.mark(old.panes != new.panes, "panes", &[Repaint]);
     d.mark(old.clipboard != new.clipboard, "clipboard", &[Repaint]);
     d.mark(old.paste != new.paste, "paste", &[Repaint]);
     d.mark(old.bell != new.bell, "bell", &[Repaint]);

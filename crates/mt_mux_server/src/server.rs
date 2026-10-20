@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use mt_proto::mux::{self, ExitInfo, Msg, PaneId, PaneInfo, SpawnReq};
+use mt_proto::mux::{self, ExitInfo, Msg, PaneId, PaneInfo, SpawnReq, SplitInfo};
 use mt_term::{HeadlessOptions, HeadlessPane, PaneEvent};
 
 /// Messages queued per client before it is dropped as too slow (it re-attaches and replays).
@@ -32,6 +32,7 @@ struct Meta {
     title: String,
     exited: Option<ExitInfo>,
     subs: Vec<Sub>,
+    split: Option<SplitInfo>,
 }
 
 struct PaneEntry {
@@ -65,6 +66,7 @@ impl PaneEntry {
             rows: rows as u16,
             exited: m.exited,
             session: self.session.clone(),
+            split: m.split,
         }
     }
 }
@@ -201,6 +203,21 @@ impl Server {
             Msg::Resize { pane, cols, rows } => match self.find(pane) {
                 Some(p) => p.pane().resize(cols.max(1), rows.max(1)),
                 None => err(format!("pane {pane} does not exist")),
+            },
+            Msg::Split {
+                pane,
+                parent,
+                axis,
+                permille,
+            } => match (self.find(pane), self.find(parent)) {
+                (Some(p), Some(q)) if p.session == q.session && pane != parent && axis <= 1 => {
+                    lock(&p.meta).split = Some(SplitInfo {
+                        parent,
+                        axis,
+                        permille: permille.clamp(1, 999),
+                    });
+                }
+                _ => err(format!("cannot record split of pane {pane} from {parent}")),
             },
             Msg::Kill { pane } => match self.find(pane) {
                 Some(p) => p.pane().kill(),

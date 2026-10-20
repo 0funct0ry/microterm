@@ -27,3 +27,7 @@ pub const TERM_LINE_HEIGHT: f32 = 1.2;
 /// Advance of JetBrains Mono at 13 px (600/1000 em) and the resulting row height.
 pub const CELL_WIDTH: f32 = TERM_TEXT_SIZE * 0.6;
 pub const LINE_HEIGHT: f32 = TERM_TEXT_SIZE * TERM_LINE_HEIGHT;
+
+/// Pane dividers (SPEC §4.3): the visible line and the area that grabs the pointer.
+pub const DIVIDER_WIDTH: f32 = 1.0;
+pub const DIVIDER_HIT_AREA: f32 = 6.0;

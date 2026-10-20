@@ -320,6 +320,17 @@ pub(crate) fn remote_terminal(
         cols,
         rows,
     });
+    if let Some(origin) = spec.split_from {
+        link.send(Command::Split {
+            pane,
+            parent: origin.parent,
+            axis: match origin.axis {
+                mt_mux::Axis::Horizontal => 0,
+                mt_mux::Axis::Vertical => 1,
+            },
+            permille: origin.permille,
+        });
+    }
     Ok(term)
 }
 

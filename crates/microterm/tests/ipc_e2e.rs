@@ -1831,3 +1831,135 @@ fn skill_install_show_uninstall_end_to_end() {
     assert_eq!(bad.status.code(), Some(1));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn panes_split_focus_zoom_resize_swap_rotate_and_close() {
+    let mt = Instance::start();
+    let (tab, left, window) = mt.spawn_ids("sleep 60", &["--title", "dev"]);
+    // The new pane lives in the same tab and window, and knows it.
+    let out = mt.ctl(&[
+        "pane",
+        "split",
+        "--pane",
+        &left,
+        "--horizontal",
+        "--percent",
+        "40",
+        "--",
+        "sh",
+        "-c",
+        "echo me=$MICROTERM_PANE/$MICROTERM_TAB/$MICROTERM_WINDOW; sleep 60",
+    ]);
+    let (split_tab, right, split_window) =
+        (parse_ids(&out).0, parse_ids(&out).1, parse_ids(&out).2);
+    assert_eq!((&split_tab, &split_window), (&tab, &window));
+    let t = mt.wait_text(&right, "me=");
+    assert!(t.contains(&format!("me={right}/{tab}/{window}")), "{t}");
+    // Splitting a split pane stacks inside it.
+    let out = mt.ctl(&[
+        "pane",
+        "split",
+        "--pane",
+        &right,
+        "--vertical",
+        "--",
+        "sleep",
+        "60",
+    ]);
+    let bottom = parse_ids(&out).1;
+
+    let list = mt.list();
+    let tab_node = &list["workspaces"][0]["windows"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"].as_u64() == tab.parse().ok())
+        .unwrap()
+        .clone();
+    assert_eq!(tab_node["panes"].as_array().unwrap().len(), 3);
+    let layout = &tab_node["layout"];
+    assert_eq!(layout["type"], "split");
+    assert_eq!(layout["axis"], "horizontal");
+    assert_eq!(
+        layout["percent"], 60,
+        "the first pane keeps what the new one did not take"
+    );
+    assert_eq!(layout["a"]["pane"].to_string(), left);
+    assert_eq!(layout["b"]["axis"], "vertical");
+    let text = mt.ctl(&["list"]);
+    assert!(
+        text.contains(&format!("[{left} |60 ({right} / {bottom})]")),
+        "{text}"
+    );
+
+    // The split took focus, so the newest pane is the focused one.
+    assert_eq!(mt.json(&["pane", "get"])["id"].to_string(), bottom);
+    mt.ctl(&["pane", "focus", "--pane", &bottom, "--direction", "left"]);
+    assert_eq!(mt.json(&["pane", "get"])["id"].to_string(), left);
+    assert_eq!(
+        mt.ctl_code(&["pane", "focus", "--pane", &left, "--direction", "left"]),
+        3,
+        "no pane to the left of the first one"
+    );
+    mt.ctl(&["pane", "focus", "--pane", &right]);
+    assert_eq!(mt.json(&["pane", "get"])["id"].to_string(), right);
+
+    let z = mt.json(&["pane", "zoom", "--pane", &right]);
+    assert_eq!(z["zoomed"], true);
+    assert_eq!(mt.json(&["pane", "get", "--pane", &right])["zoomed"], true);
+    assert_eq!(
+        mt.json(&["pane", "zoom", "--pane", &right])["zoomed"],
+        false
+    );
+
+    mt.ctl(&[
+        "pane",
+        "resize",
+        "--pane",
+        &left,
+        "--direction",
+        "right",
+        "--cells",
+        "8",
+    ]);
+    let after = mt.list();
+    let pct = after["workspaces"][0]["windows"][0]["tabs"][0]["layout"]["percent"]
+        .as_u64()
+        .unwrap();
+    assert!(pct > 60, "growing the left pane moved the border: {pct}");
+    assert_eq!(
+        mt.ctl_code(&["pane", "resize", "--pane", &left, "--direction", "up"]),
+        1,
+        "pane 1 spans the full height"
+    );
+
+    mt.ctl(&["pane", "swap", "--pane", &left, "--direction", "right"]);
+    let swapped = mt.list();
+    let l = &swapped["workspaces"][0]["windows"][0]["tabs"][0]["layout"];
+    assert_eq!(
+        l["a"]["pane"].to_string(),
+        right,
+        "the right pane took the left slot"
+    );
+    assert_eq!(
+        l["b"]["a"]["pane"].to_string(),
+        left,
+        "the left pane moved right"
+    );
+    mt.ctl(&["pane", "rotate", "--pane", &left]);
+
+    // Closing one pane leaves the tab; closing every pane closes it.
+    mt.ctl(&["pane", "close", "--pane", &bottom, "--force"]);
+    assert_eq!(
+        mt.list()["workspaces"][0]["windows"][0]["tabs"][0]["panes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        mt.ctl_code(&["pane", "split", "--pane", &left]),
+        1,
+        "--horizontal or --vertical is required"
+    );
+}

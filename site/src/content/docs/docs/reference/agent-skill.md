@@ -81,6 +81,12 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl pane status set` — Set the status (default: $MICROTERM_PANE, never the focused pane)
 - `microterm ctl pane status clear` — Remove the status
 - `microterm ctl pane status get` — Print the status (default: $MICROTERM_PANE, else the focused pane)
+- `microterm ctl pane split` — Split a pane in two; the new pane takes focus (SPEC §17.1)
+- `microterm ctl pane focus` — Focus a pane, or the neighbour of one in a direction
+- `microterm ctl pane zoom` — Show a pane full-size in its tab, or restore the layout
+- `microterm ctl pane resize` — Move a pane's border in a direction by a number of cells
+- `microterm ctl pane swap` — Swap a pane with its neighbour in a direction
+- `microterm ctl pane rotate` — Rotate the positions of the panes in a tab by one
 - `microterm ctl pane close` — Close a pane; closing a tab's last pane closes the tab, a window's last tab the window
 - `microterm ctl events` — Stream mux events as JSON lines until interrupted
 - `microterm ctl record` — Record a running pane to an asciicast v2 file

@@ -32,37 +32,84 @@ use crate::{
     theme::Theme,
 };
 
-/// The view-side companion of a mux tab: its live terminal and display state. The order of
-/// `AppWindow::tabs` always mirrors the mux window's tabs.
-pub struct TabView {
-    /// Mux tab id.
-    pub id: u64,
+/// The view-side companion of one mux pane: its live terminal and event pump.
+pub struct PaneView {
     /// Mux pane id.
     pub pane: u64,
     /// `None` until a shell is attached (and always in unit tests that do not opt in).
     pub session: Option<TerminalSession>,
-    /// Display title after `tab_bar.title_format`.
-    pub title: String,
-    /// Foreground process name when it is not the shell.
-    pub process: Option<String>,
-    /// A non-shell foreground process is running (the tab's dirty dot).
-    pub dirty: bool,
     wake: Option<async_channel::Receiver<()>>,
     pump: Option<gpui::Task<()>>,
 }
 
-impl TabView {
-    fn new(id: u64, pane: u64) -> Self {
-        TabView {
-            id,
+impl PaneView {
+    fn new(pane: u64) -> Self {
+        PaneView {
             pane,
             session: None,
-            title: String::new(),
-            process: None,
-            dirty: false,
             wake: None,
             pump: None,
         }
+    }
+}
+
+/// The view-side companion of a mux tab: its panes and display state. The order of
+/// `AppWindow::tabs` always mirrors the mux window's tabs, and `panes`, `tree`, `pane` and
+/// `zoomed` are copied from the mux on every `reconcile`.
+pub struct TabView {
+    /// Mux tab id.
+    pub id: u64,
+    /// The tab's focused mux pane (what keys, the mouse and the overlays act on).
+    pub pane: u64,
+    /// One view per leaf of `tree`.
+    pub panes: Vec<PaneView>,
+    /// The tab's split layout.
+    pub tree: mt_mux::PaneTree,
+    /// The pane drawn full-size while the tab is zoomed.
+    pub zoomed: Option<u64>,
+    /// Display title after `tab_bar.title_format`.
+    pub title: String,
+    /// Foreground process name of the focused pane when it is not the shell.
+    pub process: Option<String>,
+    /// A non-shell foreground process is running (the tab's dirty dot).
+    pub dirty: bool,
+}
+
+impl TabView {
+    fn new(id: u64, tree: mt_mux::PaneTree, pane: u64) -> Self {
+        TabView {
+            id,
+            pane,
+            panes: Vec::new(),
+            tree,
+            zoomed: None,
+            title: String::new(),
+            process: None,
+            dirty: false,
+        }
+    }
+
+    pub fn pane_view(&self, pane: u64) -> Option<&PaneView> {
+        self.panes.iter().find(|p| p.pane == pane)
+    }
+
+    pub fn pane_view_mut(&mut self, pane: u64) -> Option<&mut PaneView> {
+        self.panes.iter_mut().find(|p| p.pane == pane)
+    }
+
+    /// The focused pane's terminal.
+    pub fn session(&self) -> Option<&TerminalSession> {
+        self.pane_view(self.pane)?.session.as_ref()
+    }
+
+    pub fn session_mut(&mut self) -> Option<&mut TerminalSession> {
+        let pane = self.pane;
+        self.pane_view_mut(pane)?.session.as_mut()
+    }
+
+    /// Every pane's terminal.
+    pub fn sessions(&self) -> impl Iterator<Item = &TerminalSession> {
+        self.panes.iter().filter_map(|p| p.session.as_ref())
     }
 }
 
@@ -70,6 +117,7 @@ impl TabView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseTarget {
     Tab(u64),
+    Pane(u64),
     Window,
 }
 
@@ -197,6 +245,12 @@ pub struct AppWindow {
     pub(crate) ssh_input: String,
     pub(crate) hud: Option<(usize, usize)>,
     hud_epoch: u64,
+    /// Cancels a pending focus-follows-mouse switch when the pointer moves on.
+    pub(crate) focus_epoch: u64,
+    /// A divider being dragged.
+    pub(crate) divider_drag: Option<crate::panes::DividerDrag>,
+    /// Pixel bounds `(x, y, w, h)` of the pane area, recorded at paint for divider drags.
+    pub(crate) pane_area: Rc<Cell<(f32, f32, f32, f32)>>,
     pub(crate) scrollbar_visible: bool,
     scrollbar_epoch: u64,
     pub(crate) tab_menu: Option<(Point<Pixels>, u64)>,
@@ -312,6 +366,9 @@ impl AppWindow {
             ssh_input: String::new(),
             hud: None,
             hud_epoch: 0,
+            focus_epoch: 0,
+            divider_drag: None,
+            pane_area: Rc::new(Cell::new((0.0, 0.0, 0.0, 0.0))),
             scrollbar_visible: false,
             scrollbar_epoch: 0,
             tab_menu: None,
@@ -357,12 +414,16 @@ impl AppWindow {
         if self.hiding {
             let mut tabs = std::mem::take(&mut self.tabs);
             for t in &mut tabs {
-                t.pump = None;
+                for p in &mut t.panes {
+                    p.pump = None;
+                }
             }
             host.parked.insert(id, tabs);
         } else {
             for t in &self.tabs {
-                host.pending.remove(&t.pane);
+                for p in &t.panes {
+                    host.pending.remove(&p.pane);
+                }
             }
             let _ = host.mux.close_window(id);
         }
@@ -373,29 +434,40 @@ impl AppWindow {
     /// Brings `self.tabs` in line with the mux window: new tabs get a view (and a shell),
     /// removed ones are dropped, order and the active tab are copied.
     pub(crate) fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (order, active) = {
+        type Snap = (u64, mt_mux::PaneTree, u64, Option<u64>);
+        let (order, active): (Vec<Snap>, usize) = {
             let host = mux_host::host(cx);
             match host.mux.window(self.mux_window) {
                 Some(w) => (
                     w.tabs
                         .iter()
-                        .map(|t| (t.id, t.pane().id))
-                        .collect::<Vec<_>>(),
+                        .map(|t| (t.id, t.tree.clone(), t.pane().id, t.zoomed))
+                        .collect(),
                     w.active,
                 ),
                 None => (Vec::new(), 0),
             }
         };
         let mut old = std::mem::take(&mut self.tabs);
-        let mut fresh = Vec::new();
-        for (id, pane) in order {
-            match old.iter().position(|t| t.id == id) {
-                Some(i) => self.tabs.push(old.swap_remove(i)),
-                None => {
-                    self.tabs.push(TabView::new(id, pane));
-                    fresh.push(id);
+        // Panes that need a shell: (tab id, pane id).
+        let mut fresh: Vec<(u64, u64)> = Vec::new();
+        for (id, tree, focused, zoomed) in order {
+            let mut tab = match old.iter().position(|t| t.id == id) {
+                Some(i) => old.swap_remove(i),
+                None => TabView::new(id, tree.clone(), focused),
+            };
+            tab.pane = focused;
+            tab.zoomed = zoomed;
+            // Dropping a PaneView drops its terminal (and with it the shell).
+            tab.panes.retain(|p| tree.contains(p.pane));
+            for p in tree.panes() {
+                if tab.pane_view(p.id).is_none() {
+                    tab.panes.push(PaneView::new(p.id));
+                    fresh.push((id, p.id));
                 }
             }
+            tab.tree = tree;
+            self.tabs.push(tab);
         }
         drop(old);
         self.active_tab = active.min(self.tabs.len().saturating_sub(1));
@@ -407,49 +479,56 @@ impl AppWindow {
 
         let mut failed = Vec::new();
         for i in 0..self.tabs.len() {
-            let id = self.tabs[i].id;
-            if self.tabs[i].session.is_some() {
-                if self.tabs[i].pump.is_none() {
-                    self.start_pump(id, window, cx);
-                }
-            } else if fresh.contains(&id) && !cfg!(test) {
-                let spec = mux_host::host(cx)
-                    .pending
-                    .remove(&self.tabs[i].pane)
-                    .unwrap_or_default();
-                if spec.domain != mt_mux::LOCAL_DOMAIN_ID {
-                    let domain = spec.domain;
-                    if let Err(e) = self.attach_remote_terminal(i, domain, &spec, window, cx) {
-                        self.toast(ToastKind::Error, format!("Could not open the tab: {e}"), cx);
-                        failed.push(id);
+            let tab_id = self.tabs[i].id;
+            let panes: Vec<u64> = self.tabs[i].panes.iter().map(|p| p.pane).collect();
+            for pane in panes {
+                let view = self.tabs[i].pane_view(pane).expect("listed above");
+                if view.session.is_some() {
+                    if view.pump.is_none() {
+                        self.start_pump(tab_id, pane, window, cx);
                     }
-                    continue;
-                }
-                let mut opts = self.spawn_options(cx);
-                opts.cwd = spec.cwd;
-                opts.command = spec.command;
-                // Local panes only: SSH-domain panes never get these (SPEC §12.6 S7).
-                let socket = mux_host::host(cx).socket.clone();
-                opts.env.extend(crate::ipc_ops::pane_env(
-                    self.tabs[i].pane,
-                    self.tabs[i].id,
-                    self.mux_window,
-                    socket.as_deref(),
-                ));
-                if let Err(e) = self.attach_terminal(i, opts, window, cx) {
-                    self.toast(
-                        ToastKind::Error,
-                        format!("Could not start the shell: {e}"),
-                        cx,
-                    );
-                    failed.push(id);
+                } else if fresh.contains(&(tab_id, pane)) && !cfg!(test) {
+                    let spec = mux_host::host(cx).pending.remove(&pane).unwrap_or_default();
+                    if spec.domain != mt_mux::LOCAL_DOMAIN_ID {
+                        let domain = spec.domain;
+                        if let Err(e) =
+                            self.attach_remote_terminal(i, pane, domain, &spec, window, cx)
+                        {
+                            self.toast(
+                                ToastKind::Error,
+                                format!("Could not open the pane: {e}"),
+                                cx,
+                            );
+                            failed.push(pane);
+                        }
+                        continue;
+                    }
+                    let mut opts = self.spawn_options(cx);
+                    opts.cwd = spec.cwd;
+                    opts.command = spec.command;
+                    // Local panes only: SSH-domain panes never get these (SPEC §12.6 S7).
+                    let socket = mux_host::host(cx).socket.clone();
+                    opts.env.extend(crate::ipc_ops::pane_env(
+                        pane,
+                        tab_id,
+                        self.mux_window,
+                        socket.as_deref(),
+                    ));
+                    if let Err(e) = self.attach_pane_terminal(i, pane, opts, window, cx) {
+                        self.toast(
+                            ToastKind::Error,
+                            format!("Could not start the shell: {e}"),
+                            cx,
+                        );
+                        failed.push(pane);
+                    }
                 }
             }
         }
         self.refresh_titles(cx);
         cx.notify();
-        for id in failed {
-            self.close_tab(id, window, cx);
+        for pane in failed {
+            self.close_pane(pane, window, cx);
         }
     }
 
@@ -464,7 +543,7 @@ impl AppWindow {
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             let Some(mt) = win.tabs.get(i) else { continue };
             let pane = mt.pane();
-            let shell = tab.session.as_ref().map(|s| s.default_title.as_str());
+            let shell = tab.session().map(|s| s.default_title.as_str());
             let parts = mt_mux::TitleParts {
                 title_override: mt.title_override.as_deref(),
                 pane_title: Some(pane.title.as_str()),
@@ -508,13 +587,22 @@ impl AppWindow {
             .collect();
         let mut cwds = Vec::new();
         for tab in &mut self.tabs {
-            let Some(session) = &tab.session else {
-                continue;
-            };
-            tab.process = session.term.foreground_process().map(|p| p.name);
-            tab.dirty = tab.process.is_some();
-            if let Some(cwd) = session.term.cwd() {
-                cwds.push((tab.pane, cwd));
+            let focused = tab.pane;
+            let mut busy = false;
+            for p in &tab.panes {
+                let Some(session) = &p.session else { continue };
+                let process = session.term.foreground_process().map(|p| p.name);
+                busy |= process.is_some();
+                if p.pane == focused {
+                    tab.process = process;
+                }
+                if let Some(cwd) = session.term.cwd() {
+                    cwds.push((p.pane, cwd));
+                }
+            }
+            // Any busy pane keeps the tab's dirty dot on.
+            if tab.session().is_some() {
+                tab.dirty = busy;
             }
         }
         {
@@ -536,10 +624,25 @@ impl AppWindow {
 
     // ---------------------------------------------------------------- live terminal
 
-    /// Starts a shell for tab `index`.
+    /// Starts a shell for the focused pane of tab `index`.
     pub fn attach_terminal(
         &mut self,
         index: usize,
+        opts: mt_term::SpawnOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
+        let Some(pane) = self.tabs.get(index).map(|t| t.pane) else {
+            return Ok(());
+        };
+        self.attach_pane_terminal(index, pane, opts, window, cx)
+    }
+
+    /// Starts a shell for `pane` in tab `index`.
+    pub fn attach_pane_terminal(
+        &mut self,
+        index: usize,
+        pane: u64,
         mut opts: mt_term::SpawnOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -554,10 +657,13 @@ impl AppWindow {
         let Some(tab) = self.tabs.get_mut(index) else {
             return Ok(());
         };
-        tab.session = Some(session);
-        tab.wake = Some(rx);
         let tab_id = tab.id;
-        self.start_pump(tab_id, window, cx);
+        let Some(view) = tab.pane_view_mut(pane) else {
+            return Ok(());
+        };
+        view.session = Some(session);
+        view.wake = Some(rx);
+        self.start_pump(tab_id, pane, window, cx);
         if !self.blink_started {
             self.blink_started = true;
             cx.spawn_in(window, async move |this, cx| loop {
@@ -576,10 +682,11 @@ impl AppWindow {
         Ok(())
     }
 
-    /// Attaches a terminal whose process lives in an SSH domain's daemon to tab `index`.
+    /// Attaches a terminal whose process lives in an SSH domain's daemon to `pane` of tab `index`.
     fn attach_remote_terminal(
         &mut self,
         index: usize,
+        pane: u64,
         domain: mt_mux::DomainId,
         spec: &SpawnSpec,
         window: &mut Window,
@@ -594,7 +701,6 @@ impl AppWindow {
         if opts.scrollback == 0 {
             opts.scrollback = session::DEFAULT_SCROLLBACK;
         }
-        let pane = self.tabs.get(index).ok_or("no such tab")?.pane;
         let (tx, rx) = async_channel::bounded::<()>(1);
         let term = crate::ssh_host::remote_terminal(cx, domain, pane, spec, opts, tx)?;
         let title = {
@@ -605,24 +711,30 @@ impl AppWindow {
             }
         };
         let tab = self.tabs.get_mut(index).ok_or("no such tab")?;
-        tab.session = Some(TerminalSession::from_terminal(term, title));
-        tab.wake = Some(rx);
         let tab_id = tab.id;
-        self.start_pump(tab_id, window, cx);
+        let view = tab.pane_view_mut(pane).ok_or("no such pane")?;
+        view.session = Some(TerminalSession::from_terminal(term, title));
+        view.wake = Some(rx);
+        self.start_pump(tab_id, pane, window, cx);
         Ok(())
     }
 
-    /// Drains a tab's terminal events whenever it wakes (and once up front, for output that
+    /// Drains a pane's terminal events whenever it wakes (and once up front, for output that
     /// arrived while the window was hidden). The task is dropped when the tab is parked.
-    fn start_pump(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) else {
+    fn start_pump(&mut self, tab_id: u64, pane: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.pane_view_mut(pane))
+        else {
             return;
         };
-        let Some(rx) = tab.wake.clone() else { return };
-        tab.pump = Some(cx.spawn_in(window, async move |this, cx| {
+        let Some(rx) = view.wake.clone() else { return };
+        view.pump = Some(cx.spawn_in(window, async move |this, cx| {
             if this
                 .update_in(cx, |this, window, cx| {
-                    this.pump_terminal(tab_id, window, cx)
+                    this.pump_terminal(tab_id, pane, window, cx)
                 })
                 .is_err()
             {
@@ -631,7 +743,7 @@ impl AppWindow {
             while rx.recv().await.is_ok() {
                 let alive = this
                     .update_in(cx, |this, window, cx| {
-                        this.pump_terminal(tab_id, window, cx)
+                        this.pump_terminal(tab_id, pane, window, cx)
                     })
                     .is_ok();
                 if !alive {
@@ -642,11 +754,11 @@ impl AppWindow {
     }
 
     pub(crate) fn live(&self) -> Option<&TerminalSession> {
-        self.tabs.get(self.active_tab)?.session.as_ref()
+        self.tabs.get(self.active_tab)?.session()
     }
 
     pub(crate) fn live_mut(&mut self) -> Option<&mut TerminalSession> {
-        self.tabs.get_mut(self.active_tab)?.session.as_mut()
+        self.tabs.get_mut(self.active_tab)?.session_mut()
     }
 
     fn blink(&mut self, cx: &mut Context<Self>) {
@@ -656,14 +768,22 @@ impl AppWindow {
         }
     }
 
-    /// Drains terminal events for a tab and refreshes its snapshot.
-    fn pump_terminal(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// Drains terminal events for a pane and refreshes its snapshot.
+    fn pump_terminal(
+        &mut self,
+        tab_id: u64,
+        pane: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(index) = self.tabs.iter().position(|t| t.id == tab_id) else {
             return;
         };
-        let tab = &mut self.tabs[index];
-        let pane = tab.pane;
-        let Some(session) = tab.session.as_mut() else {
+        let focused = self.tabs[index].pane == pane;
+        let Some(session) = self.tabs[index]
+            .pane_view_mut(pane)
+            .and_then(|p| p.session.as_mut())
+        else {
             return;
         };
         let mut bell = false;
@@ -704,7 +824,7 @@ impl AppWindow {
             }
         }
         session.refresh();
-        if index == self.active_tab {
+        if index == self.active_tab && focused {
             self.search_follow_output();
         }
         if let Some(title) = new_title {
@@ -734,7 +854,7 @@ impl AppWindow {
                         cx,
                     );
                 }
-                self.close_tab(tab_id, window, cx);
+                self.close_pane(pane, window, cx);
             }
         }
         cx.notify();
@@ -1502,22 +1622,24 @@ impl AppWindow {
 
     /// Closes a tab immediately; the window closes with its last tab.
     pub(crate) fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.tabs.iter().find(|t| t.id == id).map(|t| t.pane) else {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
             return;
         };
+        let panes: Vec<(u64, Option<Arc<mt_term::Terminal>>)> = tab
+            .panes
+            .iter()
+            .map(|p| (p.pane, p.session.as_ref().map(|s| s.term.clone())))
+            .collect();
         if self.renaming.as_ref().is_some_and(|(t, _)| *t == id) {
             self.renaming = None;
         }
         let empty = {
-            let term = self
-                .tabs
-                .iter()
-                .find(|t| t.id == id)
-                .and_then(|t| t.session.as_ref().map(|s| s.term.clone()));
             let host = mux_host::host(cx);
-            // Finish a running recording while the file is still ours to complete.
-            host.recorders.finish(pane, term.as_deref());
-            host.pending.remove(&pane);
+            for (pane, term) in &panes {
+                // Finish a running recording while the file is still ours to complete.
+                host.recorders.finish(*pane, term.as_deref());
+                host.pending.remove(pane);
+            }
             host.mux.close_tab(self.mux_window, id).unwrap_or(false)
         };
         self.reconcile(window, cx);
@@ -1526,13 +1648,43 @@ impl AppWindow {
         }
     }
 
-    fn busy_process(tab: &TabView) -> bool {
-        tab.session
-            .as_ref()
-            .is_some_and(|s| s.term.foreground_process().is_some())
+    /// Closes one pane. The tab's last pane closes the tab, and the window with its last tab.
+    pub(crate) fn close_pane(&mut self, pane: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|t| t.panes.iter().any(|p| p.pane == pane))
+        else {
+            return;
+        };
+        if tab.panes.len() <= 1 {
+            let id = tab.id;
+            self.close_tab(id, window, cx);
+            return;
+        }
+        let term = tab
+            .pane_view(pane)
+            .and_then(|p| p.session.as_ref().map(|s| s.term.clone()));
+        if tab.pane == pane {
+            self.leave_tab(cx);
+        }
+        {
+            let host = mux_host::host(cx);
+            host.recorders.finish(pane, term.as_deref());
+            host.pending.remove(&pane);
+            let _ = host.mux.close_pane(pane);
+        }
+        self.reconcile(window, cx);
+        self.after_pane_focus_change(window, cx);
     }
 
-    fn confirm_policy(&self) -> mt_mux::ConfirmClose {
+    /// Any pane of the tab runs a foreground process.
+    fn busy_process(tab: &TabView) -> bool {
+        tab.sessions()
+            .any(|s| s.term.foreground_process().is_some())
+    }
+
+    pub(crate) fn confirm_policy(&self) -> mt_mux::ConfirmClose {
         match self.cfg.confirm_close {
             mt_config::ConfirmClose::Always => mt_mux::ConfirmClose::Always,
             mt_config::ConfirmClose::Process => mt_mux::ConfirmClose::Process,
@@ -1576,6 +1728,7 @@ impl AppWindow {
         self.close_overlay(OverlayKind::CloseConfirm, true, window, cx);
         match target {
             Some(CloseTarget::Tab(id)) => self.close_tab(id, window, cx),
+            Some(CloseTarget::Pane(pane)) => self.close_pane(pane, window, cx),
             Some(CloseTarget::Window) => window.remove_window(),
             None => {}
         }
@@ -1589,6 +1742,19 @@ impl AppWindow {
                 match self.tabs.iter().find(|t| t.id == id).and_then(running) {
                     Some(p) => format!("{p} is still running in this tab. Close it anyway?"),
                     None => "Close this tab?".into(),
+                }
+            }
+            Some(CloseTarget::Pane(pane)) => {
+                let name = self
+                    .tabs
+                    .iter()
+                    .find_map(|t| t.pane_view(pane))
+                    .and_then(|v| v.session.as_ref())
+                    .and_then(|s| s.term.foreground_process())
+                    .map(|p| p.name);
+                match name {
+                    Some(p) => format!("{p} is still running in this pane. Close it anyway?"),
+                    None => "Close this pane?".into(),
                 }
             }
             Some(CloseTarget::Window) => {
@@ -1652,7 +1818,7 @@ impl AppWindow {
     }
 
     /// The pane the user is now looking at no longer needs to call for attention.
-    fn clear_active_attention(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn clear_active_attention(&mut self, cx: &mut Context<Self>) {
         if let Some(pane) = self.tabs.get(self.active_tab).map(|t| t.pane) {
             if mux_host::host(cx).mux.clear_attention(pane) {
                 cx.notify();
@@ -1662,7 +1828,7 @@ impl AppWindow {
 
     /// Before the active tab changes: copy mode and quick select belong to one pane's buffer,
     /// so they end here (copy mode clears its selection on the pane it is leaving).
-    fn leave_tab(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn leave_tab(&mut self, cx: &mut Context<Self>) {
         for kind in [OverlayKind::CopyMode, OverlayKind::QuickSelect] {
             if self.overlays.contains(kind) {
                 self.overlays.close(kind);
@@ -1673,7 +1839,7 @@ impl AppWindow {
     }
 
     /// After the active tab changed: the find bar's matches were computed for the old pane.
-    fn entered_tab(&mut self) {
+    pub(crate) fn entered_tab(&mut self) {
         if self.overlays.contains(OverlayKind::Search) {
             self.search_refresh(true);
         }
@@ -2261,10 +2427,8 @@ impl AppWindow {
     /// Re-reads the theme palette into every live terminal (OSC 4/10/11 answers).
     pub(crate) fn sync_palette(&self, cx: &App) {
         let palette = palette_of(cx.global::<Theme>());
-        for tab in &self.tabs {
-            if let Some(s) = &tab.session {
-                s.term.set_palette(palette.clone());
-            }
+        for s in self.tabs.iter().flat_map(|t| t.sessions()) {
+            s.term.set_palette(palette.clone());
         }
     }
 
@@ -2296,13 +2460,11 @@ impl AppWindow {
         window.set_background_appearance(background);
         let cursor = cursor_default(&cfg.cursor);
         let osc52 = osc52_policy(cfg.clipboard.osc52);
-        for tab in &self.tabs {
-            if let Some(s) = &tab.session {
-                s.term.set_runtime(osc52, cursor);
-                s.term
-                    .set_wide_regional_indicators(cfg.text.wide_regional_indicators);
-                s.term.set_vt_config(vt_config(&cfg));
-            }
+        for s in self.tabs.iter().flat_map(|t| t.sessions()) {
+            s.term.set_runtime(osc52, cursor);
+            s.term
+                .set_wide_regional_indicators(cfg.text.wide_regional_indicators);
+            s.term.set_vt_config(vt_config(&cfg));
         }
         self.cursor_phase = true;
         mux_host::sync_declared(cx);
@@ -2326,10 +2488,8 @@ impl AppWindow {
         );
         // Paint pushes the new grid size to each PTY; that is not a user resize.
         self.hud_armed.set(false);
-        for tab in &self.tabs {
-            if let Some(s) = &tab.session {
-                s.size.set((0, 0));
-            }
+        for s in self.tabs.iter().flat_map(|t| t.sessions()) {
+            s.size.set((0, 0));
         }
     }
 

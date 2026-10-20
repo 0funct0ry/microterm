@@ -696,3 +696,87 @@ mod vt_sequences {
         assert_eq!(pointer(&view, cx), CursorStyle::IBeam);
     }
 }
+
+#[gpui::test]
+fn split_panes_each_get_their_own_shell_and_size(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let left = view.read_with(cx, |t, _| t.tabs[0].pane);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let right = view.read_with(cx, |t, _| t.tabs[0].pane);
+    assert_ne!(left, right);
+    // Tests do not start shells on reconcile; give the new focused pane one.
+    view.update_in(cx, |this, window, cx| {
+        this.attach_terminal(
+            0,
+            SpawnOptions {
+                shell: "/bin/sh".into(),
+                env: vec![("PS1".into(), "R$ ".into())],
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+        .expect("spawn /bin/sh");
+    });
+    cx.run_until_parked();
+
+    // Painting sized each PTY to its own half of the window.
+    let sizes = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |t, _| {
+            let tab = &t.tabs[0];
+            (
+                tab.pane_view(left)
+                    .unwrap()
+                    .session
+                    .as_ref()
+                    .unwrap()
+                    .size
+                    .get(),
+                tab.pane_view(right)
+                    .unwrap()
+                    .session
+                    .as_ref()
+                    .unwrap()
+                    .size
+                    .get(),
+            )
+        })
+    };
+    let (l, r) = sizes(&view, cx);
+    assert!(l.0 > 0 && r.0 > 0, "both panes were laid out: {l:?} {r:?}");
+    assert!(
+        l.0.abs_diff(r.0) <= 2,
+        "an even split gives equal widths: {l:?} {r:?}"
+    );
+
+    // Keys go to the focused (right) pane only.
+    cx.simulate_input("echo only-right");
+    cx.simulate_keystrokes("enter");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let text = |view: &Entity<AppWindow>, cx: &mut VisualTestContext, pane: u64| -> String {
+        view.read_with(cx, |t, _| {
+            let s = t.tabs[0].pane_view(pane).unwrap().session.as_ref().unwrap();
+            (0..s.snapshot.rows)
+                .map(|r| s.snapshot.row_text(r))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    };
+    loop {
+        std::thread::sleep(Duration::from_millis(30));
+        cx.run_until_parked();
+        if text(&view, cx, right).contains("only-right") || Instant::now() > deadline {
+            break;
+        }
+    }
+    assert!(text(&view, cx, right).contains("only-right"));
+    assert!(!text(&view, cx, left).contains("only-right"));
+
+    // Closing the focused pane hands the tab back to the left shell.
+    cx.dispatch_action(ClosePane);
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |t, _| t.tabs[0].panes.len()), 1);
+    assert_eq!(view.read_with(cx, |t, _| t.tabs[0].pane), left);
+    assert!(view.read_with(cx, |t, _| t.live().is_some()));
+}

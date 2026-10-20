@@ -91,7 +91,8 @@ tabs = [{ title = "ssh", command = ["ssh", "prod"] }]
 
 Declared workspaces appear in the switcher at once and start their tabs the first time you switch
 to them. `microterm --workspace infra` starts straight in a workspace (it is created if it is not
-declared). `--cwd DIR` and `-e CMD…` apply to the first tab.
+declared). `--cwd DIR` and `-e CMD…` apply to the first tab. Tabs can start as
+[split panes](/docs/panes-and-splits/#declared-splits).
 
 ## One instance
 

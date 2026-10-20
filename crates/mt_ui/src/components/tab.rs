@@ -219,6 +219,13 @@ impl RenderOnce for Tab {
                     .whitespace_nowrap()
                     .child(self.title),
             })
+            .when(chrome.zoomed, |el| {
+                el.child(
+                    crate::components::Icon::new(crate::assets::IconName::Maximize)
+                        .size(px(11.))
+                        .color(t.text_muted),
+                )
+            })
             .when_some(chrome.badge, |el, kind| el.child(StatusDot::new(kind)))
             .when_some(chrome.progress, |el, pct| {
                 el.child(

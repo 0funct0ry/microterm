@@ -396,3 +396,103 @@ async fn a_pane_queued_before_connecting_starts_at_its_latest_size() {
     });
     h.send(Command::Shutdown);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn split_hints_reach_the_daemon_and_all_three_panes_reattach_after_a_reconnect() {
+    use mt_proto::mux::{encode, hello, read_frame};
+    use std::io::Write as _;
+
+    let env = start_daemon("splits");
+    let dialer = TestDialer::new(&env);
+    let (h, rx) = start(
+        &tokio::runtime::Handle::current(),
+        LinkConfig {
+            session: "dev".into(),
+            scrollback: 100,
+        },
+        dialer.clone(),
+    );
+    for (pane, word) in [(1, "alpha"), (2, "bravo"), (3, "charlie")] {
+        h.send(spawn_cmd(pane, &format!("printf '{word}'; sleep 60")));
+    }
+    // 2 split off 1 (side by side, 40%), 3 off 2 (stacked). Sent before the panes exist: the
+    // link holds them back until the daemon has confirmed both ends.
+    h.send(Command::Split {
+        pane: 2,
+        parent: 1,
+        axis: 0,
+        permille: 400,
+    });
+    h.send(Command::Split {
+        pane: 3,
+        parent: 2,
+        axis: 1,
+        permille: 500,
+    });
+
+    let mut seen: std::collections::BTreeMap<u64, String> = Default::default();
+    until(&rx, |e| {
+        if let LinkEvent::Bytes {
+            pane,
+            bytes,
+            replay: false,
+        } = e
+        {
+            seen.entry(*pane)
+                .or_default()
+                .push_str(&String::from_utf8_lossy(bytes));
+        }
+        (seen.get(&1).is_some_and(|s| s.contains("alpha"))
+            && seen.get(&2).is_some_and(|s| s.contains("bravo"))
+            && seen.get(&3).is_some_and(|s| s.contains("charlie")))
+        .then_some(())
+    })
+    .await;
+
+    dialer.sever();
+    until(&rx, |e| {
+        matches!(e, LinkEvent::State(LinkState::Reconnecting { .. })).then_some(())
+    })
+    .await;
+    dialer.restore();
+    h.send(Command::ReconnectNow);
+    // Nothing was printed while we were away, so there is nothing to replay: the link simply
+    // re-attaches to all three panes.
+    until(&rx, |e| {
+        matches!(e, LinkEvent::State(LinkState::Connected)).then_some(())
+    })
+    .await;
+    // A brand-new client sees how the panes were split.
+    let socket = paths::socket_path(&env.dir);
+    let infos = tokio::task::spawn_blocking(move || {
+        let mut s = StdStream::connect(socket).unwrap();
+        s.write_all(&encode(&hello()).unwrap()).unwrap();
+        s.write_all(
+            &encode(&Msg::Attach {
+                session: "dev".into(),
+                panes: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        loop {
+            match read_frame(&mut s).unwrap().unwrap() {
+                Msg::Attached { panes } => return panes,
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(infos.len(), 3);
+    let by_split: Vec<_> = infos
+        .iter()
+        .map(|i| i.split.map(|s| (s.axis, s.permille)))
+        .collect();
+    assert_eq!(by_split, [None, Some((0, 400)), Some((1, 500))]);
+
+    for pane in 1..=3 {
+        h.send(Command::Close { pane, kill: true });
+    }
+    h.send(Command::Shutdown);
+}

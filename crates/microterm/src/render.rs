@@ -112,7 +112,15 @@ pub fn render(out: &Output, o: &RenderOpts) -> String {
         Body::Text(t) => format!("{t}\n"),
         Body::Raw(r) => r.clone(),
         Body::Spawned { kind, spawned } => {
-            if o.tty {
+            if o.tty && *kind == "pane" {
+                let mark = paint(if o.unicode { "✔" } else { "ok" }, GREEN, o.color);
+                format!(
+                    "{mark} pane {} created (tab {}, window {})\n",
+                    paint(&spawned.pane.to_string(), CYAN, o.color),
+                    paint(&spawned.tab.to_string(), CYAN, o.color),
+                    paint(&spawned.window.to_string(), CYAN, o.color),
+                )
+            } else if o.tty {
                 let mark = paint(if o.unicode { "✔" } else { "ok" }, GREEN, o.color);
                 format!(
                     "{mark} {kind} {} created (pane {}, window {})\n",
@@ -309,6 +317,45 @@ fn card_rich(kv: &[(String, String)], o: &RenderOpts) -> String {
     out
 }
 
+/// `1 | (2 / 3)`: `|` puts panes side by side, `/` stacks them; a split that is not 50/50
+/// shows the first pane's share (`1 |40 2`).
+pub fn layout_text(l: &mt_proto::LayoutNode) -> String {
+    fn go(l: &mt_proto::LayoutNode, top: bool) -> String {
+        match l {
+            mt_proto::LayoutNode::Leaf { pane } => pane.to_string(),
+            mt_proto::LayoutNode::Split {
+                axis,
+                percent,
+                a,
+                b,
+            } => {
+                let op = match axis {
+                    mt_proto::SplitAxis::Horizontal => "|",
+                    mt_proto::SplitAxis::Vertical => "/",
+                };
+                let op = if *percent == 50 {
+                    op.to_string()
+                } else {
+                    format!("{op}{percent}")
+                };
+                let s = format!("{} {op} {}", go(a, false), go(b, false));
+                if top {
+                    s
+                } else {
+                    format!("({s})")
+                }
+            }
+        }
+    }
+    go(l, true)
+}
+
+fn tab_layout(t: &mt_proto::TabNode) -> Option<String> {
+    (t.panes.len() > 1)
+        .then(|| t.layout.as_ref().map(layout_text))
+        .flatten()
+}
+
 fn tree_plain(s: &MuxSnapshot) -> String {
     let mut out = String::new();
     for ws in &s.workspaces {
@@ -325,10 +372,13 @@ fn tree_plain(s: &MuxSnapshot) -> String {
             ));
             for t in &w.tabs {
                 out.push_str(&format!(
-                    "    tab {} {:?}{}\n",
+                    "    tab {} {:?}{}{}\n",
                     t.id,
                     t.title,
-                    if t.active { " (active)" } else { "" }
+                    if t.active { " (active)" } else { "" },
+                    tab_layout(t)
+                        .map(|l| format!("  [{l}]"))
+                        .unwrap_or_default()
                 ));
                 for p in &t.panes {
                     out.push_str(&format!(
@@ -391,6 +441,9 @@ fn pane_label(p: &PaneInfo, o: &RenderOpts) -> String {
     if let Some(cwd) = &p.cwd {
         s.push_str(&format!("  {}", paint(cwd, DIM, o.color)));
     }
+    if p.zoomed {
+        s.push_str(&format!("  {}", paint("(zoomed)", DIM, o.color)));
+    }
     if p.exited {
         let code = p.exit_code.map(|c| format!(" {c}")).unwrap_or_default();
         return paint(&format!("{s}  exited{code}"), DIM, o.color);
@@ -430,10 +483,16 @@ fn tree_rich(snap: &MuxSnapshot, o: &RenderOpts) -> String {
                         .iter()
                         .map(|t| Node {
                             label: format!(
-                                "{}tab {}  {}",
+                                "{}tab {}  {}{}",
                                 if t.active { active } else { "" },
                                 paint(&t.id.to_string(), CYAN, o.color),
-                                t.title
+                                t.title,
+                                tab_layout(t)
+                                    .map(|l| format!(
+                                        "  {}",
+                                        paint(&format!("[{l}]"), DIM, o.color)
+                                    ))
+                                    .unwrap_or_default()
                             ),
                             children: t
                                 .panes

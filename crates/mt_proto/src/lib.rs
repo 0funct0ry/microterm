@@ -262,6 +262,65 @@ fn yes() -> bool {
     true
 }
 
+/// Which neighbour of a pane (SPEC §17.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// `pane split`: the new pane inherits the target's domain and cwd unless `cwd` or `command`
+/// say otherwise. `percent` is the new pane's share (default 50).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneSplitParams {
+    #[serde(flatten)]
+    pub target: Target,
+    pub axis: SplitAxis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+}
+
+/// `pane focus`: focus the target pane, or its neighbour in `direction`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneFocusParams {
+    #[serde(flatten)]
+    pub target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+}
+
+/// `pane resize`: move the target's border in `direction` by `cells` terminal cells.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneResizeParams {
+    #[serde(flatten)]
+    pub target: Target,
+    pub direction: Direction,
+    pub cells: u32,
+}
+
+/// `pane swap`: exchange the target with its neighbour in `direction`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneDirParams {
+    #[serde(flatten)]
+    pub target: Target,
+    pub direction: Direction,
+}
+
+/// Result of `pane split`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneSplitResult {
+    pub pane: u64,
+    pub tab: u64,
+    pub window: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetTextParams {
     #[serde(flatten)]
@@ -543,6 +602,12 @@ pub enum Request {
     PaneStatusClear(Target),
     PaneStatusGet(Target),
     PaneClose(Target),
+    PaneSplit(PaneSplitParams),
+    PaneFocus(PaneFocusParams),
+    PaneZoom(Target),
+    PaneResize(PaneResizeParams),
+    PaneSwap(PaneDirParams),
+    PaneRotate(Target),
     RecordStart(RecordStartParams),
     RecordStop {
         pane: u64,
@@ -580,6 +645,12 @@ pub const METHODS: &[&str] = &[
     "pane.status_clear",
     "pane.status_get",
     "pane.close",
+    "pane.split",
+    "pane.focus",
+    "pane.zoom",
+    "pane.resize",
+    "pane.swap",
+    "pane.rotate",
     "record.start",
     "record.stop",
     "replay.start",
@@ -616,6 +687,12 @@ impl Request {
             Request::PaneStatusClear(_) => "pane.status_clear",
             Request::PaneStatusGet(_) => "pane.status_get",
             Request::PaneClose(_) => "pane.close",
+            Request::PaneSplit(_) => "pane.split",
+            Request::PaneFocus(_) => "pane.focus",
+            Request::PaneZoom(_) => "pane.zoom",
+            Request::PaneResize(_) => "pane.resize",
+            Request::PaneSwap(_) => "pane.swap",
+            Request::PaneRotate(_) => "pane.rotate",
             Request::RecordStart(_) => "record.start",
             Request::RecordStop { .. } => "record.stop",
             Request::ReplayStart(_) => "replay.start",
@@ -650,7 +727,13 @@ impl Request {
             | Request::PaneGet(t)
             | Request::PaneStatusClear(t)
             | Request::PaneStatusGet(t)
-            | Request::PaneClose(t) => to(t),
+            | Request::PaneClose(t)
+            | Request::PaneZoom(t)
+            | Request::PaneRotate(t) => to(t),
+            Request::PaneSplit(p) => to(p),
+            Request::PaneFocus(p) => to(p),
+            Request::PaneResize(p) => to(p),
+            Request::PaneSwap(p) => to(p),
             Request::WindowNew(p) | Request::TabNew(p) => to(p),
             Request::TabFocus(p) => to(p),
             Request::TabRename(p) => to(p),
@@ -734,6 +817,12 @@ impl Request {
             "pane.status_clear" => Request::PaneStatusClear(p(method, params)?),
             "pane.status_get" => Request::PaneStatusGet(p(method, params)?),
             "pane.close" => Request::PaneClose(p(method, params)?),
+            "pane.split" => Request::PaneSplit(p(method, params)?),
+            "pane.focus" => Request::PaneFocus(p(method, params)?),
+            "pane.zoom" => Request::PaneZoom(p(method, params)?),
+            "pane.resize" => Request::PaneResize(p(method, params)?),
+            "pane.swap" => Request::PaneSwap(p(method, params)?),
+            "pane.rotate" => Request::PaneRotate(p(method, params)?),
             "record.start" => Request::RecordStart(p(method, params)?),
             "record.stop" => Request::RecordStop {
                 pane: p::<Pane>(method, params)?.pane,
@@ -767,6 +856,31 @@ pub struct Size {
     pub rows: u16,
 }
 
+/// Which way a split divides its area (SPEC §17.1): `horizontal` puts `a` left of `b`,
+/// `vertical` puts `a` above `b`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitAxis {
+    Horizontal,
+    Vertical,
+}
+
+/// A tab's pane layout, as shown by `ctl list --json` and `tab list` (SPEC §17.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum LayoutNode {
+    Leaf {
+        pane: u64,
+    },
+    Split {
+        axis: SplitAxis,
+        /// Share of the area given to `a`, 1–99.
+        percent: u8,
+        a: Box<LayoutNode>,
+        b: Box<LayoutNode>,
+    },
+}
+
 /// `pane list|get` (SPEC §12.3). `exited`/`exit_code` are always `false`/`null` today: a pane is
 /// removed from the mux when its process exits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -781,6 +895,9 @@ pub struct PaneInfo {
     pub process: Option<String>,
     pub size: Size,
     pub focused: bool,
+    /// The pane fills its tab (`pane zoom`).
+    #[serde(default)]
+    pub zoomed: bool,
     pub exited: bool,
     pub exit_code: Option<i32>,
     /// `null` until something sets a status (`pane status set`).
@@ -830,6 +947,9 @@ pub struct TabInfo {
     /// Active tab of the focused window.
     pub focused: bool,
     pub panes: Vec<u64>,
+    /// How the panes are split; `null` from older servers.
+    #[serde(default)]
+    pub layout: Option<LayoutNode>,
 }
 
 /// `window list`.
@@ -860,6 +980,8 @@ pub struct TabNode {
     pub active: bool,
     pub focused: bool,
     pub panes: Vec<PaneInfo>,
+    #[serde(default)]
+    pub layout: Option<LayoutNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -997,6 +1119,14 @@ pub enum Event {
     PaneOutput {
         pane: u64,
     },
+    /// The tab's focused pane changed (splits, `pane focus`).
+    PaneFocused {
+        pane: u64,
+    },
+    /// Splits, ratios, pane order or zoom of a tab changed.
+    LayoutChanged {
+        tab: u64,
+    },
     TitleChanged {
         pane: u64,
     },
@@ -1093,6 +1223,8 @@ impl Event {
             Event::PaneAdded { .. } => "pane.added",
             Event::PaneRemoved { .. } => "pane.removed",
             Event::PaneOutput { .. } => "pane.output",
+            Event::PaneFocused { .. } => "pane.focused",
+            Event::LayoutChanged { .. } => "tab.layout_changed",
             Event::TitleChanged { .. } => "pane.title_changed",
             Event::CwdChanged { .. } => "pane.cwd_changed",
             Event::StatusChanged { .. } => "pane.status_changed",
@@ -1118,6 +1250,7 @@ impl Event {
             Event::PaneAdded { pane }
             | Event::PaneRemoved { pane }
             | Event::PaneOutput { pane }
+            | Event::PaneFocused { pane }
             | Event::TitleChanged { pane }
             | Event::CwdChanged { pane }
             | Event::StatusChanged { pane }
@@ -1126,7 +1259,8 @@ impl Event {
             | Event::CommandFinished { pane, .. } => Subject::Pane(*pane),
             Event::TabAdded { tab, .. }
             | Event::TabRemoved { tab, .. }
-            | Event::TabMoved { tab, .. } => Subject::Tab(*tab),
+            | Event::TabMoved { tab, .. }
+            | Event::LayoutChanged { tab } => Subject::Tab(*tab),
             Event::WindowAdded { window } | Event::WindowRemoved { window } => {
                 Subject::Window(*window)
             }
@@ -1437,6 +1571,28 @@ mod tests {
             Request::PaneStatusClear(Target::pane(3)),
             Request::PaneStatusGet(Target::pane(3)),
             Request::PaneClose(t),
+            Request::PaneSplit(PaneSplitParams {
+                target: Target::pane(2),
+                axis: SplitAxis::Vertical,
+                percent: Some(30),
+                cwd: Some("/tmp".into()),
+                command: Some(vec!["htop".into()]),
+            }),
+            Request::PaneFocus(PaneFocusParams {
+                target: Target::pane(2),
+                direction: Some(Direction::Left),
+            }),
+            Request::PaneZoom(Target::pane(2)),
+            Request::PaneResize(PaneResizeParams {
+                target: Target::pane(2),
+                direction: Direction::Down,
+                cells: 5,
+            }),
+            Request::PaneSwap(PaneDirParams {
+                target: Target::pane(2),
+                direction: Direction::Right,
+            }),
+            Request::PaneRotate(Target::pane(2)),
             Request::RecordStart(RecordStartParams {
                 pane: 1,
                 path: "x.cast".into(),
@@ -1471,7 +1627,8 @@ mod tests {
              workspace.delete window.list window.new window.focus window.close tab.list tab.new \
              tab.focus tab.rename tab.close pane.list pane.get pane.send_text pane.get_text \
              pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
-             pane.close record.start record.stop replay.start config.reload subscribe"
+             pane.close pane.split pane.focus pane.zoom pane.resize pane.swap pane.rotate \
+             record.start record.stop replay.start config.reload subscribe"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(

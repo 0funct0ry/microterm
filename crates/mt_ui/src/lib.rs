@@ -20,6 +20,7 @@ pub mod mru;
 pub mod mux_host;
 pub mod notifier;
 pub mod overlay_stack;
+pub mod panes;
 pub mod picker_state;
 pub mod platform;
 pub mod pointer_shape;
@@ -120,6 +121,7 @@ pub fn run(opts: RunOptions) {
                         cwd: opts.cwd.clone(),
                         command: opts.command.clone(),
                         title: None,
+                        ..Default::default()
                     }
                 });
             if let Err(e) = mux_host::show_workspace(cx, &startup_workspace, true, first) {

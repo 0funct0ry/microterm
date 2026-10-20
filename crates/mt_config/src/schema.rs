@@ -24,6 +24,7 @@ pub struct Config {
     pub scrollbar: Scrollbar,
     pub selection: Selection,
     pub mouse: Mouse,
+    pub panes: Panes,
     pub clipboard: Clipboard,
     pub paste: Paste,
     pub bell: Bell,
@@ -61,6 +62,7 @@ impl Default for Config {
             scrollbar: Scrollbar::default(),
             selection: Selection::default(),
             mouse: Mouse::default(),
+            panes: Panes::default(),
             clipboard: Clipboard::default(),
             paste: Paste::default(),
             bell: Bell::default(),
@@ -387,7 +389,7 @@ pub struct Mouse {
     pub right_click: RightClick,
     pub hide_while_typing: bool,
     pub scroll_multiplier: f32,
-    /// Accepted from M11 (splits).
+    /// Hovering a pane focuses it (SPEC §17.1).
     pub focus_follows_mouse: bool,
 }
 
@@ -398,6 +400,25 @@ impl Default for Mouse {
             hide_while_typing: true,
             scroll_multiplier: 3.0,
             focus_follows_mouse: false,
+        }
+    }
+}
+
+/// `[panes]` (SPEC §17.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Panes {
+    /// Dim overlay on unfocused panes, 0.0 to 1.0.
+    pub inactive_dim: f32,
+    /// Delay before `mouse.focus_follows_mouse` focuses the hovered pane.
+    pub focus_delay_ms: u32,
+}
+
+impl Default for Panes {
+    fn default() -> Self {
+        Self {
+            inactive_dim: 0.15,
+            focus_delay_ms: 0,
         }
     }
 }
@@ -762,7 +783,43 @@ pub struct WorkspaceTab {
     pub cwd: Option<String>,
     #[serde(default)]
     pub command: Vec<String>,
+    /// Makes the tab a split of the two `panes` instead of a single pane (SPEC §17.1).
+    #[serde(default)]
+    pub split: Option<SplitKind>,
+    /// Share of the first pane, 1 to 99 (default 50).
+    #[serde(default)]
+    pub percent: Option<u8>,
+    #[serde(default)]
+    pub panes: Vec<WorkspacePane>,
 }
+
+/// How a declared split divides its area: `horizontal` puts the two panes side by side,
+/// `vertical` stacks them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitKind {
+    Horizontal,
+    Vertical,
+}
+
+/// One node of a declared split tree: a pane (`cwd`, `command`) or, with `split`, exactly two
+/// child `panes`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacePane {
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub split: Option<SplitKind>,
+    #[serde(default)]
+    pub percent: Option<u8>,
+    #[serde(default)]
+    pub panes: Vec<WorkspacePane>,
+}
+
+/// Splits nest at most this deep (a tab with `split` is depth 1).
+pub const MAX_SPLIT_DEPTH: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceDef {

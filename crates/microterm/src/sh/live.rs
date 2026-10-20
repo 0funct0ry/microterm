@@ -29,6 +29,7 @@ const WATCHED: &[&str] = &[
     "tab.*",
     "pane.added",
     "pane.removed",
+    "pane.focused",
     "pane.title_changed",
     "pane.cwd_changed",
     "pane.exited",

@@ -24,6 +24,17 @@ pub struct PaneInfo {
     /// `Some(status)` when the process exited while no client was attached.
     pub exited: Option<ExitInfo>,
     pub session: String,
+    /// How the pane was split off another one (SPEC §17.1), so a client can rebuild the layout.
+    pub split: Option<SplitInfo>,
+}
+
+/// A pane created by splitting `parent`. `axis` is 0 for side by side (the new pane on the
+/// right), 1 for stacked (below); `permille` is the share the new pane took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplitInfo {
+    pub parent: PaneId,
+    pub axis: u8,
+    pub permille: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +105,14 @@ pub enum Msg {
     Error {
         message: String,
     },
+    /// `pane` was split off `parent` (both already spawned). The daemon keeps this per pane and
+    /// returns it in `Attached`/`Listing`; the layout itself is the client's.
+    Split {
+        pane: PaneId,
+        parent: PaneId,
+        axis: u8,
+        permille: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +150,7 @@ impl Msg {
             Msg::List => 17,
             Msg::Listing { .. } => 18,
             Msg::Error { .. } => 19,
+            Msg::Split { .. } => 20,
         }
     }
 }
@@ -255,6 +275,11 @@ mod tests {
             rows: 24,
             exited: Some(ExitInfo { status: Some(2) }),
             session: "prod".into(),
+            split: Some(SplitInfo {
+                parent: 1,
+                axis: 0,
+                permille: 400,
+            }),
         };
         vec![
             hello(),
@@ -314,6 +339,12 @@ mod tests {
             Msg::Listing { panes: vec![info] },
             Msg::Error {
                 message: "nope".into(),
+            },
+            Msg::Split {
+                pane: 5,
+                parent: 4,
+                axis: 1,
+                permille: 300,
             },
         ]
     }

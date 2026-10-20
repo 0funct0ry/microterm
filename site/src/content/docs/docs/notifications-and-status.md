@@ -128,6 +128,7 @@ Prints one JSON object per line until interrupted:
 | `--type` | Fires when |
 |---|---|
 | `pane.added`, `pane.removed` | a pane opens or closes |
+| `pane.focused`, `tab.layout_changed` | a tab's focused pane or its split layout changed |
 | `pane.title_changed`, `pane.cwd_changed` | the title or working directory changed |
 | `pane.exited` | the process ended (`status`) |
 | `pane.command_finished` | an OSC 133 `D` mark (`exit_code`); needs [shell integration](/docs/shell-integration/) |

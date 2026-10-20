@@ -62,6 +62,32 @@ impl MuxHost {
         self.open.remove(&window);
     }
 
+    /// Splits `pane` and records what to launch in the new one.
+    pub(crate) fn split_pane(
+        &mut self,
+        pane: Id,
+        axis: mt_mux::Axis,
+        new_share: f32,
+        spec: SpawnSpec,
+    ) -> Option<Id> {
+        let new = self
+            .mux
+            .split_pane(pane, axis, new_share, Some(spec.domain), spec.cwd.clone())
+            .ok()?;
+        self.pending.insert(
+            new,
+            SpawnSpec {
+                split_from: Some(mt_mux::SplitOrigin {
+                    parent: pane,
+                    axis,
+                    permille: (new_share * 1000.0).round().clamp(1.0, 999.0) as u16,
+                }),
+                ..spec
+            },
+        );
+        Some(new)
+    }
+
     /// Adds a tab (and its launch spec) to a mux window.
     pub(crate) fn spawn_tab(&mut self, window: Id, spec: SpawnSpec) -> Option<(Id, Id)> {
         let (tab, pane) = self
@@ -140,22 +166,21 @@ fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec
         return;
     }
     let window = host.mux.spawn_window(Some(workspace));
-    let mut specs: Vec<SpawnSpec> = declared
-        .map(|d| {
-            d.tabs
-                .into_iter()
-                .map(|t| SpawnSpec {
-                    cwd: t.cwd.as_deref().map(expand_tilde),
-                    command: (!t.command.is_empty()).then_some(t.command),
-                    title: t.title,
-                    ..Default::default()
-                })
-                .collect()
+    let tabs: Vec<mt_config::schema::WorkspaceTab> = declared.map(|d| d.tabs).unwrap_or_default();
+    let mut specs: Vec<SpawnSpec> = tabs
+        .iter()
+        .map(|t| SpawnSpec {
+            cwd: t.cwd.as_deref().map(expand_tilde),
+            command: (!t.command.is_empty()).then(|| t.command.clone()),
+            title: t.title.clone(),
+            ..Default::default()
         })
-        .unwrap_or_default();
+        .collect();
     if specs.is_empty() {
         specs.push(SpawnSpec::default());
     }
+    // A command-line override replaces the first tab outright, splits included.
+    let overridden = first.is_some();
     if let Some(first) = first {
         let title = specs[0].title.take();
         specs[0] = SpawnSpec {
@@ -163,11 +188,52 @@ fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec
             ..first
         };
     }
-    for spec in specs {
-        host.spawn_tab(window, spec);
+    for (i, spec) in specs.into_iter().enumerate() {
+        let Some((_, pane)) = host.spawn_tab(window, spec) else {
+            continue;
+        };
+        if let Some(t) = tabs
+            .get(i)
+            .filter(|t| t.split.is_some() && !(overridden && i == 0))
+        {
+            let node = mt_config::schema::WorkspacePane {
+                cwd: t.cwd.clone(),
+                command: t.command.clone(),
+                split: t.split,
+                percent: t.percent,
+                panes: t.panes.clone(),
+            };
+            let first_leaf = realise_split(host, pane, &node);
+            let _ = host.mux.focus_pane(first_leaf);
+        }
     }
     // Declared tabs open in order with the first one active.
     let _ = host.mux.activate_tab(window, 0);
+}
+
+/// Builds a declared split tree (`[[workspaces]]` tabs, SPEC §17.1) inside `pane`, which becomes
+/// the node's first leaf; returns that leaf. The first child keeps `percent` of the space.
+fn realise_split(host: &mut MuxHost, pane: Id, node: &mt_config::schema::WorkspacePane) -> Id {
+    let leaf_spec = |n: &mt_config::schema::WorkspacePane| SpawnSpec {
+        cwd: n.cwd.as_deref().map(expand_tilde),
+        command: (!n.command.is_empty()).then(|| n.command.clone()),
+        ..Default::default()
+    };
+    let (Some(kind), [a, b]) = (node.split, node.panes.as_slice()) else {
+        host.pending.insert(pane, leaf_spec(node));
+        return pane;
+    };
+    let axis = match kind {
+        mt_config::schema::SplitKind::Horizontal => mt_mux::Axis::Horizontal,
+        mt_config::schema::SplitKind::Vertical => mt_mux::Axis::Vertical,
+    };
+    let first_share = f32::from(node.percent.unwrap_or(50).clamp(1, 99)) / 100.0;
+    let Some(second) = host.split_pane(pane, axis, 1.0 - first_share, leaf_spec(b)) else {
+        return pane;
+    };
+    let first = realise_split(host, pane, a);
+    realise_split(host, second, b);
+    first
 }
 
 /// Opens an OS window for a mux window.
@@ -302,8 +368,8 @@ fn to_json<T: serde::Serialize>(v: &T) -> Reply {
 pub(crate) fn terminal(cx: &mut App, pane: Id) -> Option<Arc<Terminal>> {
     let h = host(cx);
     for tabs in h.parked.values() {
-        if let Some(t) = tabs.iter().find(|t| t.pane == pane) {
-            return t.session.as_ref().map(|s| s.term.clone());
+        if let Some(v) = tabs.iter().find_map(|t| t.pane_view(pane)) {
+            return v.session.as_ref().map(|s| s.term.clone());
         }
     }
     let handles: Vec<_> = h.open.values().copied().collect();
@@ -312,8 +378,8 @@ pub(crate) fn terminal(cx: &mut App, pane: Id) -> Option<Arc<Terminal>> {
             .read_with(cx, |view, _| {
                 view.tabs
                     .iter()
-                    .find(|t| t.pane == pane)
-                    .and_then(|t| t.session.as_ref().map(|s| s.term.clone()))
+                    .find_map(|t| t.pane_view(pane))
+                    .and_then(|v| v.session.as_ref().map(|s| s.term.clone()))
             })
             .ok()
             .flatten()
@@ -495,7 +561,13 @@ fn kill_pane(cx: &mut App, pane: Id) -> Reply {
         .kill_pane(pane)
         .map_err(|e| RpcError::not_found(e.to_string()))?;
     if let Some(tabs) = h.parked.get_mut(&window) {
-        tabs.retain(|t| t.id != tab);
+        // A split tab survives losing one pane; `reconcile` drops the pane's view when the
+        // window is shown again.
+        if h.mux.tab_location(tab).is_none() {
+            tabs.retain(|t| t.id != tab);
+        } else if let Some(t) = tabs.iter_mut().find(|t| t.id == tab) {
+            t.panes.retain(|p| p.pane != pane);
+        }
         if closed {
             h.parked.remove(&window);
         }
@@ -586,6 +658,38 @@ fn close(cx: &mut App, request: &Request) -> Reply {
     Ok(json!({ "closed": set.panes }))
 }
 
+/// `pane.split`: the new pane inherits the target's domain; its shell starts on `reconcile`.
+fn split(cx: &mut App, p: &mt_proto::PaneSplitParams) -> Reply {
+    let rows = rows(cx);
+    let h = host(cx);
+    let done = ipc_ops::split_model(&mut h.mux, &rows, p)?;
+    let domain = h
+        .mux
+        .pane_domain(done.pane)
+        .unwrap_or(mt_mux::LOCAL_DOMAIN_ID);
+    let cwd = h.mux.pane(done.pane).and_then(|pane| pane.cwd.clone());
+    h.pending.insert(
+        done.pane,
+        SpawnSpec {
+            domain,
+            cwd,
+            command: p.command.clone().filter(|c| !c.is_empty()),
+            split_from: Some(mt_mux::SplitOrigin {
+                parent: p.target.pane.unwrap_or_default(),
+                axis: match p.axis {
+                    mt_proto::SplitAxis::Horizontal => mt_mux::Axis::Horizontal,
+                    mt_proto::SplitAxis::Vertical => mt_mux::Axis::Vertical,
+                },
+                permille: u16::from(p.percent.unwrap_or(50)) * 10,
+            }),
+            ..Default::default()
+        },
+    );
+    show_window_workspace(cx, done.window)?;
+    reconcile_window(cx, done.window, false);
+    to_json(&done)
+}
+
 fn delete_workspace(cx: &mut App, name: &str, force: bool) -> Reply {
     let rows = rows(cx);
     let panes = ipc_ops::plan_workspace_delete(&rows, name, force, confirm_policy(cx))?;
@@ -646,10 +750,11 @@ fn pane_in_view(cx: &mut App, pane: Id) -> bool {
     let Some((window, index)) = host(cx).mux.locate_pane(pane) else {
         return false;
     };
+    // A pane beside the focused one is on screen but not the one being typed into.
     let active = host(cx)
         .mux
         .window(window)
-        .is_some_and(|w| w.active == index);
+        .is_some_and(|w| w.active == index && w.tabs[index].pane().id == pane);
     let handle = host(cx).open.get(&window).copied();
     active
         && handle.is_some_and(|h| {
@@ -721,9 +826,15 @@ pub(crate) fn tab_chrome(cx: &App, pane: Id) -> crate::tab_chrome::TabChrome {
     let Some(h) = cx.try_global::<MuxHost>() else {
         return Default::default();
     };
-    h.mux.pane(pane).map_or_else(Default::default, |p| {
+    let mut chrome = h.mux.pane(pane).map_or_else(Default::default, |p| {
         crate::tab_chrome::tab_chrome(p.status.as_ref(), p.attention)
-    })
+    });
+    chrome.zoomed = h
+        .mux
+        .locate_pane(pane)
+        .and_then(|(w, i)| h.mux.window(w).map(|w| w.tabs[i].zoomed.is_some()))
+        .unwrap_or(false);
+    chrome
 }
 
 /// `[ctl].capture_max_bytes`.
@@ -938,6 +1049,21 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
             }
             Ok(result)
         }
+        Request::PaneSplit(p) => split(cx, &p),
+        Request::PaneFocus(_)
+        | Request::PaneZoom(_)
+        | Request::PaneResize(_)
+        | Request::PaneSwap(_)
+        | Request::PaneRotate(_) => {
+            let rows = rows(cx);
+            let r = ipc_ops::layout_op(&mut host(cx).mux, &rows, &request)?;
+            let pane = r.get("pane").and_then(Value::as_u64);
+            if let Some((window, _)) = pane.and_then(|p| host(cx).mux.locate_pane(p)) {
+                show_window_workspace(cx, window)?;
+                reconcile_window(cx, window, false);
+            }
+            Ok(r)
+        }
         Request::PaneRun(_) | Request::PaneWait(_) => Err(RpcError::internal(
             "pane.run and pane.wait answer later; they go through dispatch()",
         )),
@@ -1086,6 +1212,185 @@ mod tests {
                 Some(&["htop".to_string()][..])
             );
         });
+    }
+
+    #[gpui::test]
+    fn declared_nested_splits_build_the_tree(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let src = r#"
+[[workspaces]]
+name = "api"
+tabs = [
+  { title = "dev", split = "horizontal", percent = 60, panes = [
+      { cwd = "/srv", command = ["nvim"] },
+      { split = "vertical", panes = [ { command = ["cargo", "watch"] }, { command = ["htop"] } ] },
+  ] },
+  { title = "plain" },
+]
+"#;
+            let mut s = Settings::defaults();
+            s.config = std::sync::Arc::new(mt_config::parse_str(src).unwrap().config);
+            cx.set_global(s);
+            cx.set_global(Theme::one_dark());
+            ensure(cx);
+            show_workspace(cx, "api", false, None).unwrap();
+            let h = cx.global::<MuxHost>();
+            let ws = h.mux.workspace_by_name("api").unwrap().id;
+            let win = h.mux.windows_in(ws).next().unwrap();
+            assert_eq!(win.tabs.len(), 2);
+            let tab = &win.tabs[0];
+            let ids: Vec<_> = tab.tree.panes().iter().map(|p| p.id).collect();
+            assert_eq!(ids.len(), 3);
+            let cmds: Vec<_> = ids
+                .iter()
+                .map(|id| h.pending.get(id).and_then(|s| s.command.clone()))
+                .collect();
+            // Leaves are in layout order; the spawned terminals are not started in tests, so
+            // `pending` still holds each pane's launch spec.
+            assert_eq!(
+                cmds,
+                [
+                    Some(vec!["nvim".to_string()]),
+                    Some(vec!["cargo".to_string(), "watch".to_string()]),
+                    Some(vec!["htop".to_string()]),
+                ]
+            );
+            assert_eq!(
+                h.pending[&ids[0]].cwd.as_deref(),
+                Some(std::path::Path::new("/srv"))
+            );
+            assert_eq!(tab.pane().id, ids[0], "focus starts on the first pane");
+            let rows = h.mux.rows(&|_| Default::default());
+            let mt_proto::LayoutNode::Split { axis, percent, .. } = rows.tabs[0].layout.clone()
+            else {
+                panic!("declared a split")
+            };
+            assert_eq!((axis, percent), (mt_proto::SplitAxis::Horizontal, 60));
+            assert_eq!(win.tabs[1].tree.leaf_count(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn ipc_split_focus_zoom_resize_and_close(cx: &mut TestAppContext) {
+        init(cx);
+        cx.update(|cx| show_workspace(cx, "default", true, None).unwrap());
+        let first = list::<mt_proto::PaneInfo>(cx, Request::PaneList(Default::default()))[0].id;
+        let split = |cx: &mut TestAppContext, target: u64, axis| -> mt_proto::PaneSplitResult {
+            serde_json::from_value(
+                call(
+                    cx,
+                    Request::PaneSplit(mt_proto::PaneSplitParams {
+                        target: Target::pane(target),
+                        axis,
+                        percent: None,
+                        cwd: None,
+                        command: Some(vec!["htop".into()]),
+                    }),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let b = split(cx, first, mt_proto::SplitAxis::Horizontal);
+        let c = split(cx, b.pane, mt_proto::SplitAxis::Vertical);
+        assert_eq!((b.tab, c.tab), (b.tab, b.tab), "splits stay in the tab");
+
+        let snap: mt_proto::MuxSnapshot =
+            serde_json::from_value(call(cx, Request::MuxList).unwrap()).unwrap();
+        let tab = &snap.workspaces[0].windows[0].tabs[0];
+        assert_eq!(tab.panes.len(), 3);
+        assert_eq!(tab.panes.iter().filter(|p| p.focused).count(), 1);
+        assert!(tab.panes.iter().find(|p| p.id == c.pane).unwrap().focused);
+        assert!(matches!(
+            tab.layout,
+            Some(mt_proto::LayoutNode::Split {
+                axis: mt_proto::SplitAxis::Horizontal,
+                ..
+            })
+        ));
+
+        // Directional focus: pane c is bottom-right, so left is the first pane.
+        call(
+            cx,
+            Request::PaneFocus(mt_proto::PaneFocusParams {
+                target: Target::pane(c.pane),
+                direction: Some(mt_proto::Direction::Left),
+            }),
+        )
+        .unwrap();
+        let panes = list::<mt_proto::PaneInfo>(cx, Request::PaneList(Default::default()));
+        assert!(panes.iter().find(|p| p.id == first).unwrap().focused);
+        let err = call(
+            cx,
+            Request::PaneFocus(mt_proto::PaneFocusParams {
+                target: Target::pane(first),
+                direction: Some(mt_proto::Direction::Up),
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, mt_proto::ErrorCode::NotFound);
+
+        let z = call(cx, Request::PaneZoom(Target::pane(b.pane))).unwrap();
+        assert_eq!(z["zoomed"], true);
+        let panes = list::<mt_proto::PaneInfo>(cx, Request::PaneList(Default::default()));
+        assert!(panes.iter().find(|p| p.id == b.pane).unwrap().zoomed);
+        assert!(
+            cx.update(|cx| tab_chrome(cx, first).zoomed),
+            "the tab shows the zoom indicator while any of its panes is zoomed"
+        );
+        call(cx, Request::PaneZoom(Target::pane(b.pane))).unwrap();
+        assert!(!cx.update(|cx| tab_chrome(cx, first).zoomed));
+
+        call(
+            cx,
+            Request::PaneResize(mt_proto::PaneResizeParams {
+                target: Target::pane(first),
+                direction: mt_proto::Direction::Right,
+                cells: 12,
+            }),
+        )
+        .unwrap();
+        let snap: mt_proto::MuxSnapshot =
+            serde_json::from_value(call(cx, Request::MuxList).unwrap()).unwrap();
+        let Some(mt_proto::LayoutNode::Split { percent, .. }) =
+            snap.workspaces[0].windows[0].tabs[0].layout.clone()
+        else {
+            panic!("split layout")
+        };
+        assert!(
+            percent > 50,
+            "growing the left pane to the right: {percent}"
+        );
+
+        // Closing one pane leaves the tab; closing the rest closes it.
+        call(
+            cx,
+            Request::PaneClose(Target {
+                force: true,
+                ..Target::pane(c.pane)
+            }),
+        )
+        .unwrap();
+        let tabs = list::<mt_proto::TabInfo>(cx, Request::TabList(Default::default()));
+        assert_eq!(tabs[0].panes.len(), 2);
+        call(
+            cx,
+            Request::PaneSwap(mt_proto::PaneDirParams {
+                target: Target::pane(first),
+                direction: mt_proto::Direction::Right,
+            }),
+        )
+        .unwrap();
+        call(cx, Request::PaneRotate(Target::pane(first))).unwrap();
+        assert!(call(
+            cx,
+            Request::PaneResize(mt_proto::PaneResizeParams {
+                target: Target::pane(first),
+                direction: mt_proto::Direction::Up,
+                cells: 1,
+            })
+        )
+        .is_err());
     }
 
     fn call(cx: &mut TestAppContext, req: Request) -> Reply {

@@ -107,6 +107,24 @@ impl Render for AppWindow {
         root.on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
             .on_action(cx.listener(|this, _: &SpawnTab, w, cx| this.on_action_spawn_tab(w, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, w, cx| this.on_action_close_tab(w, cx)))
+            .on_action(cx.listener(|this, _: &SplitHorizontal, w, cx| {
+                this.split_focused(mt_mux::Axis::Horizontal, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitVertical, w, cx| {
+                this.split_focused(mt_mux::Axis::Vertical, w, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ClosePane, w, cx| this.request_close_focused_pane(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &TogglePaneZoom, w, cx| this.toggle_zoom(w, cx)))
+            .on_action(cx.listener(|this, _: &RotatePanes, w, cx| this.rotate_panes(w, cx)))
+            .on_action(cx.listener(|this, a: &ActivatePaneDirection, w, cx| {
+                this.focus_direction(a.0, w, cx)
+            }))
+            .on_action(cx.listener(|this, a: &SwapPane, w, cx| this.swap_focused(a.0, w, cx)))
+            .on_action(
+                cx.listener(|this, a: &ResizePane, w, cx| this.resize_focused(a.0, a.1, w, cx)),
+            )
             .on_action(
                 cx.listener(|this, a: &MoveTabRelative, w, cx| this.move_tab_relative(a.0, w, cx)),
             )
@@ -487,20 +505,12 @@ impl AppWindow {
     // ------------------------------------------------------------------ viewport
 
     fn viewport(&self, t: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let live = self.live().map(|s| {
-            (
-                s.snapshot.clone(),
-                s.term.clone(),
-                s.size.clone(),
-                s.cache.clone(),
-                s.grid_origin.clone(),
-            )
-        });
-        let screen = if live.is_some() {
-            Vec::new()
-        } else {
-            self.screen()
-        };
+        let tab = self.tabs.get(self.active_tab);
+        let live = tab.is_some_and(|tb| tb.session().is_some());
+        let layout = tab
+            .map(|tb| crate::panes::visible_layout(&tb.tree, tb.zoomed))
+            .unwrap_or_default();
+        let screen = if live { Vec::new() } else { self.screen() };
         let copy_active = self.overlays.contains(OverlayKind::CopyMode);
         let copy_cursor = if copy_active {
             self.copy_cursor_view()
@@ -552,70 +562,73 @@ impl AppWindow {
                     }
                 }),
             )
-            .on_scroll_wheel(cx.listener(|this, ev, _, cx| this.on_scroll_wheel(ev, cx)))
             .on_key_down(cx.listener(|this, ev, w, cx| this.on_viewport_key(ev, w, cx)))
             .on_key_up(cx.listener(|this, ev, _, cx| this.on_viewport_key_up(ev, cx)));
 
-        let pointer = self.pointer_style();
-        if let Some((snapshot, term, size, cache, origin)) = live {
-            let paint = TerminalPaint {
-                snapshot: snapshot.clone(),
-                theme: *t,
-                metrics: cell,
-                focused: self.viewport_focus.is_focused(window) && window.is_window_active(),
-                cursor_on: self.cursor_phase,
-                cache,
-                // The size is part of the key: cached lines were shaped at one size.
-                font_generation: self.font_generation ^ (u64::from(cell.font_size.to_bits()) << 32),
-                font: self.font.clone(),
-                hover_link: self.mouse.hover.as_ref().map(|l| (l.row, l.start, l.end)),
-            };
+        if live {
+            let tab = tab.expect("live implies a tab");
+            let multi = layout.len() > 1;
             let entity = cx.entity();
-            let armed = self.hud_armed.clone();
-            view = view.child(
-                div()
-                    .size_full()
-                    .px(px(self.cfg.window.padding.x))
-                    .py(px(self.cfg.window.padding.y))
-                    .child(
-                        canvas(
-                            move |bounds, window, _| {
-                                window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal)
-                            },
-                            move |bounds, hitbox, window, cx| {
-                                origin
-                                    .set((f32::from(bounds.origin.x), f32::from(bounds.origin.y)));
-                                window.set_cursor_style(pointer, &hitbox);
-                                Self::register_mouse(&entity, hitbox, window);
-                                let (cols, rows) = paint.metrics.grid_for(
-                                    f32::from(bounds.size.width),
-                                    f32::from(bounds.size.height),
-                                );
-                                if size.get() != (cols, rows) {
-                                    size.set((cols, rows));
-                                    term.resize(
-                                        cols,
-                                        rows,
-                                        paint.metrics.width as u16,
-                                        paint.metrics.height as u16,
-                                    );
-                                    // The first layout is not a user resize.
-                                    if armed.replace(true) {
-                                        let entity = entity.clone();
-                                        window.defer(cx, move |_, cx| {
-                                            entity.update(cx, |this, cx| {
-                                                this.show_hud(cols as usize, rows as usize, cx)
-                                            });
-                                        });
-                                    }
+            let area = self.pane_area.clone();
+            let mut stage = div().absolute().inset_0().child(
+                canvas(|_, _, _| (), {
+                    let entity = entity.clone();
+                    move |bounds, _, window, _| {
+                        area.set((
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height),
+                        ));
+                        // A divider drag keeps tracking the pointer outside the grid.
+                        let e = entity.clone();
+                        window.on_mouse_event(
+                            move |ev: &gpui::MouseMoveEvent, phase, window, cx| {
+                                if phase == gpui::DispatchPhase::Bubble {
+                                    e.update(cx, |this, cx| {
+                                        if this.divider_drag.is_some() {
+                                            this.drag_divider_to(
+                                                (
+                                                    f32::from(ev.position.x),
+                                                    f32::from(ev.position.y),
+                                                ),
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    });
                                 }
-                                paint_terminal(bounds, &paint, window, cx);
                             },
-                        )
-                        .size_full(),
-                    ),
+                        );
+                        let e = entity.clone();
+                        window.on_mouse_event(move |_: &gpui::MouseUpEvent, phase, _, cx| {
+                            if phase == gpui::DispatchPhase::Bubble {
+                                e.update(cx, |this, cx| this.end_divider_drag(cx));
+                            }
+                        });
+                    }
+                })
+                .absolute()
+                .size_full(),
             );
-            view = view.child(self.live_marks(t, &hits, copy_cursor));
+            for (pane, rect) in &layout {
+                stage = stage.child(self.pane_element(
+                    *pane,
+                    *rect,
+                    multi,
+                    t,
+                    window,
+                    &hits,
+                    copy_cursor,
+                    cx,
+                ));
+            }
+            if multi && tab.zoomed.is_none() {
+                for split in tab.tree.splits(mt_mux::Rect::new(0.0, 0.0, 1.0, 1.0)) {
+                    stage = stage.child(self.divider(split, t, cx));
+                }
+            }
+            view = view.child(stage);
             if self.bell_flash {
                 view = view.child(
                     div()
@@ -651,18 +664,7 @@ impl AppWindow {
             );
         }
 
-        if self.overlays.contains(OverlayKind::QuickSelect) {
-            view = view.child(self.quick_select_chips(t));
-        }
         view = view.child(self.mode_strip(t, cx));
-        let show_scrollbar = match self.cfg.scrollbar.mode {
-            mt_config::ScrollbarMode::Always => true,
-            mt_config::ScrollbarMode::Never => false,
-            mt_config::ScrollbarMode::Auto => self.scrollbar_visible,
-        };
-        if show_scrollbar {
-            view = view.child(self.scrollbar(t));
-        }
         if let Some(card) = self
             .ssh_card(cx)
             .filter(|c| c.state != DomainState::Connected)
@@ -670,6 +672,226 @@ impl AppWindow {
             view = view.child(self.ssh_overlay(t, &card, cx));
         }
         view
+    }
+
+    /// One pane of the active tab, placed by its fractional `rect` in the pane area. Overlays
+    /// that belong to "the pane" (search marks, quick-select chips, the scrollbar) are children
+    /// of the focused one, so they anchor to its origin.
+    #[allow(clippy::too_many_arguments)]
+    fn pane_element(
+        &self,
+        pane: u64,
+        rect: mt_mux::Rect,
+        multi: bool,
+        t: &Theme,
+        window: &Window,
+        hits: &[crate::mode_overlays::ViewMark],
+        copy_cursor: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let tab = &self.tabs[self.active_tab];
+        let is_focus = tab.pane == pane;
+        let mut el = div()
+            .id(("pane", pane))
+            .absolute()
+            .left(relative(rect.x))
+            .top(relative(rect.y))
+            .w(relative(rect.w))
+            .h(relative(rect.h))
+            .overflow_hidden()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, w, cx| {
+                    if this.overlays.is_empty() && this.focused_pane() != Some(pane) {
+                        this.focus_pane(pane, w, cx);
+                    }
+                }),
+            )
+            .on_scroll_wheel(
+                cx.listener(move |this, ev, _, cx| this.on_scroll_wheel_pane(pane, ev, cx)),
+            );
+        let Some(session) = tab.pane_view(pane).and_then(|v| v.session.as_ref()) else {
+            return el;
+        };
+        let cell = self.cell;
+        let pointer = self.pointer_style();
+        let paint = TerminalPaint {
+            snapshot: session.snapshot.clone(),
+            theme: *t,
+            metrics: cell,
+            focused: is_focus
+                && self.viewport_focus.is_focused(window)
+                && window.is_window_active(),
+            cursor_on: self.cursor_phase,
+            cache: session.cache.clone(),
+            // The size is part of the key: cached lines were shaped at one size.
+            font_generation: self.font_generation ^ (u64::from(cell.font_size.to_bits()) << 32),
+            font: self.font.clone(),
+            hover_link: is_focus
+                .then(|| self.mouse.hover.as_ref().map(|l| (l.row, l.start, l.end)))
+                .flatten(),
+        };
+        let (term, size, origin) = (
+            session.term.clone(),
+            session.size.clone(),
+            session.grid_origin.clone(),
+        );
+        let entity = cx.entity();
+        let armed = self.hud_armed.clone();
+        el = el.child(
+            div()
+                .size_full()
+                .px(px(self.cfg.window.padding.x))
+                .py(px(self.cfg.window.padding.y))
+                .child(
+                    canvas(
+                        move |bounds, window, _| {
+                            window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal)
+                        },
+                        move |bounds, hitbox, window, cx| {
+                            origin.set((f32::from(bounds.origin.x), f32::from(bounds.origin.y)));
+                            if is_focus {
+                                window.set_cursor_style(pointer, &hitbox);
+                                Self::register_mouse(&entity, hitbox.clone(), window);
+                            }
+                            if multi {
+                                let (e, hb) = (entity.clone(), hitbox);
+                                window.on_mouse_event(
+                                    move |_: &gpui::MouseMoveEvent, phase, window, cx| {
+                                        if phase == gpui::DispatchPhase::Bubble
+                                            && hb.is_hovered(window)
+                                        {
+                                            e.update(cx, |this, cx| {
+                                                this.hover_pane(pane, window, cx)
+                                            });
+                                        }
+                                    },
+                                );
+                            }
+                            let (cols, rows) = paint.metrics.grid_for(
+                                f32::from(bounds.size.width),
+                                f32::from(bounds.size.height),
+                            );
+                            if size.get() != (cols, rows) {
+                                size.set((cols, rows));
+                                term.resize(
+                                    cols,
+                                    rows,
+                                    paint.metrics.width as u16,
+                                    paint.metrics.height as u16,
+                                );
+                                // The first layout is not a user resize; only the focused pane
+                                // reports its size.
+                                if armed.replace(true) && is_focus {
+                                    let entity = entity.clone();
+                                    window.defer(cx, move |_, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.show_hud(cols as usize, rows as usize, cx)
+                                        });
+                                    });
+                                }
+                            }
+                            paint_terminal(bounds, &paint, window, cx);
+                        },
+                    )
+                    .size_full(),
+                ),
+        );
+        if is_focus {
+            el = el.child(self.live_marks(t, hits, copy_cursor));
+            if self.overlays.contains(OverlayKind::QuickSelect) {
+                el = el.child(self.quick_select_chips(t));
+            }
+            let show_scrollbar = match self.cfg.scrollbar.mode {
+                mt_config::ScrollbarMode::Always => true,
+                mt_config::ScrollbarMode::Never => false,
+                mt_config::ScrollbarMode::Auto => self.scrollbar_visible,
+            };
+            if show_scrollbar {
+                el = el.child(self.scrollbar(t));
+            }
+            if multi {
+                el = el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border_1()
+                        .border_color(t.accent.opacity(0.45)),
+                );
+            }
+        } else if multi {
+            el = el.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(t.background.opacity(self.cfg.panes.inactive_dim)),
+            );
+        }
+        el
+    }
+
+    /// The draggable line between the two halves of `split`: 1 px visible, 6 px to grab.
+    fn divider(
+        &self,
+        split: mt_mux::SplitRect,
+        t: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use mt_mux::Axis;
+        let r = split.rect;
+        let id: SharedString = format!(
+            "divider-{}",
+            split
+                .path
+                .iter()
+                .map(|b| if *b { '1' } else { '0' })
+                .collect::<String>()
+        )
+        .into();
+        let hit = px(DIVIDER_HIT_AREA);
+        let line = px(DIVIDER_WIDTH);
+        let (axis, path, rect) = (split.axis, split.path, split.rect);
+        let base = div().id(id).absolute();
+        let el = match split.axis {
+            Axis::Horizontal => base
+                .left(relative(r.x + r.w * split.ratio))
+                .top(relative(r.y))
+                .h(relative(r.h))
+                .w(hit)
+                .ml(-(hit / 2.0))
+                .cursor_col_resize()
+                .child(
+                    div()
+                        .absolute()
+                        .left((hit - line) / 2.0)
+                        .w(line)
+                        .h_full()
+                        .bg(t.border),
+                ),
+            Axis::Vertical => base
+                .top(relative(r.y + r.h * split.ratio))
+                .left(relative(r.x))
+                .w(relative(r.w))
+                .h(hit)
+                .mt(-(hit / 2.0))
+                .cursor_row_resize()
+                .child(
+                    div()
+                        .absolute()
+                        .top((hit - line) / 2.0)
+                        .h(line)
+                        .w_full()
+                        .bg(t.border),
+                ),
+        };
+        el.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.begin_divider_drag(path.clone(), axis, rect);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
     }
 
     /// Overlay scrollbar: thumb size and position follow the scrollback position.

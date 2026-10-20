@@ -314,3 +314,78 @@ fn a_second_daemon_in_the_same_dir_is_refused() {
         Err(daemon::BindError::AlreadyRunning)
     ));
 }
+
+#[test]
+fn split_records_survive_a_reattach() {
+    let env = start("split");
+    let mut a = Client::connect(&env);
+    let p1 = spawn(&mut a, "s", "sleep 30");
+    let p2 = spawn(&mut a, "s", "sleep 30");
+    let p3 = spawn(&mut a, "s", "sleep 30");
+    a.send(&Msg::Split {
+        pane: p2,
+        parent: p1,
+        axis: 0,
+        permille: 400,
+    });
+    a.send(&Msg::Split {
+        pane: p3,
+        parent: p2,
+        axis: 1,
+        permille: 500,
+    });
+    // A split across sessions, to itself, or with a bad axis is refused and recorded nowhere.
+    let other = spawn(&mut a, "elsewhere", "sleep 30");
+    a.send(&Msg::Split {
+        pane: other,
+        parent: p1,
+        axis: 0,
+        permille: 500,
+    });
+    a.until(|m| matches!(m, Msg::Error { .. }).then_some(()));
+    a.send(&Msg::Split {
+        pane: p1,
+        parent: p1,
+        axis: 0,
+        permille: 500,
+    });
+    a.until(|m| matches!(m, Msg::Error { .. }).then_some(()));
+    a.send(&Msg::Split {
+        pane: p1,
+        parent: p2,
+        axis: 2,
+        permille: 500,
+    });
+    a.until(|m| matches!(m, Msg::Error { .. }).then_some(()));
+    // Order matters on one connection: this Ping returns after the splits were applied.
+    a.send(&Msg::Ping(1));
+    a.until(|m| matches!(m, Msg::Pong(1)).then_some(()));
+    drop(a);
+
+    let mut b = Client::connect(&env);
+    b.send(&Msg::Attach {
+        session: "s".into(),
+        panes: vec![],
+    });
+    let infos = b.until(|m| match m {
+        Msg::Attached { panes } => Some(panes.clone()),
+        _ => None,
+    });
+    let split = |id: u64| infos.iter().find(|i| i.id == id).unwrap().split;
+    assert_eq!(split(p1), None);
+    assert_eq!(
+        split(p2),
+        Some(mt_proto::mux::SplitInfo {
+            parent: p1,
+            axis: 0,
+            permille: 400
+        })
+    );
+    assert_eq!(split(p3).map(|s| (s.parent, s.axis)), Some((p2, 1)));
+    b.send(&Msg::KillSession {
+        session: "s".into(),
+    });
+    b.send(&Msg::KillSession {
+        session: "elsewhere".into(),
+    });
+}

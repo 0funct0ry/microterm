@@ -122,6 +122,30 @@ enum K {
     Array(&'static [(&'static str, K)]),
 }
 
+// Declared split trees nest `MAX_SPLIT_DEPTH` levels; the static key table is unrolled to match.
+const PANE_L4: &[(&str, K)] = &[("cwd", K::Leaf), ("command", K::Leaf)];
+const PANE_L3: &[(&str, K)] = &[
+    ("cwd", K::Leaf),
+    ("command", K::Leaf),
+    ("split", K::Leaf),
+    ("percent", K::Leaf),
+    ("panes", K::Array(PANE_L4)),
+];
+const PANE_L2: &[(&str, K)] = &[
+    ("cwd", K::Leaf),
+    ("command", K::Leaf),
+    ("split", K::Leaf),
+    ("percent", K::Leaf),
+    ("panes", K::Array(PANE_L3)),
+];
+const PANE_L1: &[(&str, K)] = &[
+    ("cwd", K::Leaf),
+    ("command", K::Leaf),
+    ("split", K::Leaf),
+    ("percent", K::Leaf),
+    ("panes", K::Array(PANE_L2)),
+];
+
 const KEY_ENTRY: &[(&str, K)] = &[("key", K::Leaf), ("action", K::Leaf)];
 
 const ROOT: &[(&str, K)] = &[
@@ -203,6 +227,10 @@ const ROOT: &[(&str, K)] = &[
             ("focus_follows_mouse", K::Leaf),
         ]),
     ),
+    (
+        "panes",
+        K::Table(&[("inactive_dim", K::Leaf), ("focus_delay_ms", K::Leaf)]),
+    ),
     ("clipboard", K::Table(&[("osc52", K::Leaf)])),
     ("paste", K::Table(&[("confirm_multiline", K::Leaf)])),
     ("bell", K::Table(&[("mode", K::Leaf)])),
@@ -235,7 +263,14 @@ const ROOT: &[(&str, K)] = &[
             ("name", K::Leaf),
             (
                 "tabs",
-                K::Array(&[("title", K::Leaf), ("cwd", K::Leaf), ("command", K::Leaf)]),
+                K::Array(&[
+                    ("title", K::Leaf),
+                    ("cwd", K::Leaf),
+                    ("command", K::Leaf),
+                    ("split", K::Leaf),
+                    ("percent", K::Leaf),
+                    ("panes", K::Array(PANE_L1)),
+                ]),
             ),
         ]),
     ),
@@ -383,6 +418,26 @@ fn validate_tabs_and_workspaces(c: &Config, err: &mut impl FnMut(&[&str], String
             "new_tab_cwd must be \"inherit\", \"home\" or an absolute path".into(),
         );
     }
+    for w in &c.workspaces {
+        for (i, tab) in w.tabs.iter().enumerate() {
+            let mut fail = |msg: String| {
+                err(
+                    &["workspaces"],
+                    format!("workspace \"{}\" tab {}: {msg}", w.name, i + 1),
+                )
+            };
+            if tab.split.is_none() {
+                if tab.percent.is_some() || !tab.panes.is_empty() {
+                    fail("`percent` and `panes` need `split`".into());
+                }
+            } else {
+                validate_split(tab.split, tab.percent, &tab.panes, 1, &mut fail);
+                if !tab.command.is_empty() || tab.cwd.is_some() {
+                    fail("a split tab takes `cwd` and `command` on its panes".into());
+                }
+            }
+        }
+    }
     let mut seen: Vec<&str> = Vec::new();
     for w in &c.workspaces {
         if w.name.trim().is_empty() {
@@ -401,6 +456,44 @@ fn validate_tabs_and_workspaces(c: &Config, err: &mut impl FnMut(&[&str], String
             &["startup_workspace"],
             format!("startup_workspace \"{start}\" is not defined in [[workspaces]]"),
         );
+    }
+}
+
+fn validate_split(
+    split: Option<crate::SplitKind>,
+    percent: Option<u8>,
+    panes: &[crate::WorkspacePane],
+    depth: usize,
+    fail: &mut impl FnMut(String),
+) {
+    if split.is_none() {
+        return;
+    }
+    if depth > crate::MAX_SPLIT_DEPTH {
+        fail(format!(
+            "splits nest at most {} deep",
+            crate::MAX_SPLIT_DEPTH
+        ));
+        return;
+    }
+    if panes.len() != 2 {
+        fail(format!(
+            "a split needs exactly 2 `panes`, found {}",
+            panes.len()
+        ));
+        return;
+    }
+    if percent.is_some_and(|p| !(1..=99).contains(&p)) {
+        fail("`percent` must be between 1 and 99".into());
+    }
+    for p in panes {
+        if p.split.is_none() && (p.percent.is_some() || !p.panes.is_empty()) {
+            fail("`percent` and `panes` need `split`".into());
+        }
+        if p.split.is_some() && (!p.command.is_empty() || p.cwd.is_some()) {
+            fail("a split takes `cwd` and `command` on its panes".into());
+        }
+        validate_split(p.split, p.percent, &p.panes, depth + 1, fail);
     }
 }
 
@@ -466,6 +559,18 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
         err(
             &["cursor", "blink_interval_ms"],
             "cursor.blink_interval_ms must be greater than 0".into(),
+        );
+    }
+    if !(0.0..=1.0).contains(&c.panes.inactive_dim) {
+        err(
+            &["panes", "inactive_dim"],
+            "panes.inactive_dim must be between 0.0 and 1.0".into(),
+        );
+    }
+    if c.panes.focus_delay_ms > 5000 {
+        err(
+            &["panes", "focus_delay_ms"],
+            "panes.focus_delay_ms must be at most 5000".into(),
         );
     }
     if c.mouse.scroll_multiplier <= 0.0 {

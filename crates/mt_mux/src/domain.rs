@@ -22,6 +22,18 @@ pub struct SpawnSpec {
     pub cwd: Option<PathBuf>,
     pub command: Option<Vec<String>>,
     pub title: Option<String>,
+    /// Set for a pane created by a split: the pane it was split from, with the axis and the
+    /// new pane's share (remote domains record it on their daemon).
+    pub split_from: Option<SplitOrigin>,
+}
+
+/// Where a split pane came from (see [`SpawnSpec::split_from`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitOrigin {
+    pub parent: u64,
+    pub axis: crate::model::Axis,
+    /// The new pane's share of the space, in thousandths.
+    pub permille: u16,
 }
 
 pub trait Domain: Send + Sync {

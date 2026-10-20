@@ -1231,3 +1231,202 @@ fn the_tab_palette_shows_each_tabs_status(cx: &mut TestAppContext) {
     assert_eq!(tab.detail.as_deref(), Some("tab 1 · waiting: approve?"));
     assert_eq!(tab.status, Some(crate::components::StatusKind::Warning));
 }
+
+// ------------------------------------------------------------------------ splits (M11)
+
+fn pane_ids(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<u64> {
+    view.read_with(cx, |t, _| {
+        t.tabs[t.active_tab].panes.iter().map(|p| p.pane).collect()
+    })
+}
+
+fn focused(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> u64 {
+    view.read_with(cx, |t, _| t.tabs[t.active_tab].pane)
+}
+
+#[gpui::test]
+fn split_actions_add_panes_and_focus_follows_the_new_one(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let first = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let ids = pane_ids(&view, cx);
+    assert_eq!(ids.len(), 2);
+    let second = focused(&view, cx);
+    assert_ne!(first, second);
+    assert_eq!(
+        view.read_with(cx, |t, _| t.tabs.len()),
+        1,
+        "a split is not a tab"
+    );
+
+    cx.dispatch_action(SplitVertical);
+    cx.run_until_parked();
+    assert_eq!(pane_ids(&view, cx).len(), 3);
+}
+
+#[gpui::test]
+fn the_default_split_keys_are_bound(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let key = format_keystroke(first_binding("SplitHorizontal"), Platform::current());
+    assert!(!key.is_empty());
+    cx.simulate_keystrokes(first_binding("SplitHorizontal"));
+    cx.run_until_parked();
+    assert_eq!(pane_ids(&view, cx).len(), 2);
+}
+
+#[gpui::test]
+fn pane_direction_actions_move_focus_and_stop_at_edges(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let left = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let right = focused(&view, cx);
+    cx.dispatch_action(ActivatePaneDirection(mt_mux::Dir::Left));
+    cx.run_until_parked();
+    assert_eq!(focused(&view, cx), left);
+    cx.dispatch_action(ActivatePaneDirection(mt_mux::Dir::Left));
+    assert_eq!(focused(&view, cx), left, "no wrap-around");
+    cx.dispatch_action(ActivatePaneDirection(mt_mux::Dir::Right));
+    assert_eq!(focused(&view, cx), right);
+}
+
+#[gpui::test]
+fn closing_panes_keeps_the_tab_until_the_last_one(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        // No process runs in tests, so confirm_close = "process" does not prompt.
+        let _ = cx;
+    });
+    cx.dispatch_action(ClosePane);
+    cx.run_until_parked();
+    assert_eq!(pane_ids(&view, cx).len(), 1);
+    assert_eq!(view.read_with(cx, |t, _| t.tabs.len()), 1);
+}
+
+#[gpui::test]
+fn zoom_swap_and_rotate_update_the_view(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let a = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let b = focused(&view, cx);
+    cx.dispatch_action(TogglePaneZoom);
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |t, _| t.tabs[0].zoomed), Some(b));
+    cx.dispatch_action(TogglePaneZoom);
+    assert_eq!(view.read_with(cx, |t, _| t.tabs[0].zoomed), None);
+
+    let order = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| -> Vec<u64> {
+        view.read_with(cx, |t, _| {
+            t.tabs[0].tree.panes().iter().map(|p| p.id).collect()
+        })
+    };
+    assert_eq!(order(&view, cx), vec![a, b]);
+    cx.dispatch_action(SwapPane(mt_mux::Dir::Left));
+    assert_eq!(order(&view, cx), vec![b, a]);
+    cx.dispatch_action(RotatePanes);
+    assert_eq!(order(&view, cx), vec![a, b]);
+    cx.dispatch_action(ResizePane(mt_mux::Dir::Left, 5));
+}
+
+#[gpui::test]
+fn hovering_a_pane_focuses_it_only_when_enabled(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let a = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    // Off by default: hovering changes nothing.
+    view.update_in(cx, |this, window, cx| this.hover_pane(a, window, cx));
+    assert_ne!(focused(&view, cx), a);
+
+    let mut config = mt_config::Config::default();
+    config.mouse.focus_follows_mouse = true;
+    cx.update(|_, cx| {
+        let mut s = crate::settings::Settings::defaults();
+        s.config = std::sync::Arc::new(config);
+        cx.set_global(s);
+    });
+    view.update_in(cx, |this, window, cx| this.hover_pane(a, window, cx));
+    cx.run_until_parked();
+    assert_eq!(focused(&view, cx), a, "delay 0 focuses at once");
+}
+
+#[gpui::test]
+fn a_hover_delay_waits_and_is_cancelled_by_moving_back(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let a = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let b = focused(&view, cx);
+    let mut config = mt_config::Config::default();
+    config.mouse.focus_follows_mouse = true;
+    config.panes.focus_delay_ms = 200;
+    cx.update(|_, cx| {
+        let mut s = crate::settings::Settings::defaults();
+        s.config = std::sync::Arc::new(config.clone());
+        cx.set_global(s);
+    });
+    view.update_in(cx, |this, _, _| this.cfg = std::sync::Arc::new(config));
+    view.update_in(cx, |this, window, cx| this.hover_pane(a, window, cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(focused(&view, cx), b, "still waiting");
+    // The pointer returns to the focused pane before the delay ends.
+    view.update_in(cx, |this, window, cx| this.hover_pane(b, window, cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(focused(&view, cx), b);
+
+    view.update_in(cx, |this, window, cx| this.hover_pane(a, window, cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(focused(&view, cx), a, "the delay elapsed");
+}
+
+#[gpui::test]
+fn overlays_block_focus_follows_mouse(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let a = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let b = focused(&view, cx);
+    let mut config = mt_config::Config::default();
+    config.mouse.focus_follows_mouse = true;
+    cx.update(|_, cx| {
+        let mut s = crate::settings::Settings::defaults();
+        s.config = std::sync::Arc::new(config);
+        cx.set_global(s);
+    });
+    cx.dispatch_action(ShowCommandPalette);
+    view.update_in(cx, |this, window, cx| this.hover_pane(a, window, cx));
+    assert_eq!(focused(&view, cx), b);
+}
+
+#[gpui::test]
+fn divider_drag_changes_the_ratio(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    view.update_in(cx, |this, window, cx| {
+        this.pane_area.set((0.0, 0.0, 1000.0, 600.0));
+        this.begin_divider_drag(
+            vec![],
+            mt_mux::Axis::Horizontal,
+            mt_mux::Rect::new(0.0, 0.0, 1.0, 1.0),
+        );
+        this.drag_divider_to((250.0, 100.0), window, cx);
+        this.end_divider_drag(cx);
+    });
+    let ratio = view.read_with(cx, |t, _| match &t.tabs[0].tree {
+        mt_mux::PaneTree::Split { ratio, .. } => *ratio,
+        _ => panic!("split"),
+    });
+    assert!((ratio - 0.25).abs() < 1e-4);
+    assert!(view.read_with(cx, |t, _| t.divider_drag.is_none()));
+}

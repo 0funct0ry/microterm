@@ -64,7 +64,11 @@ trim_trailing_whitespace = true
 right_click = "context_menu"     # "context_menu" | "paste" | "none"
 hide_while_typing = true
 scroll_multiplier = 3
-# focus_follows_mouse = false    # accepted from M11 (splits)
+focus_follows_mouse = false      # hovering a pane focuses it (splits)
+
+[panes]
+inactive_dim = 0.15              # 0.0-1.0 dim overlay on unfocused panes
+focus_delay_ms = 0               # hover delay before focus_follows_mouse switches panes
 
 [clipboard]
 osc52 = "write"                  # "write" | "read-write" | "disabled"

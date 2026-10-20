@@ -25,6 +25,8 @@ pub fn event_of(e: &MuxEvent) -> Event {
         MuxEvent::PaneAdded { pane } => Event::PaneAdded { pane },
         MuxEvent::PaneRemoved { pane } => Event::PaneRemoved { pane },
         MuxEvent::PaneOutput { pane } => Event::PaneOutput { pane },
+        MuxEvent::PaneFocused { pane } => Event::PaneFocused { pane },
+        MuxEvent::LayoutChanged { tab } => Event::LayoutChanged { tab },
         MuxEvent::TitleChanged { pane } => Event::TitleChanged { pane },
         MuxEvent::CwdChanged { pane } => Event::CwdChanged { pane },
         MuxEvent::StatusChanged { pane } => Event::StatusChanged { pane },
@@ -184,6 +186,108 @@ pub fn read_only(rows: &Rows, req: &Request) -> Option<Result<Value, RpcError>> 
 /// The panes a `pane.*` request addresses.
 pub fn resolve_panes(rows: &Rows, t: &Target, verb: Verb) -> Result<Vec<Id>, RpcError> {
     ctl::resolve(t, &rows.panes, rows.focused_pane, verb)
+}
+
+/// `pane.split`, model half: validates, resolves the target and adds the pane. The host then
+/// starts a terminal for the returned pane (and closes it again if that fails).
+pub fn split_model(
+    mux: &mut Mux,
+    rows: &Rows,
+    p: &mt_proto::PaneSplitParams,
+) -> Result<mt_proto::PaneSplitResult, RpcError> {
+    let percent = p.percent.unwrap_or(50);
+    if !(1..=99).contains(&percent) {
+        return Err(RpcError::bad_request("--percent must be between 1 and 99"));
+    }
+    let pane = resolve_panes(rows, &p.target, Verb::Acting { all_allowed: false })?[0];
+    let axis = match p.axis {
+        mt_proto::SplitAxis::Horizontal => mt_mux::Axis::Horizontal,
+        mt_proto::SplitAxis::Vertical => mt_mux::Axis::Vertical,
+    };
+    let cwd = p.cwd.as_deref().map(expand_tilde);
+    let new = mux.split_pane(pane, axis, f32::from(percent) / 100.0, None, cwd)?;
+    let (window, index) = mux
+        .locate_pane(new)
+        .ok_or_else(|| RpcError::internal("lost pane"))?;
+    let tab = mux.window(window).map_or(0, |w| w.tabs[index].id);
+    Ok(mt_proto::PaneSplitResult {
+        pane: new,
+        tab,
+        window,
+    })
+}
+
+/// `pane.focus|zoom|resize|swap|rotate`: pure model operations shared by both hosts.
+pub fn layout_op(mux: &mut Mux, rows: &Rows, req: &Request) -> Result<Value, RpcError> {
+    let acting = Verb::Acting { all_allowed: false };
+    match req {
+        Request::PaneFocus(p) => {
+            let pane = resolve_panes(rows, &p.target, acting)?[0];
+            let target = match p.direction {
+                None => {
+                    mux.focus_pane(pane)?;
+                    pane
+                }
+                Some(d) => mux.focus_direction(pane, d.into())?.ok_or_else(|| {
+                    RpcError::not_found(format!("no pane {} of pane {pane}", dir_word(d)))
+                })?,
+            };
+            Ok(serde_json::json!({ "pane": target }))
+        }
+        Request::PaneZoom(t) => {
+            let pane = resolve_panes(rows, t, acting)?[0];
+            let zoomed = mux.toggle_zoom(pane)?;
+            Ok(serde_json::json!({ "pane": pane, "zoomed": zoomed }))
+        }
+        Request::PaneResize(p) => {
+            let pane = resolve_panes(rows, &p.target, acting)?[0];
+            if p.cells == 0 {
+                return Err(RpcError::bad_request("--cells must be at least 1"));
+            }
+            let size = rows
+                .panes
+                .iter()
+                .find(|r| r.id == pane)
+                .map_or((0, 0), |r| r.size);
+            // No live size (a pane that has not painted yet): assume the default 120x34 grid.
+            let size = if size == (0, 0) { (120, 34) } else { size };
+            if !mux.resize_pane_cells(pane, p.direction.into(), p.cells, size)? {
+                return Err(RpcError::bad_request(format!(
+                    "pane {pane} has no border to move {}",
+                    dir_word(p.direction)
+                )));
+            }
+            Ok(serde_json::json!({ "pane": pane }))
+        }
+        Request::PaneSwap(p) => {
+            let pane = resolve_panes(rows, &p.target, acting)?[0];
+            if !mux.swap_pane(pane, p.direction.into())? {
+                return Err(RpcError::not_found(format!(
+                    "no pane {} of pane {pane}",
+                    dir_word(p.direction)
+                )));
+            }
+            Ok(serde_json::json!({ "pane": pane }))
+        }
+        Request::PaneRotate(t) => {
+            let pane = resolve_panes(rows, t, acting)?[0];
+            mux.rotate_panes(pane)?;
+            Ok(serde_json::json!({ "pane": pane }))
+        }
+        other => Err(RpcError::internal(format!(
+            "{} is not a layout request",
+            other.method()
+        ))),
+    }
+}
+
+fn dir_word(d: mt_proto::Direction) -> &'static str {
+    match d {
+        mt_proto::Direction::Left => "to the left",
+        mt_proto::Direction::Right => "to the right",
+        mt_proto::Direction::Up => "above",
+        mt_proto::Direction::Down => "below",
+    }
 }
 
 /// One notification that got through the rate limit, for the host to surface (badge, toast, OS).

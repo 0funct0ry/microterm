@@ -34,6 +34,28 @@ action = "Disable"   # unbind a default
 | `ActivateTab` | **Go to tab** — Activate tab N (counting from 1); bound to ⌘1–⌘9 on macOS and Alt+1–Alt+9 on Linux | — | — |
 | `SpawnTabInDomain` | **New tab in domain** — Open a tab in the named domain (`local`, or an SSH domain once M10 lands) | — | — |
 
+## Panes
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `SplitHorizontal` | **Split pane right** — Split the focused pane into two side by side | `⌘D` | `Ctrl+Shift+D` |
+| `SplitVertical` | **Split pane down** — Split the focused pane into two, one above the other | `⌘⇧D` | `Ctrl+Shift+E` |
+| `ClosePane` | **Close pane** — Close the focused pane; the last pane of a tab closes the tab | — | — |
+| `TogglePaneZoom` | **Toggle pane zoom** — Show the focused pane full-size, or restore the layout | — | — |
+| `RotatePanes` | **Rotate panes** — Rotate the positions of the panes in the tab | — | — |
+| `ActivatePaneDirection(left)` | **Focus pane left** — Move focus to the pane left of the focused one | `⌘⌥←` | `Ctrl+Alt+Left` |
+| `ActivatePaneDirection(right)` | **Focus pane right** — Move focus to the pane right of the focused one | `⌘⌥→` | `Ctrl+Alt+Right` |
+| `ActivatePaneDirection(up)` | **Focus pane up** — Move focus to the pane up of the focused one | `⌘⌥↑` | `Ctrl+Alt+Up` |
+| `ActivatePaneDirection(down)` | **Focus pane down** — Move focus to the pane down of the focused one | `⌘⌥↓` | `Ctrl+Alt+Down` |
+| `SwapPane(left)` | **Swap pane left** — Swap the focused pane with its neighbour to the left | — | — |
+| `SwapPane(right)` | **Swap pane right** — Swap the focused pane with its neighbour to the right | — | — |
+| `SwapPane(up)` | **Swap pane up** — Swap the focused pane with its neighbour to the up | — | — |
+| `SwapPane(down)` | **Swap pane down** — Swap the focused pane with its neighbour to the down | — | — |
+| `ResizePane(left,5)` | **Resize pane left** — Move the focused pane's left border by 5 cells | — | — |
+| `ResizePane(right,5)` | **Resize pane right** — Move the focused pane's right border by 5 cells | — | — |
+| `ResizePane(up,5)` | **Resize pane up** — Move the focused pane's up border by 5 cells | — | — |
+| `ResizePane(down,5)` | **Resize pane down** — Move the focused pane's down border by 5 cells | — | — |
+
 ## Workspaces
 
 | Action | Description | macOS | Linux |
