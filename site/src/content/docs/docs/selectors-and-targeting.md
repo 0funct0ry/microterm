@@ -49,6 +49,7 @@ regex as `\x2c`.
 | `focused` / `active` | pane, tab, window | `true` / `false` |
 | `status` | pane | status state: `idle` (also no status), `working`, `waiting`, `done`, `error`; see [Notifications & status](/docs/notifications-and-status/) |
 | `exited` | pane | `true` / `false` |
+| `color` | pane (its tab's), tab | the resolved color: a name (`red`) or `#rrggbb`; see [Tab colors](/docs/tabs-and-workspaces/#tab-colors) |
 
 A key that does not apply to the resource is a usage error (exit 1), never an empty match. A
 pane with no value for a key (no `cwd` yet, say) does not match a positive clause and does match

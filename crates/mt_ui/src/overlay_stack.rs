@@ -7,6 +7,8 @@ pub enum OverlayKind {
     Launcher,
     WorkspaceSwitcher,
     ThemeSelector,
+    /// "Tab: Set color…": the colors of the active tab's menu, as a list.
+    TabColorPicker,
     QuickSelect,
     CopyMode,
     Search,
@@ -35,7 +37,8 @@ impl OverlayKind {
             Self::CommandPalette
             | Self::Launcher
             | Self::WorkspaceSwitcher
-            | Self::ThemeSelector => Class::Picker,
+            | Self::ThemeSelector
+            | Self::TabColorPicker => Class::Picker,
             Self::QuickSelect | Self::CopyMode => Class::Mode,
             Self::Search => Class::Search,
             Self::PasteConfirm => Class::Paste,

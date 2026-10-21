@@ -205,6 +205,28 @@ impl AppWindow {
         }
     }
 
+    /// Sets (or with the ring, clears) the manual color of `tab` from a swatch id.
+    pub(crate) fn pick_tab_color(&mut self, tab: u64, swatch: &str, cx: &mut Context<Self>) {
+        let color = crate::tab_color::swatches(&self.cfg.tab_bar.palette)
+            .into_iter()
+            .find(|s| s.id == swatch)
+            .map(|s| s.color);
+        if let Some(color) = color {
+            self.set_tab_color(tab, color, cx);
+        }
+    }
+
+    /// Sets (`None` clears) the manual color of `tab`; the mux reports the change.
+    pub(crate) fn set_tab_color(
+        &mut self,
+        tab: u64,
+        color: Option<mt_mux::TabColor>,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = mux_host::host(cx).mux.set_tab_color(tab, color);
+        cx.notify();
+    }
+
     /// Right-click on a tab header.
     pub(crate) fn open_tab_menu(
         &mut self,
@@ -218,7 +240,8 @@ impl AppWindow {
         let Some(pane) = self.tabs.iter().find(|t| t.id == tab).map(|t| t.pane) else {
             return;
         };
-        if let Some(facts) = self.menu_facts(pane, cx) {
+        if let Some(mut facts) = self.menu_facts(pane, cx) {
+            facts.manual_color = mux_host::host(cx).mux.tab(tab).and_then(|t| t.color);
             self.open_menu("tab", facts, position, cx);
         }
     }
@@ -232,9 +255,10 @@ impl AppWindow {
         let Some(pane) = self.focused_pane() else {
             return;
         };
-        let Some(facts) = self.menu_facts(pane, cx) else {
+        let Some(mut facts) = self.menu_facts(pane, cx) else {
             return;
         };
+        facts.manual_color = mux_host::host(cx).mux.tab(facts.tab).and_then(|t| t.color);
         let position = match (def.id, self.live()) {
             ("viewport", Some(s)) => {
                 let (x, y) = s.grid_origin.get();
@@ -284,6 +308,10 @@ impl AppWindow {
             return;
         };
         cx.notify();
+        if let Some(swatch) = id.strip_prefix("color:") {
+            self.pick_tab_color(open.facts.tab, swatch, cx);
+            return;
+        }
         self.invoke_menu(open.menu, &id, open.facts, window, cx);
     }
 
@@ -461,6 +489,7 @@ impl AppWindow {
                 open.nav.clone(),
             )
             .chips(chips)
+            .palette(self.cfg.tab_bar.palette.clone())
             .on_dismiss(move |_, app| {
                 e1.update(app, |this, cx| {
                     this.open_menu = None;

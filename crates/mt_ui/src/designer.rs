@@ -155,6 +155,7 @@ impl Designer {
         self.workspaces.push(WorkspaceDef {
             name,
             tabs: vec![WorkspaceTab {
+                color: None,
                 title: None,
                 cwd: None,
                 command: vec![],
@@ -229,6 +230,7 @@ impl Designer {
         self.field = Field::None;
         if let Some(w) = self.workspaces.get_mut(self.ws) {
             w.tabs.push(WorkspaceTab {
+                color: None,
                 title: None,
                 cwd: None,
                 command: vec![],

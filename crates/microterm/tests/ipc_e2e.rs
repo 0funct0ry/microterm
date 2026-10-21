@@ -2322,3 +2322,104 @@ fn shell_registered_items_are_listed_run_and_limited_headlessly() {
     let list = mt.json(&["menu", "list"]);
     assert!(!list.to_string().contains("shell:t"));
 }
+
+// ---- M11.3: tab colors -----------------------------------------------------------------------
+
+fn tab_json<'a>(list: &'a Value, tab: &str) -> &'a Value {
+    list["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|w| w["windows"].as_array().unwrap())
+        .flat_map(|w| w["tabs"].as_array().unwrap())
+        .find(|t| t["id"].as_u64() == tab.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("no tab {tab}"))
+}
+
+#[test]
+fn tab_color_set_match_clear_and_new() {
+    let mt = Instance::start();
+    let (tab, _, _) = mt.spawn_ids("sleep 60", &["--title", "build api", "--color", "pink"]);
+    let (plain, _, _) = mt.spawn_ids("sleep 60", &["--title", "shell"]);
+
+    let tabs = mt.json(&["tab", "list"]);
+    let of = |id: &str| {
+        tabs.as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"].as_u64() == id.parse::<u64>().ok())
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(of(&tab)["color"], "pink");
+    assert_eq!(of(&tab)["color_source"], "manual");
+    assert!(of(&plain).get("color").is_none());
+
+    // Recolor through a selector (`color:` is a selector key, too).
+    assert_eq!(
+        mt.ctl(&["tab", "color", "--match", "title:*build*", "orange"])
+            .trim(),
+        "orange (manual)"
+    );
+    assert_eq!(
+        mt.ctl(&["tab", "color", "--match", "color:orange", "#F59E42"])
+            .trim(),
+        "#f59e42 (manual)"
+    );
+    let list = mt.list();
+    assert_eq!(tab_json(&list, &tab)["color"], "#f59e42");
+    assert!(tab_json(&list, &plain).get("color").is_none());
+    assert_eq!(
+        mt.ctl(&["tab", "color", "--tab", &tab, "--clear"]).trim(),
+        "none"
+    );
+    assert!(tab_json(&mt.list(), &tab).get("color").is_none());
+
+    // Unknown names and missing arguments are usage errors that list the valid names.
+    let (code, err) = mt.ctl_err(&["tab", "color", "--tab", &tab, "magenta"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("magenta") && err.contains("teal"), "{err}");
+    assert_eq!(
+        mt.ctl_code(&["tab", "color", "--tab", &tab]),
+        1,
+        "clap usage error"
+    );
+    let (code, err) = mt.ctl_err(&["tab", "new", "--color", "nope"]);
+    assert_eq!(code, 1, "{err}");
+}
+
+#[test]
+fn tab_color_events_stream_only_real_changes() {
+    let mt = Instance::start();
+    let (tab, _, _) = mt.spawn_ids("sleep 60", &["--title", "build"]);
+    let mut c = Process::new(assert_cmd::cargo::cargo_bin("microterm"));
+    c.args(["ctl", "events", "--type", "tab.color_changed", "--json"])
+        .envs(Instance::env(&mt.home))
+        .env_remove("MICROTERM_UNIX_SOCKET")
+        .stdout(Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    std::thread::sleep(Duration::from_millis(700));
+    mt.ctl(&["tab", "color", "--tab", &tab, "teal"]);
+    mt.ctl(&["tab", "color", "--tab", &tab, "teal"]); // no-op: no event
+    mt.ctl(&["tab", "color", "--tab", &tab, "red"]);
+    mt.ctl(&["tab", "color", "--tab", &tab, "--clear"]);
+    let a = read_json_line(&mut out);
+    let b = read_json_line(&mut out);
+    let z = read_json_line(&mut out);
+    let _ = child.kill();
+    let _ = child.wait();
+    for e in [&a, &b, &z] {
+        assert_eq!(e["type"], "tab.color_changed");
+        assert_eq!(e["tab"].to_string(), tab);
+    }
+    assert_eq!(
+        (a["color"].as_str(), a["source"].as_str()),
+        (Some("teal"), Some("manual"))
+    );
+    assert_eq!(b["color"], "red", "the repeated teal was not reported");
+    assert_eq!(
+        (z["color"].as_str(), z["source"].as_str()),
+        (None, Some("none"))
+    );
+}

@@ -496,3 +496,92 @@ async fn split_hints_reach_the_daemon_and_all_three_panes_reattach_after_a_recon
     }
     h.send(Command::Shutdown);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tab_color_reaches_the_daemon_and_survives_a_forced_reconnect() {
+    use mt_proto::mux::{encode, hello, read_frame};
+    use std::io::Write as _;
+
+    let env = start_daemon("tabcolor");
+    let dialer = TestDialer::new(&env);
+    let (h, rx) = start(
+        &tokio::runtime::Handle::current(),
+        LinkConfig {
+            session: "dev".into(),
+            scrollback: 100,
+        },
+        dialer.clone(),
+    );
+    for (pane, word) in [(1, "alpha"), (2, "bravo"), (3, "charlie")] {
+        h.send(spawn_cmd(pane, &format!("printf '{word}'; sleep 60")));
+    }
+    h.send(Command::Split {
+        pane: 2,
+        parent: 1,
+        axis: 0,
+        permille: 500,
+    });
+    h.send(Command::Split {
+        pane: 3,
+        parent: 2,
+        axis: 1,
+        permille: 500,
+    });
+    // Queued before the panes exist: held back until the daemon has the root pane.
+    h.send(Command::SetTabColor {
+        pane: 1,
+        color: Some("teal".into()),
+    });
+    let mut seen = std::collections::BTreeSet::new();
+    until(&rx, |e| {
+        if let LinkEvent::Bytes {
+            pane,
+            replay: false,
+            ..
+        } = e
+        {
+            seen.insert(*pane);
+        }
+        (seen.len() == 3).then_some(())
+    })
+    .await;
+
+    dialer.sever();
+    until(&rx, |e| {
+        matches!(e, LinkEvent::State(LinkState::Reconnecting { .. })).then_some(())
+    })
+    .await;
+    dialer.restore();
+    h.send(Command::ReconnectNow);
+    until(&rx, |e| {
+        matches!(e, LinkEvent::State(LinkState::Connected)).then_some(())
+    })
+    .await;
+
+    let socket = paths::socket_path(&env.dir);
+    let colors = tokio::task::spawn_blocking(move || {
+        let mut s = StdStream::connect(socket).unwrap();
+        s.write_all(&encode(&hello()).unwrap()).unwrap();
+        s.write_all(
+            &encode(&Msg::Attach {
+                session: "dev".into(),
+                panes: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        loop {
+            if let Msg::Attached { panes } = read_frame(&mut s).unwrap().unwrap() {
+                return panes.into_iter().map(|i| i.color).collect::<Vec<_>>();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(colors, [Some("teal".into()), None, None]);
+
+    for pane in 1..=3 {
+        h.send(Command::Close { pane, kill: true });
+    }
+    h.send(Command::Shutdown);
+}

@@ -32,6 +32,14 @@ fn labels(rows: &[MenuRow]) -> Vec<String> {
     rows.iter()
         .map(|r| match &r.kind {
             RowKind::Separator => "---".to_string(),
+            RowKind::Swatches { items, selected } => format!(
+                "swatches({}; check {selected})",
+                items
+                    .iter()
+                    .map(|s| s.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
             RowKind::Header => format!("[{}]", r.label),
             RowKind::Submenu(c) => format!("{} ▸ {}", r.label, labels(c).join("|")),
             RowKind::Item if !r.enabled => format!("({})", r.label),
@@ -319,10 +327,19 @@ fn tab_menu_and_listing() {
     let f = facts(&c, &m, p[0]);
     let l = labels(&resolve(&c, "tab", &f));
     assert_eq!(l[..3], ["Close tab", "Close other tabs", "Rename…"]);
-    assert!(l[3].starts_with("Dup "), "{l:?}");
+    assert_eq!(l[3..5], ["---", "[Tab Color]"], "{l:?}");
+    assert!(
+        l[5].starts_with("swatches(default,blue,purple,pink,red;"),
+        "{l:?}"
+    );
+    assert!(
+        l[6].starts_with("swatches(orange,yellow,green,teal,gray;"),
+        "{l:?}"
+    );
+    assert!(l[7].starts_with("Dup "), "{l:?}");
     let list = list_json(&c);
     assert_eq!(list[0]["id"], "viewport");
-    assert_eq!(list[1]["items"][3]["source"], "config");
+    assert_eq!(list[1]["items"][4]["source"], "config");
     assert_eq!(list[0]["trigger"], "right_click");
     let show = show_json(&c, "viewport", &f);
     assert_eq!(show["items"][0]["id"], "copy");
@@ -371,7 +388,13 @@ fn a_separator_divides_builtins_from_config_items_in_viewport() {
         "[[context_menu.tab.items]]\nid = \"d\"\nlabel = \"D\"\nspawn = { command = [\"sh\"] }\n",
     );
     let rows = resolve(&c, "tab", &facts(&c, &m, p[0]));
-    assert!(!rows.iter().any(|r| r.kind == RowKind::Separator));
+    // The only separator is the one before the "Tab Color" heading.
+    let seps: Vec<_> = rows
+        .iter()
+        .filter(|r| r.kind == RowKind::Separator)
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(seps, ["color-sep"]);
 }
 
 #[test]

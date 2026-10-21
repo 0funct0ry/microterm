@@ -21,6 +21,9 @@ pub const MENU_WIDTH: f32 = 240.0;
 const SEPARATOR_HEIGHT: f32 = 9.0;
 const PADDING: f32 = 4.0;
 const FILTER_HEIGHT: f32 = 26.0;
+/// Swatch grid cell size and the circle drawn in it (SPEC §4.4).
+const SWATCH_PITCH: f32 = 22.0;
+const SWATCH_SIZE: f32 = 16.0;
 
 type Cb<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
 
@@ -28,6 +31,7 @@ type Cb<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
 pub fn row_height(r: &MenuRow) -> f32 {
     match r.kind {
         RowKind::Separator => SEPARATOR_HEIGHT,
+        RowKind::Swatches { .. } => SWATCH_PITCH,
         _ => LIST_ROW_HEIGHT,
     }
 }
@@ -54,6 +58,7 @@ pub struct ContextMenu {
     position: Point<Pixels>,
     nav: MenuNav,
     chips: HashMap<String, String>,
+    palette: std::collections::BTreeMap<String, String>,
     on_activate: Option<Cb<String>>,
     on_hover: Option<Cb<Option<usize>>>,
     on_hover_child: Option<Cb<Option<usize>>>,
@@ -68,6 +73,7 @@ impl ContextMenu {
             position,
             nav,
             chips: HashMap::new(),
+            palette: Default::default(),
             on_activate: None,
             on_hover: None,
             on_hover_child: None,
@@ -79,6 +85,12 @@ impl ContextMenu {
     /// Chip text per row id.
     pub fn chips(mut self, chips: HashMap<String, String>) -> Self {
         self.chips = chips;
+        self
+    }
+
+    /// `[tab_bar.palette]`, for swatch colors.
+    pub fn palette(mut self, palette: std::collections::BTreeMap<String, String>) -> Self {
+        self.palette = palette;
         self
     }
 
@@ -128,7 +140,10 @@ impl ContextMenu {
         cx: &App,
     ) -> gpui::AnyElement {
         let t = theme(cx);
-        match r.kind {
+        match &r.kind {
+            RowKind::Swatches { items, selected } => {
+                return self.swatch_row(id, r, items, selected, style.highlighted, cx)
+            }
             RowKind::Separator => {
                 return div()
                     .id(id)
@@ -188,6 +203,89 @@ impl ContextMenu {
             .when_some(on_click.filter(|_| enabled && !is_sub), |el, f| {
                 el.on_click(move |_, window, cx| f(window, cx))
             })
+            .into_any_element()
+    }
+}
+
+impl ContextMenu {
+    /// One row of the tab-color grid: round swatches, a hollow ring first, a check on the
+    /// selected one, a hover ring and a tooltip with the color name.
+    fn swatch_row(
+        &self,
+        id: ElementId,
+        r: &MenuRow,
+        items: &[crate::tab_color::Swatch],
+        selected: &str,
+        highlighted: bool,
+        cx: &App,
+    ) -> gpui::AnyElement {
+        let t = theme(cx);
+        let cells = items.iter().enumerate().map(|(i, sw)| {
+            let rgba = sw
+                .color
+                .map(|c| crate::tab_color::resolve_rgba(&t.tab_ui, &self.palette, c));
+            let is_selected = sw.id == selected;
+            let focused = highlighted && self.nav.col.min(items.len() - 1) == i;
+            let act = self.on_activate.clone();
+            let swid = format!("color:{}", sw.id);
+            let label = SharedString::from(sw.label.clone());
+            let tip = if is_selected {
+                SharedString::from(format!("{}, selected", sw.label))
+            } else {
+                label.clone()
+            };
+            let enabled = r.enabled;
+            div()
+                .id((id.clone(), SharedString::from(format!("sw-{}", sw.id))))
+                .size(px(SWATCH_PITCH))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .when(enabled, |d| d.cursor_pointer())
+                .child(
+                    div()
+                        .size(px(SWATCH_SIZE))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .border_2()
+                        .border_color(if focused {
+                            t.text
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .hover(move |s| s.border_color(t.text_muted))
+                        .map(|d| match rgba {
+                            Some(c) => d.bg(crate::theme::hsla(c)),
+                            None => d.border_1().border_color(t.border),
+                        })
+                        .when(is_selected, |d| {
+                            let white = rgba.map_or(!t.is_dark, crate::tab_color::check_is_white);
+                            d.child(Icon::new(IconName::Check).size(px(10.)).color(if white {
+                                gpui::white()
+                            } else {
+                                gpui::black()
+                            }))
+                        }),
+                )
+                .tooltip(move |_, cx| cx.new(|_| super::Tooltip::new(tip.clone())).into())
+                .when(enabled, |d| {
+                    d.on_click(move |_, w, cx| {
+                        if let Some(a) = &act {
+                            a(swid.clone(), w, cx);
+                        }
+                    })
+                })
+        });
+        div()
+            .id(id.clone())
+            .h(px(SWATCH_PITCH))
+            .px_2()
+            .flex()
+            .items_center()
+            .children(cells)
             .into_any_element()
     }
 }

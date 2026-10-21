@@ -473,6 +473,8 @@ const TAB_BUILTINS: &[BuiltinDef] = &[
     b("close", "Close tab", Some("CloseTab")),
     b("close_others", "Close other tabs", None),
     b("rename", "Rename…", None),
+    // A "Tab Color" heading with the swatch grid (M11.3); `[context_menu.tab] builtin` can prune it.
+    b("color", "Tab Color", None),
 ];
 
 pub static MENUS: &[MenuDef] = &[

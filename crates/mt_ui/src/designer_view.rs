@@ -100,6 +100,7 @@ impl AppWindow {
         let tab = host.mux.window(self.mux_window)?.active_tab()?;
         let root = conv(&tab.tree);
         Some(WorkspaceTab {
+            color: None,
             title: tab.title_override.clone(),
             cwd: root.cwd,
             command: vec![],

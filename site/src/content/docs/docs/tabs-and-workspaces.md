@@ -25,6 +25,68 @@ default keys; bind them under `[[keys]]` or run them from the command palette.
 - **Middle-click** a tab to close it. Closing the last tab closes the window.
 - A **dot** on a tab means a program other than the shell is running in it.
 
+### Tab colors
+
+Color a tab so one glance at the tab bar tells prod from the build from the agent. Right-click a
+tab: below **Rename…**, the **Tab Color** heading shows ten round swatches in two rows of five.
+The first, a hollow ring, is *Default* and clears the manual color; the current color carries a
+check mark. Arrow keys move across the grid, `Enter` picks, `Esc` closes. The command palette has
+**Tab: Set color…** (a list with a swatch per row) and **Tab: Clear color**, and `ctl` sets colors
+from scripts:
+
+```sh
+microterm ctl tab color --match 'title:*build*' orange
+microterm ctl tab color '#f59e42'          # a custom color, lightness-clamped for contrast
+microterm ctl tab color --clear
+```
+
+The nine names are `blue`, `purple`, `pink`, `red`, `orange`, `yellow`, `green`, `teal` and `gray`.
+They resolve through the theme (see [Themes](/docs/themes/)), so they stay legible in every theme.
+
+A tab's color comes from the first of these that is set:
+
+| Order | Source | Set by |
+|---|---|---|
+| 1 | `manual` | the menu, the palette, `ctl tab color`, `tab new --color` |
+| 2 | `declared` | `color = "…"` on a `[[workspaces]]` tab, a `[[launch]]` profile or an `[[ssh_domains]]` entry |
+| 3 | `rule` | the first matching `[[tab_bar.color_rules]]` entry |
+
+The *Default* swatch and `--clear` remove only the manual color, so declared colors and rules apply
+again. There is deliberately no way to force "no color" over a declared one: remove the
+declaration instead.
+
+```toml
+[tab_bar]
+color_style = "bar+tint"        # bar | tint | bar+tint | dot | none
+
+[tab_bar.palette]               # override a built-in color, or add up to 10 more names
+orange = "#f59e42"
+brand = "#3b82f6"
+
+[[tab_bar.color_rules]]         # first match wins; a tab matches if any of its panes does
+match = "domain:prod-*"
+color = "red"
+
+[[ssh_domains]]
+name = "prod-db"
+host = "db.example.com"
+color = "red"                   # every tab opened in this domain
+```
+
+`color_style` picks the look: `bar` is a 2 px line on the tab's top edge (60 % on inactive tabs),
+`tint` mixes the color into the tab background (14 % active, 7 % inactive), `bar+tint` is the
+default, `dot` is a small dot before the title for dense setups, and `none` stores and reports
+colors without drawing them. Status dots, the attention badge and the progress line keep their own
+colors; when a status dot would match the tab color it gets a thin ring. The tab tooltip says
+`Color: red (rule: domain:prod-*)`.
+
+Color is never the only signal: the tooltip, the palette row and `ctl tab list` all carry the
+color name. (GPUI 0.2.2 has no accessibility API yet, so screen-reader labels wait for it, as for
+the other menus.)
+
+Remote tabs keep their manual color on the mux daemon, so it survives a reconnect. Local tabs
+keep it for the life of the process; rules and declared colors re-apply on every start.
+
 ### Titles
 
 A tab shows its custom name, else the title the program set (OSC 0/2), else the foreground

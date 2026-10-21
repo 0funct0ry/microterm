@@ -26,6 +26,9 @@ pub struct PaneInfo {
     pub session: String,
     /// How the pane was split off another one (SPEC §17.1), so a client can rebuild the layout.
     pub split: Option<SplitInfo>,
+    /// The tab's manual color (name or `#rrggbb`), set on the tab's root pane (`split` is
+    /// `None`); `None` on every other pane.
+    pub color: Option<String>,
 }
 
 /// A pane created by splitting `parent`. `axis` is 0 for side by side (the new pane on the
@@ -113,6 +116,12 @@ pub enum Msg {
         axis: u8,
         permille: u16,
     },
+    /// Sets (or with `None` clears) the manual color of the tab whose root pane is `pane`. The
+    /// daemon keeps it and returns it in `Attached`/`Listing` (the daemon is authoritative).
+    SetTabColor {
+        pane: PaneId,
+        color: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +160,7 @@ impl Msg {
             Msg::Listing { .. } => 18,
             Msg::Error { .. } => 19,
             Msg::Split { .. } => 20,
+            Msg::SetTabColor { .. } => 21,
         }
     }
 }
@@ -280,6 +290,7 @@ mod tests {
                 axis: 0,
                 permille: 400,
             }),
+            color: Some("teal".into()),
         };
         vec![
             hello(),
@@ -346,6 +357,10 @@ mod tests {
                 axis: 1,
                 permille: 300,
             },
+            Msg::SetTabColor {
+                pane: 4,
+                color: Some("#112233".into()),
+            },
         ]
     }
 
@@ -356,6 +371,17 @@ mod tests {
             let got = read_frame(&mut bytes.as_slice()).unwrap().unwrap();
             assert_eq!(got, m);
         }
+    }
+
+    #[test]
+    fn clearing_a_tab_color_round_trips() {
+        let m = Msg::SetTabColor {
+            pane: 4,
+            color: None,
+        };
+        let bytes = encode(&m).unwrap();
+        assert_eq!(read_frame(&mut bytes.as_slice()).unwrap().unwrap(), m);
+        assert_eq!(m.kind(), 21);
     }
 
     #[test]

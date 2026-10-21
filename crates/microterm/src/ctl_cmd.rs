@@ -395,6 +395,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                                 t.id.to_string(),
                                 t.window.to_string(),
                                 t.domain,
+                                t.color.unwrap_or_default(),
                                 t.title,
                             ]
                         })
@@ -405,6 +406,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                             Column::new("ID", ColKind::Id),
                             Column::new("WINDOW", ColKind::Id),
                             Column::low("DOMAIN", ColKind::Text, 1),
+                            Column::low("COLOR", ColKind::Text, 1),
                             Column::new("TITLE", ColKind::Text),
                         ],
                         rows,
@@ -418,6 +420,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                 domain,
                 cwd,
                 title,
+                color,
                 command,
             } => {
                 let v = call(Request::TabNew(SpawnParams {
@@ -426,6 +429,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                     domain,
                     cwd: cwd.as_deref().map(abs),
                     title,
+                    color,
                     command: (!command.is_empty()).then_some(command),
                     ..Default::default()
                 }))?;
@@ -459,6 +463,29 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                 target: tab_target(target, env),
                 title,
             }))?),
+            TabCmd::Color {
+                target,
+                color,
+                clear,
+            } => {
+                let v = call(Request::TabSetColor(mt_proto::TabColorParams {
+                    target: tab_target(target, env),
+                    color,
+                    clear,
+                }))?;
+                result(v, &|v| {
+                    let text = match v.get("color").and_then(Value::as_str) {
+                        Some(c) => format!(
+                            "{c} ({})",
+                            v.get("color_source")
+                                .and_then(Value::as_str)
+                                .unwrap_or("manual")
+                        ),
+                        None => "none".to_string(),
+                    };
+                    Ok(Output::new(Body::Text(text)))
+                })
+            }
             TabCmd::Close { target, force, all } => {
                 let t = Target {
                     force,

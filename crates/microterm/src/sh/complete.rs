@@ -738,6 +738,7 @@ pub fn selector_hint(word: &str, snap: Option<&MuxSnapshot>) -> Option<String> {
                         exited: p.exited,
                         exit_code: p.exit_code,
                         status: p.status.clone(),
+                        color: t.color.clone(),
                     };
                     if selector_matches(&sel, &row) {
                         n += 1;

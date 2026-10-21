@@ -305,6 +305,8 @@ fn readonly_rejects_mutating_verbs_on_the_client() {
     for line in [
         "pane close 5",
         "tab new",
+        "tab color --tab 3 red",
+        "tab color --tab 3 --clear",
         "type 7 hi",
         "pane send-text --pane 7 hi",
     ] {
@@ -316,9 +318,10 @@ fn readonly_rejects_mutating_verbs_on_the_client() {
     assert_eq!(code, 0);
     let methods = stub.methods();
     assert!(
-        !methods
-            .iter()
-            .any(|m| m == "pane.close" || m == "tab.new" || m == "pane.send_text"),
+        !methods.iter().any(|m| m == "pane.close"
+            || m == "tab.new"
+            || m == "tab.set_color"
+            || m == "pane.send_text"),
         "{methods:?}"
     );
 }

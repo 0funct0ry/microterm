@@ -14,6 +14,7 @@ fn shop() -> WorkspaceDef {
     WorkspaceDef {
         name: "shop".into(),
         tabs: vec![WorkspaceTab {
+            color: None,
             title: Some("dev".into()),
             cwd: None,
             command: vec![],
@@ -131,6 +132,7 @@ fn arb_ws() -> impl Strategy<Value = Vec<WorkspaceDef>> {
                 tabs: ps
                     .into_iter()
                     .map(|p| WorkspaceTab {
+                        color: None,
                         title: None,
                         cwd: None,
                         command: if p.split.is_none() { p.command } else { vec![] },

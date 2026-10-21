@@ -61,6 +61,11 @@ pub fn event_of(e: &MuxEvent) -> Event {
         MuxEvent::MenuItemsChanged { pane } => Event::MenuItemsChanged { pane },
         MuxEvent::TabAdded { window, tab } => Event::TabAdded { window, tab },
         MuxEvent::TabRemoved { window, tab } => Event::TabRemoved { window, tab },
+        MuxEvent::TabColorChanged { tab, color, source } => Event::TabColorChanged {
+            tab,
+            color: color.map(|c| c.to_string()),
+            source: source.name().into(),
+        },
         MuxEvent::TabMoved {
             window,
             tab,
@@ -101,6 +106,7 @@ pub fn spawn_spec(p: &SpawnParams) -> Result<SpawnSpec, RpcError> {
         cwd: p.cwd.as_deref().map(expand_tilde),
         command,
         title: p.title.clone(),
+        manual_color: p.color.as_deref().map(parse_color).transpose()?,
         ..Default::default()
     })
 }
@@ -590,6 +596,41 @@ pub fn resolve_focus(mux: &Mux, rows: &Rows, p: &TabFocusParams) -> Result<(Id, 
         }
         (None, None) => unreachable!("handled above"),
     }
+}
+
+/// A color argument: a built-in name or `#rrggbb`. The error lists the valid names.
+pub fn parse_color(s: &str) -> Result<mt_mux::TabColor, RpcError> {
+    mt_mux::TabColor::parse(s).map_err(|e| RpcError::bad_request(e.to_string()))
+}
+
+/// `tab.set_color`: sets or clears the manual color of one tab and reports what applies now
+/// (`color`/`color_source` are `null` when nothing does).
+pub fn set_tab_color(
+    mux: &mut Mux,
+    rows: &Rows,
+    p: &mt_proto::TabColorParams,
+) -> Result<Value, RpcError> {
+    let color = match (&p.color, p.clear) {
+        (Some(_), true) => return Err(RpcError::bad_request("give a color or --clear, not both")),
+        (None, false) => {
+            return Err(RpcError::bad_request(
+                "give a color (a name or '#rrggbb') or --clear",
+            ))
+        }
+        (Some(c), false) => Some(parse_color(c)?),
+        (None, true) => None,
+    };
+    let (_, tab) = resolve_rename(mux, rows, &p.target)?;
+    mux.set_tab_color(tab, color).map_err(RpcError::from)?;
+    let (now, source) = mux
+        .tab(tab)
+        .map(|t| t.resolved_color())
+        .unwrap_or((None, mt_mux::ColorSource::None));
+    Ok(serde_json::json!({
+        "tab": tab,
+        "color": now.map(|c| c.to_string()),
+        "color_source": now.map(|_| source.name()),
+    }))
 }
 
 /// The tab a `tab.rename` addresses, as `(window, tab)`.

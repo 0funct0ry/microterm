@@ -53,6 +53,7 @@ Right-click on a tab header. Pane facts are those of the tab's active pane.
 - `close`: Close tab, chip of `CloseTab`
 - `close_others`: Close other tabs
 - `rename`: Rename…
+- `color`: Tab Color
 
 ## Icons
 

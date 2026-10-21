@@ -84,7 +84,10 @@ dangerous = ["rm -rf"]
     assert_eq!(&v[..5], ["blame", "status", "item_2", "agent", "layout"]);
     assert_eq!(v[5], "copy");
     // `include` expands the group in place, after the built-ins.
-    assert_eq!(ids(c, "tab"), ["close", "close_others", "rename", "rotate"]);
+    assert_eq!(
+        ids(c, "tab"),
+        ["close", "close_others", "rename", "color", "rotate"]
+    );
     assert_eq!(c.menu_security.dangerous, ["rm -rf"]);
     // The whole config round-trips.
     let back = parse_str(&toml::to_string(c).unwrap()).unwrap();
@@ -306,7 +309,7 @@ fn golden_ids_limits_and_settings() {
     );
     assert_eq!(
         errors("[menu_security]\nconfirm_panes = [\"tilte:x\"]\n"),
-        ["microterm.toml:2:17 — menu_security.confirm_panes[0]: unknown selector key \"tilte\" (keys: id, title, cwd, cmd, domain, workspace, window, tab, focused, active, status, exited)"]
+        ["microterm.toml:2:17 — menu_security.confirm_panes[0]: unknown selector key \"tilte\" (keys: id, title, cwd, cmd, domain, workspace, window, tab, focused, active, status, exited, color)"]
     );
 }
 

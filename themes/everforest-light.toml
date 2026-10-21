@@ -12,3 +12,7 @@ selection_bg = "#3a94c540"
 selection_fg = ""
 ansi    = ["#5c6a72", "#f85552", "#8da101", "#dfa000", "#3a94c5", "#df69ba", "#35a77c", "#dfddc8"]
 brights = ["#829181", "#f85552", "#8da101", "#dfa000", "#3a94c5", "#df69ba", "#35a77c", "#f4f0d9"]
+
+# Slightly stronger UI text so the title stays at 4.5:1 on tinted tabs (SPEC §4.4, tab colors).
+[ui]
+text = "#58666e"

@@ -74,6 +74,8 @@ pub struct Facts {
     pub values: Values,
     /// Items registered by programs in the pane and project items (SPEC §10.9.7).
     pub shell: shell::ShellState,
+    /// The tab's manual color, for the check mark of the `tab/color` swatches.
+    pub manual_color: Option<mt_mux::TabColor>,
 }
 
 impl Facts {
@@ -173,6 +175,7 @@ impl Facts {
             facts: f,
             values: v,
             shell,
+            manual_color: None,
         })
     }
 
@@ -324,7 +327,16 @@ pub enum RowKind {
     Submenu(Vec<MenuRow>),
     Separator,
     Header,
+    /// One row of the tab-color swatch grid (5 columns); `selected` is the swatch id that
+    /// shows the check mark.
+    Swatches {
+        items: Vec<crate::tab_color::Swatch>,
+        selected: String,
+    },
 }
+
+/// Swatches per grid row.
+pub const SWATCH_COLUMNS: usize = 5;
 
 /// One displayed row, keyed by item id.
 #[derive(Debug, Clone, PartialEq)]
@@ -424,6 +436,34 @@ fn user_row(id: &str, item: &MenuItem, children: &[Entry<'_>], f: &Facts) -> Opt
     })
 }
 
+/// The `tab/color` built-in: a "Tab Color" heading and the swatch grid, 5 per row.
+fn color_rows(cfg: &Config, f: &Facts, item: MenuRow) -> Vec<MenuRow> {
+    let palette = &cfg.tab_bar.palette;
+    let selected = crate::tab_color::selected_swatch(palette, f.manual_color);
+    let mut out = vec![MenuRow {
+        kind: RowKind::Header,
+        enabled: false,
+        ..item.clone()
+    }];
+    for (i, chunk) in crate::tab_color::swatches(palette)
+        .chunks(SWATCH_COLUMNS)
+        .enumerate()
+    {
+        out.push(MenuRow {
+            id: format!("color-row-{i}"),
+            label: String::new(),
+            chip_action: None,
+            icon: None,
+            enabled: item.enabled,
+            kind: RowKind::Swatches {
+                items: chunk.to_vec(),
+                selected: selected.clone(),
+            },
+        });
+    }
+    out
+}
+
 /// Drops leading, trailing and doubled separators, and puts one before each header.
 fn tidy(rows: Vec<MenuRow>) -> Vec<MenuRow> {
     let mut out: Vec<MenuRow> = Vec::new();
@@ -467,6 +507,18 @@ pub fn resolve(cfg: &Config, menu: &str, f: &Facts) -> Vec<MenuRow> {
     }
     if reg::menu(menu).is_some_and(|m| m.shell_registrable) {
         rows.extend(shell::rows(cfg, f));
+    }
+    if menu == "tab" {
+        rows = rows
+            .into_iter()
+            .flat_map(|r| {
+                if r.id == "color" && r.kind == RowKind::Item {
+                    color_rows(cfg, f, r)
+                } else {
+                    vec![r]
+                }
+            })
+            .collect();
     }
     tidy(rows)
 }
@@ -823,6 +875,7 @@ fn rows_json(rows: &[MenuRow]) -> Value {
                     "label": r.label,
                     "enabled": r.enabled,
                     "type": match r.kind {
+                        RowKind::Swatches { .. } => "swatches",
                         RowKind::Item => "item",
                         RowKind::Submenu(_) => "submenu",
                         RowKind::Separator => "separator",
@@ -831,6 +884,14 @@ fn rows_json(rows: &[MenuRow]) -> Value {
                 });
                 if let RowKind::Submenu(c) = &r.kind {
                     v["items"] = rows_json(c);
+                }
+                if let RowKind::Swatches { items, selected } = &r.kind {
+                    v["swatches"] = json!(items
+                        .iter()
+                        .map(
+                            |s| json!({"id": s.id, "label": s.label, "selected": &s.id == selected})
+                        )
+                        .collect::<Vec<_>>());
                 }
                 if let Some(o) = shell::origin_of(&r.id) {
                     v["origin"] = json!(o);

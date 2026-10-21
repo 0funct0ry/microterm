@@ -399,6 +399,7 @@ fn command_accepts_string_or_array_and_cwd_inherits_via_split_nodes() {
 fn workspace_issues_are_path_addressed() {
     use mt_config::{validate_workspaces, SplitKind, WorkspaceDef, WorkspacePane, WorkspaceTab};
     let tab = WorkspaceTab {
+        color: None,
         title: None,
         cwd: None,
         command: vec![],
@@ -412,4 +413,110 @@ fn workspace_issues_are_path_addressed() {
     }];
     let issues = validate_workspaces(&w, "default");
     assert_eq!(issues[0].path, "workspaces[0].tabs[0]");
+}
+
+// ---- tab colors (M11.3) ----------------------------------------------------------------
+
+fn msgs(src: &str) -> String {
+    err(src)
+        .iter()
+        .map(|d| d.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn tab_colors_parse_with_palette_rules_and_declared_colors() {
+    let src = r##"
+[tab_bar]
+color_style = "dot"
+[tab_bar.palette]
+orange = "#f59e42"
+brand = "#112233"
+[[tab_bar.color_rules]]
+match = "domain:prod-*"
+color = "red"
+[[tab_bar.color_rules]]
+match = "cmd:cargo*"
+color = "brand"
+[[launch]]
+name = "Prod"
+command = ["ssh", "prod"]
+color = "red"
+[[workspaces]]
+name = "dev"
+[[workspaces.tabs]]
+title = "build"
+color = "#00ff00"
+[[ssh_domains]]
+name = "prod-db"
+host = "db"
+color = "red"
+"##;
+    let c = parse_str(src).expect("valid").config;
+    assert_eq!(c.tab_bar.color_style, TabColorStyle::Dot);
+    assert_eq!(c.tab_bar.palette["orange"], "#f59e42");
+    assert_eq!(c.tab_bar.color_rules.len(), 2);
+    assert_eq!(c.tab_bar.color_rules[0].selector, "domain:prod-*");
+    assert_eq!(c.launch[0].color.as_deref(), Some("red"));
+    assert_eq!(c.workspaces[0].tabs[0].color.as_deref(), Some("#00ff00"));
+    assert_eq!(c.ssh_domains[0].color.as_deref(), Some("red"));
+    let back = parse_str(&toml::to_string(&c).unwrap()).unwrap().config;
+    assert_eq!(back, c);
+}
+
+#[test]
+fn tab_color_defaults() {
+    let c = Config::default();
+    assert_eq!(c.tab_bar.color_style, TabColorStyle::BarTint);
+    assert!(c.tab_bar.palette.is_empty() && c.tab_bar.color_rules.is_empty());
+}
+
+#[test]
+fn unknown_color_name_suggests_the_closest() {
+    let m = msgs("[[launch]]\nname = \"x\"\ncolor = \"gren\"\n");
+    assert!(
+        m.contains("unknown color \"gren\"") && m.contains("did you mean \"green\""),
+        "{m}"
+    );
+}
+
+#[test]
+fn bad_hex_bad_selector_and_bad_palette_are_errors() {
+    let m = msgs("[[ssh_domains]]\nname = \"a\"\nhost = \"h\"\ncolor = \"#12345\"\n");
+    assert!(m.contains("not a #rrggbb color"), "{m}");
+    let m = msgs("[[tab_bar.color_rules]]\nmatch = \"bogus:x\"\ncolor = \"red\"\n");
+    assert!(m.contains("unknown selector key"), "{m}");
+    let m = msgs("[tab_bar.palette]\nBad = \"#112233\"\nok = \"red\"\n");
+    assert!(
+        m.contains("must match [a-z][a-z0-9-]*") && m.contains("must be a #rrggbb"),
+        "{m}"
+    );
+}
+
+#[test]
+fn too_many_rules_and_extras_are_errors() {
+    let mut src = String::new();
+    for _ in 0..65 {
+        src.push_str("[[tab_bar.color_rules]]\nmatch = \"title:x\"\ncolor = \"red\"\n");
+    }
+    assert!(msgs(&src).contains("at most 64"));
+    let mut src = String::from("[tab_bar.palette]\n");
+    for i in 0..11 {
+        src.push_str(&format!("extra{i} = \"#112233\"\n"));
+    }
+    assert!(msgs(&src).contains("at most 10"));
+}
+
+#[test]
+fn rules_may_use_palette_extras() {
+    let src = "[tab_bar.palette]\nbrand = \"#112233\"\n[[tab_bar.color_rules]]\nmatch = \"title:x\"\ncolor = \"brand\"\n";
+    assert!(parse_str(src).is_ok());
+}
+
+#[test]
+fn color_keys_are_known_so_no_unknown_key_warning() {
+    let src = "[tab_bar]\ncolor_style = \"bar\"\n[[launch]]\nname = \"x\"\ncolor = \"red\"\n";
+    let l = parse_str(src).unwrap();
+    assert!(l.warnings.is_empty(), "{:?}", l.warnings);
 }

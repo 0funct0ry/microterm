@@ -334,6 +334,14 @@ pub(crate) fn remote_terminal(
     Ok(term)
 }
 
+/// Tells the daemon about the manual color of a remote tab (the daemon is authoritative: it
+/// keeps the color for reconnects and other clients). `root` is the tab's root pane.
+pub(crate) fn send_tab_color(cx: &mut App, domain: DomainId, root: u64, color: Option<String>) {
+    if let Some(c) = mux_host::host(cx).ssh.conns.get(&domain) {
+        c.link.send(Command::SetTabColor { pane: root, color });
+    }
+}
+
 pub(crate) fn reconnect_now(cx: &mut App, domain: DomainId) {
     if let Some(c) = mux_host::host(cx).ssh.conns.get(&domain) {
         c.link.send(Command::ReconnectNow);

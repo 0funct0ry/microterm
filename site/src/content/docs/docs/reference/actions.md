@@ -125,6 +125,14 @@ action = "Disable"   # unbind a default
 | `ShowContextMenu` | **Show context menu** — Open the named context menu (`viewport`, `tab`) for the focused pane or the active tab | — | — |
 | `InvokeMenuItem` | **Invoke menu item** — Run a context-menu item, `"menu/item"` (for example `"viewport/zoom"`), against the focused pane | — | — |
 
+## Tab colors
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `SetTabColor` | **Set tab color** — Color the active tab with a name (blue, purple, pink, red, orange, yellow, green, teal, gray), a `[tab_bar.palette]` name or `#rrggbb` | — | — |
+| `SetTabColorInteractive` | **Tab: Set color…** — Pick a color for the active tab from a list | — | — |
+| `ClearTabColor` | **Tab: Clear color** — Remove the manual color of the active tab; declared colors and rules still apply | — | — |
+
 ## Misc
 
 | Action | Description | macOS | Linux |

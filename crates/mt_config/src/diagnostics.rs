@@ -265,6 +265,12 @@ const ROOT: &[(&str, K)] = &[
             ("hide_if_single", K::Leaf),
             ("title_format", K::Leaf),
             ("show_index", K::Leaf),
+            ("color_style", K::Leaf),
+            ("palette", K::Free),
+            (
+                "color_rules",
+                K::Array(&[("match", K::Leaf), ("color", K::Leaf)]),
+            ),
         ]),
     ),
     (
@@ -329,7 +335,12 @@ const ROOT: &[(&str, K)] = &[
     ("copy_mode", K::Table(&[("keys", K::Array(KEY_ENTRY))])),
     (
         "launch",
-        K::Array(&[("name", K::Leaf), ("command", K::Leaf), ("cwd", K::Leaf)]),
+        K::Array(&[
+            ("name", K::Leaf),
+            ("command", K::Leaf),
+            ("cwd", K::Leaf),
+            ("color", K::Leaf),
+        ]),
     ),
     (
         "workspaces",
@@ -339,6 +350,7 @@ const ROOT: &[(&str, K)] = &[
                 "tabs",
                 K::Array(&[
                     ("title", K::Leaf),
+                    ("color", K::Leaf),
                     ("cwd", K::Leaf),
                     ("command", K::Leaf),
                     ("split", K::Leaf),
@@ -359,6 +371,7 @@ const ROOT: &[(&str, K)] = &[
             ("multiplexing", K::Leaf),
             ("remote_dir", K::Leaf),
             ("connect_timeout_s", K::Leaf),
+            ("color", K::Leaf),
         ]),
     ),
     ("gpu", K::Table(&[("prefer", K::Leaf)])),
@@ -542,6 +555,7 @@ fn validate_tabs_and_workspaces(c: &Config, err: &mut impl FnMut(&[&str], String
             "new_tab_cwd must be \"inherit\", \"home\" or an absolute path".into(),
         );
     }
+    validate_tab_colors(c, err);
     for issue in validate_workspaces(&c.workspaces, &c.startup_workspace) {
         let key = if issue.path == "startup_workspace" {
             "startup_workspace"
@@ -549,6 +563,120 @@ fn validate_tabs_and_workspaces(c: &Config, err: &mut impl FnMut(&[&str], String
             "workspaces"
         };
         err(&[key], format!("{}: {}", issue.path, issue.message));
+    }
+}
+
+/// Whether `name` is a valid palette entry name (`[a-z][a-z0-9-]*`).
+fn is_color_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn validate_tab_colors(c: &Config, err: &mut impl FnMut(&[&str], String)) {
+    use mt_proto::color::{NamedColor, TabColor};
+    let builtin: Vec<&str> = NamedColor::ALL.iter().map(|n| n.name()).collect();
+    let mut extras: Vec<&str> = Vec::new();
+    for (name, value) in &c.tab_bar.palette {
+        if !is_color_name(name) {
+            err(
+                &["tab_bar", "palette"],
+                format!("tab_bar.palette name \"{name}\" must match [a-z][a-z0-9-]*"),
+            );
+        }
+        if !(value.starts_with('#') && TabColor::parse(value).is_ok()) {
+            err(
+                &["tab_bar", "palette"],
+                format!("tab_bar.palette.{name} must be a #rrggbb color, got \"{value}\""),
+            );
+        }
+        if !builtin.contains(&name.as_str()) {
+            extras.push(name);
+        }
+    }
+    if extras.len() > crate::schema::MAX_EXTRA_COLORS {
+        err(
+            &["tab_bar", "palette"],
+            format!(
+                "tab_bar.palette defines {} extra colors; at most {} are allowed",
+                extras.len(),
+                crate::schema::MAX_EXTRA_COLORS
+            ),
+        );
+    }
+    let known: Vec<&str> = builtin
+        .iter()
+        .copied()
+        .chain(extras.iter().copied())
+        .collect();
+    let check = |what: &str, value: &str, path: &[&str], err: &mut dyn FnMut(&[&str], String)| {
+        if known.contains(&value) || (value.starts_with('#') && TabColor::parse(value).is_ok()) {
+            return;
+        }
+        let mut msg = if value.starts_with('#') {
+            format!("{what}: \"{value}\" is not a #rrggbb color")
+        } else {
+            format!("{what}: unknown color \"{value}\"")
+        };
+        let best = known
+            .iter()
+            .map(|k| (*k, strsim::damerau_levenshtein(value, k)))
+            .filter(|(_, d)| *d <= 2)
+            .min_by_key(|(_, d)| *d);
+        if let Some((k, _)) = best {
+            msg.push_str(&format!(" (did you mean \"{k}\"?)"));
+        }
+        msg.push_str(&format!("; use {} or #rrggbb", known.join(", ")));
+        err(path, msg);
+    };
+    if c.tab_bar.color_rules.len() > crate::schema::MAX_COLOR_RULES {
+        err(
+            &["tab_bar", "color_rules"],
+            format!(
+                "tab_bar.color_rules has {} entries; at most {} are allowed",
+                c.tab_bar.color_rules.len(),
+                crate::schema::MAX_COLOR_RULES
+            ),
+        );
+    }
+    for (i, r) in c.tab_bar.color_rules.iter().enumerate() {
+        let what = format!("tab_bar.color_rules[{i}]");
+        match mt_proto::Selector::parse(&r.selector).and_then(|s| s.check(mt_proto::Resource::Pane))
+        {
+            Ok(()) => {}
+            Err(e) => err(
+                &["tab_bar", "color_rules"],
+                format!("{what}.match \"{}\": {}", r.selector, e.message),
+            ),
+        }
+        check(
+            &format!("{what}.color"),
+            &r.color,
+            &["tab_bar", "color_rules"],
+            err,
+        );
+    }
+    for (i, p) in c.launch.iter().enumerate() {
+        if let Some(v) = &p.color {
+            check(&format!("launch[{i}].color"), v, &["launch"], err);
+        }
+    }
+    for (wi, w) in c.workspaces.iter().enumerate() {
+        for (ti, t) in w.tabs.iter().enumerate() {
+            if let Some(v) = &t.color {
+                check(
+                    &format!("workspaces[{wi}].tabs[{ti}].color"),
+                    v,
+                    &["workspaces"],
+                    err,
+                );
+            }
+        }
+    }
+    for (i, d) in c.ssh_domains.iter().enumerate() {
+        if let Some(v) = &d.color {
+            check(&format!("ssh_domains[{i}].color"), v, &["ssh_domains"], err);
+        }
     }
 }
 

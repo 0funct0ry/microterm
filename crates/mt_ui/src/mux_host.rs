@@ -39,6 +39,14 @@ pub struct MuxHost {
     pub(crate) runtime: PaneRuntime,
     /// OS notifications for `pane notify`; tests swap in a fake.
     pub(crate) notifier: Arc<dyn crate::notifier::Notifier>,
+    /// `match` expression of the color rule that colors each tab (for the tooltip).
+    pub(crate) rule_labels: HashMap<Id, String>,
+    /// The compiled `[[tab_bar.color_rules]]` and the config they came from.
+    pub(crate) rules: Option<(Vec<mt_config::ColorRule>, mt_mux::ColorRules)>,
+    /// Tabs whose declared color came from their SSH domain (so a reload can change it).
+    pub(crate) domain_colored: std::collections::HashSet<Id>,
+    /// The manual color last sent to each remote tab's daemon.
+    pub(crate) remote_colors: HashMap<Id, Option<mt_mux::TabColor>>,
 }
 
 impl Global for MuxHost {}
@@ -55,6 +63,10 @@ impl MuxHost {
             ssh: SshHub::default(),
             runtime: PaneRuntime::default(),
             notifier: crate::notifier::system(),
+            rule_labels: HashMap::new(),
+            rules: None,
+            domain_colored: Default::default(),
+            remote_colors: HashMap::new(),
         }
     }
 
@@ -95,6 +107,7 @@ impl MuxHost {
             .mux
             .spawn_tab_in(window, spec.domain, spec.cwd.clone(), spec.title.clone())
             .ok()?;
+        self.mux.apply_spawn_colors(tab, &spec);
         self.pending.insert(pane, spec);
         Some((tab, pane))
     }
@@ -145,6 +158,7 @@ fn expand_tilde(path: &str) -> PathBuf {
 /// Makes sure a workspace has at least one mux window: the declared tabs of its `[[workspaces]]`
 /// entry, or one default tab. `first` overrides the spec of the first tab (`--cwd`, `-e`).
 fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec>) {
+    let palette = cx.global::<Settings>().config.tab_bar.palette.clone();
     let declared = {
         let name = host(cx)
             .mux
@@ -174,6 +188,7 @@ fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec
             cwd: t.cwd.as_deref().map(expand_tilde),
             command: (!t.command.is_empty()).then(|| t.command.clone()),
             title: t.title.clone(),
+            color: declared_color(t.color.as_deref(), &palette),
             ..Default::default()
         })
         .collect();
@@ -841,6 +856,11 @@ fn rename_tab(cx: &mut App, p: &mt_proto::TabRenameParams) -> Reply {
     Ok(json!({}))
 }
 
+fn set_tab_color(cx: &mut App, p: &mt_proto::TabColorParams) -> Reply {
+    let rows = rows(cx);
+    ipc_ops::set_tab_color(&mut host(cx).mux, &rows, p)
+}
+
 fn focus_window(cx: &mut App, t: &mt_proto::Target) -> Reply {
     let id = ipc_ops::resolve_window(&rows(cx), t)?;
     show_window_workspace(cx, id)?;
@@ -1051,7 +1071,152 @@ pub(crate) fn tab_chrome(cx: &App, pane: Id) -> crate::tab_chrome::TabChrome {
         .locate_pane(pane)
         .and_then(|(w, i)| h.mux.window(w).map(|w| w.tabs[i].zoomed.is_some()))
         .unwrap_or(false);
+    let tab = h
+        .mux
+        .locate_pane(pane)
+        .and_then(|(w, i)| h.mux.window(w).map(|w| &w.tabs[i]));
+    if let Some(tab) = tab {
+        if let (Some(color), source) = tab.resolved_color() {
+            let theme = cx.global::<crate::theme::Theme>();
+            let bar = &cx.global::<Settings>().config.tab_bar;
+            let rule = (source == mt_mux::ColorSource::Rule)
+                .then(|| h.rule_labels.get(&tab.id).cloned())
+                .flatten();
+            chrome = chrome.with_color(
+                crate::tab_color::TabColorChrome {
+                    name: color.to_string(),
+                    rgba: crate::tab_color::resolve_rgba(&theme.tab_ui, &bar.palette, color),
+                    source,
+                    rule,
+                    style: bar.color_style,
+                },
+                &theme.tab_ui,
+            );
+        }
+    }
     chrome
+}
+
+/// A declared `color = "..."` (name, `[tab_bar.palette]` name or `#rrggbb`); invalid values were
+/// reported at config load and are ignored here.
+pub(crate) fn declared_color(
+    color: Option<&str>,
+    palette: &std::collections::BTreeMap<String, String>,
+) -> Option<mt_mux::TabColor> {
+    color.and_then(|c| mt_mux::TabColor::parse_with_palette(c, palette).ok())
+}
+
+/// Re-evaluates `[[tab_bar.color_rules]]` against the live mux and stores the result as each
+/// tab's rule color. Cheap when there are no rules; the mux emits `TabColorChanged` only for
+/// tabs whose resolved color changed. Rules with an unusable color or selector are skipped
+/// (config validation reports them).
+pub(crate) fn refresh_color_rules(cx: &mut App) {
+    let cfg = cx.global::<Settings>().config.tab_bar.clone();
+    apply_domain_colors(cx, &cfg.palette);
+    sync_remote_colors(cx);
+    let stale = host(cx)
+        .rules
+        .as_ref()
+        .is_none_or(|(r, _)| *r != cfg.color_rules);
+    if stale {
+        let mut compiled = Vec::new();
+        let mut kept = Vec::new();
+        for r in &cfg.color_rules {
+            if let Ok(c) = mt_mux::TabColor::parse_with_palette(&r.color, &cfg.palette) {
+                compiled.push((r.selector.as_str(), c));
+                kept.push(r.selector.clone());
+            }
+        }
+        let rules = mt_mux::ColorRules::compile(compiled).unwrap_or_default();
+        host(cx).rules = Some((cfg.color_rules.clone(), rules));
+    }
+    let empty = host(cx).rules.as_ref().is_none_or(|(_, r)| r.is_empty());
+    if empty && host(cx).rule_labels.is_empty() {
+        return;
+    }
+    let rows = rows(cx);
+    let h = host(cx);
+    let hits = h
+        .rules
+        .as_ref()
+        .map(|(_, r)| r.evaluate(&rows))
+        .unwrap_or_default();
+    h.rule_labels = hits
+        .iter()
+        .filter_map(|(tab, (i, _))| {
+            cfg.color_rules
+                .iter()
+                .filter(|r| mt_mux::TabColor::parse_with_palette(&r.color, &cfg.palette).is_ok())
+                .nth(*i)
+                .map(|r| (*tab, r.selector.clone()))
+        })
+        .collect();
+    h.mux.apply_rule_colors(&hits);
+}
+
+/// `[[ssh_domains]] color`: every tab opened in the domain starts out with it as its declared
+/// color, unless the tab declares its own (workspace tab, launch profile).
+fn apply_domain_colors(cx: &mut App, palette: &std::collections::BTreeMap<String, String>) {
+    let by_domain: HashMap<String, Option<mt_mux::TabColor>> = cx
+        .global::<Settings>()
+        .config
+        .ssh_domains
+        .iter()
+        .map(|d| (d.name.clone(), declared_color(d.color.as_deref(), palette)))
+        .collect();
+    let h = host(cx);
+    let tabs: Vec<(Id, Id)> = h
+        .mux
+        .windows()
+        .iter()
+        .flat_map(|w| w.tabs.iter())
+        .map(|t| (t.id, t.pane().domain_id))
+        .collect();
+    for (tab, domain) in tabs {
+        let Some(name) = h
+            .mux
+            .domain_kind(domain)
+            .map(|k| mt_mux::ctl::domain_name(&k))
+        else {
+            continue;
+        };
+        let want = by_domain.get(&name).copied().flatten();
+        let from_domain = h.domain_colored.contains(&tab);
+        let current = h.mux.tab(tab).and_then(|t| t.declared_color);
+        if (current.is_none() || from_domain) && current != want {
+            let _ = h.mux.set_declared_color(tab, want);
+        }
+        if want.is_some() && current.is_none() {
+            h.domain_colored.insert(tab);
+        }
+    }
+}
+
+/// Sends the manual color of tabs on SSH domains to their daemon whenever it changed.
+fn sync_remote_colors(cx: &mut App) {
+    let h = host(cx);
+    let tabs: Vec<(Id, Id, Id, Option<mt_mux::TabColor>)> = h
+        .mux
+        .windows()
+        .iter()
+        .flat_map(|w| w.tabs.iter())
+        .map(|t| {
+            let root = t.tree.first_pane();
+            (t.id, root.id, root.domain_id, t.color)
+        })
+        .filter(|(_, _, d, _)| *d != mt_mux::LOCAL_DOMAIN_ID)
+        .collect();
+    let mut todo = Vec::new();
+    for (tab, root, domain, color) in tabs {
+        let sent = h.remote_colors.get(&tab).copied().unwrap_or(None);
+        if sent != color {
+            h.remote_colors.insert(tab, color);
+            todo.push((domain, root, color));
+        }
+    }
+    for (domain, root, color) in todo {
+        crate::ssh_host::send_tab_color(cx, domain, root, color.map(|c| c.to_string()));
+    }
 }
 
 /// `[ctl].capture_max_bytes`.
@@ -1293,6 +1458,7 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
             activate_tab(cx, window, index)
         }
         Request::TabRename(p) => rename_tab(cx, &p),
+        Request::TabSetColor(p) => set_tab_color(cx, &p),
         Request::WorkspaceSwitch { name } => {
             show(cx, &name)?;
             Ok(json!({}))

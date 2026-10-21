@@ -29,6 +29,10 @@ pub struct SpawnSpec {
     pub env: Vec<(String, String)>,
     /// Withhold the ctl socket and `MICROTERM_*` ids (context-menu `spawn` without `ctl`).
     pub no_ctl: bool,
+    /// Color declared for the new tab (launch profile, SSH domain, workspace tab).
+    pub color: Option<crate::TabColor>,
+    /// Manual color for the new tab (`ctl tab new --color`).
+    pub manual_color: Option<crate::TabColor>,
 }
 
 /// Where a split pane came from (see [`SpawnSpec::split_from`]).

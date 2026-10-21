@@ -46,6 +46,8 @@ pub struct Theme {
     pub warning: Hsla,
     pub error: Hsla,
     pub term: TermPalette,
+    /// The resolved `mt_theme` tokens, kept as RGB for tab-color contrast math (SPEC §4.4).
+    pub tab_ui: mt_theme::UiTokens,
 }
 
 impl Global for Theme {}
@@ -59,6 +61,11 @@ fn intern(name: &str) -> &'static str {
     let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
     set.insert(leaked);
     leaked
+}
+
+/// A theme color as GPUI's `Hsla`.
+pub fn hsla(color: ThemeRgba) -> Hsla {
+    c(color)
 }
 
 fn c(color: ThemeRgba) -> Hsla {
@@ -112,6 +119,7 @@ impl Theme {
                 cursor_text: c(t.cursor_text),
                 selection_bg: c(t.selection_bg),
             },
+            tab_ui: t.ui,
         }
     }
 

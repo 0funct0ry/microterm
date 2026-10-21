@@ -53,6 +53,8 @@ pub struct PaneRow {
     pub exited: bool,
     pub exit_code: Option<i32>,
     pub status: Option<PaneStatus>,
+    /// Resolved color of the pane's tab (name or `#rrggbb`).
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +68,9 @@ pub struct TabRow {
     pub focused: bool,
     pub panes: Vec<Id>,
     pub layout: LayoutNode,
+    /// Resolved color (name or `#rrggbb`) and its source (`manual|declared|rule`).
+    pub color: Option<String>,
+    pub color_source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +183,9 @@ impl Mux {
                     .or_else(|| (!pane.title.is_empty()).then(|| pane.title.clone()))
                     .or_else(|| l.process.clone())
                     .unwrap_or_default();
+                let (tab_color, source) = t.resolved_color();
+                let color = tab_color.map(|c| c.to_string());
+                let color_source = tab_color.map(|_| source.name().to_string());
                 let active = i == w.active;
                 let focused = active && Some(w.id) == focused_window;
                 rows.tabs.push(TabRow {
@@ -190,6 +198,8 @@ impl Mux {
                     focused,
                     panes: t.tree.panes().iter().map(|p| p.id).collect(),
                     layout: layout_node(&t.tree),
+                    color: color.clone(),
+                    color_source,
                 });
                 for p in t.tree.panes() {
                     let l = live(p.id);
@@ -213,6 +223,7 @@ impl Mux {
                         exited: l.exited,
                         exit_code: l.exit_code,
                         status: p.status.as_ref().map(|s| s.to_wire()),
+                        color: color.clone(),
                     });
                 }
             }
@@ -259,6 +270,8 @@ impl TabRow {
             focused: self.focused,
             panes: self.panes.clone(),
             layout: Some(self.layout.clone()),
+            color: self.color.clone(),
+            color_source: self.color_source.clone(),
         }
     }
 }
@@ -322,6 +335,8 @@ impl Rows {
                                     .map(PaneRow::info)
                                     .collect(),
                                 layout: Some(t.layout.clone()),
+                                color: t.color.clone(),
+                                color_source: t.color_source.clone(),
                             })
                             .collect(),
                     })
@@ -395,6 +410,7 @@ impl Row for PaneRow {
                     .to_string(),
             ),
             Key::Exited => Some(self.exited.to_string()),
+            Key::Color => self.color.clone(),
         }
     }
     fn window_id(&self) -> Option<Id> {
@@ -423,6 +439,7 @@ impl Row for TabRow {
             Key::Id => Some(self.id.to_string()),
             Key::Title => Some(self.title.clone()),
             Key::Domain => Some(self.domain.clone()),
+            Key::Color => self.color.clone(),
             Key::Workspace => Some(self.workspace.clone()),
             Key::Window => Some(self.window.to_string()),
             Key::Focused => Some(self.focused.to_string()),
@@ -643,6 +660,7 @@ mod tests {
                 progress: Some(40),
                 updated_at: "2026-10-18T09:14:03.000Z".into(),
             }),
+            color: (id == 4).then(|| "red".into()),
         }
     }
 
@@ -680,6 +698,12 @@ mod tests {
         assert_eq!(ids("status:working"), [2]);
         assert_eq!(ids("status:idle"), [1, 3, 4, 5], "an unset status is idle");
         assert_eq!(ids("exited:true"), [5]);
+        assert_eq!(ids("color:red"), [4]);
+        assert_eq!(
+            ids("!color:red"),
+            [1, 2, 3, 5],
+            "no color never matches a positive clause"
+        );
     }
 
     #[test]
@@ -714,6 +738,8 @@ mod tests {
                 focused: true,
                 panes: vec![],
                 layout: LayoutNode::Leaf { pane: 1 },
+                color: None,
+                color_source: None,
             }],
         )
         .unwrap_err();

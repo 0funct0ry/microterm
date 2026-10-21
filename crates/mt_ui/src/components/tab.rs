@@ -8,7 +8,7 @@ use gpui::{
 use super::{theme, IconButton, StatusDot, StatusKind, Tooltip};
 use crate::{
     assets::IconName,
-    metrics::{TAB_BAR_HEIGHT, TAB_MAX_WIDTH, TAB_MIN_WIDTH},
+    metrics::{RADIUS_CONTROL, TAB_BAR_HEIGHT, TAB_MAX_WIDTH, TAB_MIN_WIDTH},
     tab_chrome::TabChrome,
 };
 
@@ -171,6 +171,38 @@ impl RenderOnce for Tab {
         let editing = self.editing.clone();
         let chrome = self.chrome;
         let progress_color = chrome.dot.map_or(t.accent, |k| kind_color(&t, k));
+        // Tab color (SPEC §4.4): bar = 2 px top line, tint = background mix, dot = 6 px dot.
+        let paint = chrome
+            .color
+            .clone()
+            .filter(|c| c.style != mt_config::TabColorStyle::None);
+        let (show_bar, show_tint, show_dot) = paint.as_ref().map_or((false, false, false), |c| {
+            use mt_config::TabColorStyle::*;
+            (
+                matches!(c.style, Bar | BarTint),
+                matches!(c.style, Tint | BarTint),
+                c.style == Dot,
+            )
+        });
+        let color_hsla = paint.as_ref().map(|c| crate::theme::hsla(c.rgba));
+        let (bg, hover) = match (&paint, show_tint) {
+            (Some(c), true) => (
+                crate::theme::hsla(crate::tab_color::tinted_background(
+                    &t.tab_ui,
+                    c.rgba,
+                    self.active,
+                    false,
+                )),
+                crate::theme::hsla(crate::tab_color::tinted_background(
+                    &t.tab_ui,
+                    c.rgba,
+                    self.active,
+                    true,
+                )),
+            ),
+            _ => (if self.active { t.background } else { t.surface }, hover),
+        };
+        let ring = chrome.dot_ring.then_some(bg);
         gpui::div()
             .id(self.id)
             .group(group.clone())
@@ -187,15 +219,39 @@ impl RenderOnce for Tab {
             .border_color(t.border_variant)
             .text_size(px(13.))
             .cursor_pointer()
-            .when(self.active, |el| el.bg(t.background).text_color(t.text))
+            .when(self.active, |el| el.bg(bg).text_color(t.text))
             .when(!self.active, |el| {
-                el.bg(t.surface)
+                el.bg(bg)
                     .text_color(t.text_muted)
                     .border_b_1()
                     .hover(move |s| s.bg(hover))
             })
+            .when(show_bar, |el| {
+                el.child(
+                    gpui::div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .rounded_t(px(RADIUS_CONTROL))
+                        .bg(color_hsla.unwrap_or(t.accent))
+                        .opacity(if self.active { 1.0 } else { 0.6 }),
+                )
+            })
+            .when(show_dot, |el| {
+                el.child(
+                    gpui::div()
+                        .flex_none()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(color_hsla.unwrap_or(t.accent)),
+                )
+            })
             // A status dot replaces the dirty dot: both are "something is running here".
-            .when_some(chrome.dot, |el, kind| el.child(StatusDot::new(kind)))
+            .when_some(chrome.dot, |el, kind| {
+                el.child(StatusDot::new(kind).ring(ring))
+            })
             .when(self.dirty && chrome.dot.is_none(), |el| {
                 el.child(StatusDot::new(StatusKind::Accent))
             })
@@ -226,7 +282,9 @@ impl RenderOnce for Tab {
                         .color(t.text_muted),
                 )
             })
-            .when_some(chrome.badge, |el, kind| el.child(StatusDot::new(kind)))
+            .when_some(chrome.badge, |el, kind| {
+                el.child(StatusDot::new(kind).ring(ring))
+            })
             .when_some(chrome.progress, |el, pct| {
                 el.child(
                     gpui::div()

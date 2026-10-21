@@ -389,3 +389,73 @@ fn split_records_survive_a_reattach() {
         session: "elsewhere".into(),
     });
 }
+
+#[test]
+fn tab_color_survives_a_reattach_and_is_seen_by_a_second_client() {
+    let env = start("color");
+    let mut a = Client::connect(&env);
+    let p1 = spawn(&mut a, "s", "sleep 30");
+    let p2 = spawn(&mut a, "s", "sleep 30");
+    a.send(&Msg::Split {
+        pane: p2,
+        parent: p1,
+        axis: 0,
+        permille: 500,
+    });
+    a.send(&Msg::SetTabColor {
+        pane: p1,
+        color: Some("teal".into()),
+    });
+    // Not the root, unknown color, unknown pane: refused.
+    a.send(&Msg::SetTabColor {
+        pane: p2,
+        color: Some("red".into()),
+    });
+    a.until(|m| matches!(m, Msg::Error { message } if message.contains("root")).then_some(()));
+    a.send(&Msg::SetTabColor {
+        pane: p1,
+        color: Some("magenta".into()),
+    });
+    a.until(|m| matches!(m, Msg::Error { message } if message.contains("magenta")).then_some(()));
+    a.send(&Msg::SetTabColor {
+        pane: 999,
+        color: None,
+    });
+    a.until(|m| matches!(m, Msg::Error { message } if message.contains("999")).then_some(()));
+    a.send(&Msg::Ping(1));
+    a.until(|m| matches!(m, Msg::Pong(1)).then_some(()));
+
+    let colors = |c: &mut Client| {
+        c.send(&Msg::Attach {
+            session: "s".into(),
+            panes: vec![],
+        });
+        c.until(|m| match m {
+            Msg::Attached { panes } => Some(
+                panes
+                    .iter()
+                    .map(|i| (i.id, i.color.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+    };
+    // A second client attached while the first is still connected.
+    let mut b = Client::connect(&env);
+    assert_eq!(colors(&mut b), vec![(p1, Some("teal".into())), (p2, None)]);
+    drop(a);
+    // And a fresh one after the first went away (a reconnect).
+    let mut c = Client::connect(&env);
+    assert_eq!(colors(&mut c), vec![(p1, Some("teal".into())), (p2, None)]);
+    // Clearing is persisted too.
+    c.send(&Msg::SetTabColor {
+        pane: p1,
+        color: None,
+    });
+    c.send(&Msg::Ping(2));
+    c.until(|m| matches!(m, Msg::Pong(2)).then_some(()));
+    assert_eq!(colors(&mut b)[0], (p1, None));
+    c.send(&Msg::KillSession {
+        session: "s".into(),
+    });
+}

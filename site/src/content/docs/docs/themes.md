@@ -63,3 +63,17 @@ background shifted 4 % in lightness towards the foreground, `border` 12 %, `text
 `make themes` fails if a theme lacks a `license`, uses a non-permissive licence, has fewer than
 16 ANSI colours or a foreground/background contrast below 4.5:1. Themes that fail the licence
 rule are dropped, not replaced silently: Zenburn is not bundled because it is GPL licensed.
+
+## Tab colors
+
+Tab colors resolve through nine UI tokens, `tab_color_blue`, `tab_color_purple`, `tab_color_pink`,
+`tab_color_red`, `tab_color_orange`, `tab_color_yellow`, `tab_color_green`, `tab_color_teal` and
+`tab_color_gray`. A theme that omits them derives them from its ANSI palette: red is `ansi[1]`,
+green `ansi[2]`, yellow `ansi[3]`, blue `ansi[4]`, purple `ansi[5]`, teal `ansi[6]`, gray
+`ansi[8]`, orange is the mix of red and yellow and pink the mix of red and purple (50 % each).
+Derived colors are shifted in lightness (hue kept) just enough to reach 3:1 contrast against the
+tab bar for the 2 px bar and to keep the tab title at 4.5:1 on the tinted background.
+
+Override a token per theme under `[ui]` (`tab_color_orange = "#f59e42"`), or for every theme with
+`[tab_bar.palette]` in your config. `make themes` fails a theme whose nine colors miss those
+contrast targets. A custom `#rrggbb` (from `ctl` or the config) is clamped the same way.

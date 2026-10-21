@@ -283,7 +283,42 @@ pub struct TabBar {
     pub hide_if_single: bool,
     pub title_format: String,
     pub show_index: bool,
+    /// How a tab's color is drawn (SPEC §4.4).
+    pub color_style: TabColorStyle,
+    /// Per-color overrides of the nine theme colors (`orange = "#f59e42"`) plus up to ten
+    /// extra names (`[a-z][a-z0-9-]*`) usable like the built-in ones.
+    pub palette: std::collections::BTreeMap<String, String>,
+    /// First match wins; a tab matches when any of its panes does.
+    pub color_rules: Vec<ColorRule>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TabColorStyle {
+    #[serde(rename = "bar+tint")]
+    BarTint,
+    #[serde(rename = "bar")]
+    Bar,
+    #[serde(rename = "tint")]
+    Tint,
+    #[serde(rename = "dot")]
+    Dot,
+    /// Colors are stored and reported but not drawn.
+    #[serde(rename = "none")]
+    None,
+}
+
+/// `[[tab_bar.color_rules]]`: `{ match = "domain:prod-*", color = "red" }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColorRule {
+    #[serde(rename = "match")]
+    pub selector: String,
+    pub color: String,
+}
+
+/// Most `[[tab_bar.color_rules]]` entries accepted.
+pub const MAX_COLOR_RULES: usize = 64;
+/// Most extra `[tab_bar.palette]` names beyond the nine built-in colors.
+pub const MAX_EXTRA_COLORS: usize = 10;
 
 impl Default for TabBar {
     fn default() -> Self {
@@ -292,6 +327,9 @@ impl Default for TabBar {
             hide_if_single: false,
             title_format: "{title}".into(),
             show_index: false,
+            color_style: TabColorStyle::BarTint,
+            palette: Default::default(),
+            color_rules: Vec::new(),
         }
     }
 }
@@ -780,10 +818,15 @@ pub struct LaunchProfile {
     pub command: Vec<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Color of tabs opened from this profile (name or `#rrggbb`).
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceTab {
+    #[serde(default)]
+    pub color: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -851,6 +894,9 @@ pub struct SshDomain {
     pub remote_dir: Option<String>,
     #[serde(default)]
     pub connect_timeout_s: Option<u32>,
+    /// Color of every tab opened in this domain (name or `#rrggbb`).
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// Splits a command string into argv with POSIX-ish quoting (single, double, backslash).

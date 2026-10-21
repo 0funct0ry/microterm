@@ -70,6 +70,7 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl tab new` — Open a tab and print `tab= pane= window=` (safe to `eval`)
 - `microterm ctl tab focus` — Make a tab active: by target, by position, or relative to the current one
 - `microterm ctl tab rename` — Set the title of a tab. An empty title restores the automatic one
+- `microterm ctl tab color` — Color a tab: a name (blue, purple, pink, red, orange, yellow, green, teal, gray) or '#rrggbb'
 - `microterm ctl tab close` — Close a tab
 - `microterm ctl pane list` — List panes
 - `microterm ctl pane get` — Show one pane (default: $MICROTERM_PANE, else the focused pane)

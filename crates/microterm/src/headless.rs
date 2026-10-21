@@ -472,6 +472,7 @@ impl Host {
             .mux
             .spawn_tab(window, spec.cwd.clone(), spec.title.clone())
             .map_err(|e| RpcError::not_found(e.to_string()))?;
+        self.mux.apply_spawn_colors(tab, &spec);
         if let Err(e) = self.start_terminal((pane, tab, window), spec, size) {
             let _ = self.mux.kill_pane(pane);
             return Err(e);
@@ -574,6 +575,10 @@ impl Host {
                 let title = (!p.title.is_empty()).then(|| p.title.clone());
                 self.mux.rename_tab(w, tab, title)?;
                 ok()
+            }
+            Request::TabSetColor(p) => {
+                let rows = self.rows();
+                ipc_ops::set_tab_color(&mut self.mux, &rows, &p)
             }
             Request::WorkspaceSwitch { name } => {
                 self.mux.switch_workspace(&name)?;

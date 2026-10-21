@@ -162,6 +162,8 @@ pub enum Target {
     Launch(usize),
     /// A configured context-menu item, `menu/item` (SPEC §10.9.1).
     MenuItem(String),
+    /// "Tab: Set color…": a color (`None` = Default, clears the manual color) for the active tab.
+    Color(Option<mt_mux::TabColor>),
 }
 
 /// Provider groups of the command palette (the `u8` tag in `PickerState`).
@@ -190,6 +192,8 @@ pub struct Entry {
     pub chip: Option<String>,
     pub icon: Option<IconName>,
     pub status: Option<StatusKind>,
+    /// A tab color dot (`Some(None)` is the hollow Default ring).
+    pub swatch: Option<Option<mt_mux::TabColor>>,
 }
 
 impl Entry {
@@ -202,6 +206,7 @@ impl Entry {
             chip: None,
             icon: None,
             status: None,
+            swatch: None,
         }
     }
 }
@@ -555,6 +560,7 @@ impl AppWindow {
 
     /// Recomputes every tab's display title and process state from the mux and its terminal.
     fn refresh_titles(&mut self, cx: &mut Context<Self>) {
+        mux_host::refresh_color_rules(cx);
         let fmt = self.cfg.tab_bar.title_format.clone();
         let show_index = self.cfg.tab_bar.show_index;
         let host = mux_host::host(cx);
@@ -1194,7 +1200,8 @@ impl AppWindow {
             OverlayKind::CommandPalette
             | OverlayKind::Launcher
             | OverlayKind::WorkspaceSwitcher
-            | OverlayKind::ThemeSelector => self.picker = Some(self.build_picker(kind, cx)),
+            | OverlayKind::ThemeSelector
+            | OverlayKind::TabColorPicker => self.picker = Some(self.build_picker(kind, cx)),
             OverlayKind::QuickSelect => self.prepare_quick_select(cx),
             OverlayKind::CopyMode => self.prepare_copy_mode(cx),
             OverlayKind::Search => {
@@ -1256,7 +1263,9 @@ impl AppWindow {
                 self.theme_restore = None;
                 self.picker = None;
             }
-            OverlayKind::Launcher | OverlayKind::WorkspaceSwitcher => {
+            OverlayKind::Launcher
+            | OverlayKind::WorkspaceSwitcher
+            | OverlayKind::TabColorPicker => {
                 self.picker = None;
             }
             OverlayKind::QuickSelect => self.quick = QuickState::default(),
@@ -1363,8 +1372,54 @@ impl AppWindow {
                     placeholder: "Select a theme…",
                 }
             }
+            OverlayKind::TabColorPicker => {
+                let palette = self.cfg.tab_bar.palette.clone();
+                let manual = self
+                    .tabs
+                    .get(self.active_tab)
+                    .and_then(|t| mux_host::host(cx).mux.tab(t.id).and_then(|t| t.color));
+                let selected = crate::tab_color::selected_swatch(&palette, manual);
+                let items: Vec<(String, Entry)> = crate::tab_color::swatches(&palette)
+                    .into_iter()
+                    .map(|s| {
+                        let mut e =
+                            Entry::new(Target::Color(s.color), format!("tab-color:{}", s.id));
+                        e.swatch = Some(s.color);
+                        if s.id == selected {
+                            e.detail = Some("current".into());
+                        }
+                        (s.label, e)
+                    })
+                    .collect();
+                let mut state = PickerState::new(items);
+                if let Some(i) = crate::tab_color::swatches(&palette)
+                    .iter()
+                    .position(|s| s.id == selected)
+                {
+                    state.select(i);
+                }
+                PickerData {
+                    kind,
+                    state,
+                    placeholder: "Set the tab color…",
+                }
+            }
             _ => unreachable!("not a picker overlay"),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn palette_entries_for_test(&self) -> Vec<(String, Entry)> {
+        self.picker
+            .as_ref()
+            .map(|p| {
+                p.state
+                    .matches()
+                    .iter()
+                    .map(|m| (p.state.label(m).to_string(), p.state.item(m.index).clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Every palette provider's rows: actions, workspaces, tabs, themes (SPEC §10.1).
@@ -1403,6 +1458,11 @@ impl AppWindow {
                 None => format!("tab {}", i + 1),
             });
             e.status = chrome.dot.or(chrome.badge);
+            e.swatch = mux_host::host(cx)
+                .mux
+                .tab(tab.id)
+                .and_then(|t| t.resolved_color().0)
+                .map(Some);
             items.push((format!("Go to tab: {}", tab.title), e));
         }
         // Configured menu items with an explicit id, runnable on the focused pane.
@@ -1652,7 +1712,11 @@ impl AppWindow {
                 let Some(p) = cx.global::<Settings>().config.launch.get(i).cloned() else {
                     return;
                 };
-                let spec = spawn_spec_for(&p.command, p.cwd.as_deref(), Some(p.name));
+                let mut spec = spawn_spec_for(&p.command, p.cwd.as_deref(), Some(p.name));
+                spec.color = mux_host::declared_color(
+                    p.color.as_deref(),
+                    &cx.global::<Settings>().config.tab_bar.palette,
+                );
                 if new_window {
                     cx.defer(move |cx| mux_host::open_new_window(cx, spec));
                 } else {
@@ -1660,6 +1724,11 @@ impl AppWindow {
                 }
             }
             Target::Tab(i) => self.activate_tab(i, cx),
+            Target::Color(color) => {
+                if let Some(id) = self.tabs.get(self.active_tab).map(|t| t.id) {
+                    self.set_tab_color(id, color, cx);
+                }
+            }
             Target::MenuItem(addr) => self.invoke_menu_address(&addr, window, cx),
             // A workspace switch has no "new window" form; the modifier acts like plain Enter.
             Target::Workspace(name) => self.switch_workspace_named(name, false, cx),
@@ -2396,7 +2465,8 @@ impl AppWindow {
                 OverlayKind::CommandPalette
                 | OverlayKind::Launcher
                 | OverlayKind::WorkspaceSwitcher
-                | OverlayKind::ThemeSelector,
+                | OverlayKind::ThemeSelector
+                | OverlayKind::TabColorPicker,
             ) => {
                 if ev.keystroke.key == "backspace" {
                     self.picker_input(PickerInput::Backspace, window, cx);

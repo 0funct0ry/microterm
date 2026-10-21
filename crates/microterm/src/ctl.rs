@@ -418,6 +418,9 @@ EXAMPLES:
         cwd: Option<PathBuf>,
         #[arg(long, value_name = "TITLE")]
         title: Option<String>,
+        /// Color the tab: blue, purple, pink, red, orange, yellow, green, teal, gray or '#rrggbb'.
+        #[arg(long, value_name = "COLOR")]
+        color: Option<String>,
         /// Command to run instead of the shell, after `--`.
         #[arg(last = true)]
         command: Vec<String>,
@@ -446,6 +449,31 @@ EXAMPLES:
         #[command(flatten)]
         target: TabTarget,
         title: String,
+    },
+    /// Color a tab: a name (blue, purple, pink, red, orange, yellow, green, teal, gray) or
+    /// '#rrggbb'.
+    ///
+    /// Sets the manual color, which beats colors declared in the config and `color_rules`.
+    /// --clear removes only the manual color and reports what applies now.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl tab color orange
+  microterm ctl tab color --match 'title:*build*' teal
+  microterm ctl tab color '#f59e42'
+  microterm ctl tab color --clear")]
+    Color {
+        #[command(flatten)]
+        target: TabTarget,
+        /// A color name or '#rrggbb'.
+        #[arg(
+            value_name = "COLOR",
+            conflicts_with = "clear",
+            required_unless_present = "clear"
+        )]
+        color: Option<String>,
+        /// Remove the manual color.
+        #[arg(long)]
+        clear: bool,
     },
     /// Close a tab.
     ///

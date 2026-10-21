@@ -146,6 +146,8 @@ pub struct PickerRow {
     pub chip: Option<String>,
     pub icon: Option<IconName>,
     pub status: Option<StatusKind>,
+    /// A color dot before the label (a tab color); a transparent one draws as a hollow ring.
+    pub swatch: Option<gpui::Hsla>,
 }
 
 impl PickerRow {
@@ -157,6 +159,7 @@ impl PickerRow {
             chip: None,
             icon: None,
             status: None,
+            swatch: None,
         }
     }
 }
@@ -217,6 +220,17 @@ impl RenderOnce for Picker {
             }
             if let Some(status) = row.status {
                 item = item.start(StatusDot::new(status));
+            }
+            if let Some(color) = row.swatch {
+                item = item.start(
+                    gpui::div()
+                        .flex_none()
+                        .size(px(10.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(t.border)
+                        .bg(color),
+                );
             }
             if let Some(detail) = row.detail {
                 item = item.detail(detail);

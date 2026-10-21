@@ -17,6 +17,11 @@ pub const PERMISSIVE_LICENSES: &[&str] = &[
 ];
 
 pub const MIN_CONTRAST: f32 = 4.5;
+/// Non-text contrast of the 2 px tab bar against the tab-bar surfaces.
+pub const TAB_BAR_CONTRAST: f32 = 3.0;
+/// Share of the tab color mixed into the tab background (active, inactive).
+pub const TINT_ACTIVE: f32 = 0.14;
+pub const TINT_INACTIVE: f32 = 0.07;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -71,6 +76,15 @@ struct RawUi {
     success: Option<String>,
     warning: Option<String>,
     error: Option<String>,
+    tab_color_blue: Option<String>,
+    tab_color_purple: Option<String>,
+    tab_color_pink: Option<String>,
+    tab_color_red: Option<String>,
+    tab_color_orange: Option<String>,
+    tab_color_yellow: Option<String>,
+    tab_color_green: Option<String>,
+    tab_color_teal: Option<String>,
+    tab_color_gray: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +119,48 @@ pub struct UiTokens {
     pub success: Rgba,
     pub warning: Rgba,
     pub error: Rgba,
+    pub tab_color_blue: Rgba,
+    pub tab_color_purple: Rgba,
+    pub tab_color_pink: Rgba,
+    pub tab_color_red: Rgba,
+    pub tab_color_orange: Rgba,
+    pub tab_color_yellow: Rgba,
+    pub tab_color_green: Rgba,
+    pub tab_color_teal: Rgba,
+    pub tab_color_gray: Rgba,
+}
+
+impl UiTokens {
+    /// The `tab_color_*` token for a named tab color (`blue` … `gray`).
+    pub fn tab_color(&self, name: &str) -> Option<Rgba> {
+        Some(match name {
+            "blue" => self.tab_color_blue,
+            "purple" => self.tab_color_purple,
+            "pink" => self.tab_color_pink,
+            "red" => self.tab_color_red,
+            "orange" => self.tab_color_orange,
+            "yellow" => self.tab_color_yellow,
+            "green" => self.tab_color_green,
+            "teal" => self.tab_color_teal,
+            "gray" => self.tab_color_gray,
+            _ => return None,
+        })
+    }
+
+    /// The nine tab colors in swatch order.
+    pub fn tab_colors(&self) -> [(&'static str, Rgba); 9] {
+        [
+            ("blue", self.tab_color_blue),
+            ("purple", self.tab_color_purple),
+            ("pink", self.tab_color_pink),
+            ("red", self.tab_color_red),
+            ("orange", self.tab_color_orange),
+            ("yellow", self.tab_color_yellow),
+            ("green", self.tab_color_green),
+            ("teal", self.tab_color_teal),
+            ("gray", self.tab_color_gray),
+        ]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,8 +213,73 @@ impl Theme {
                 self.name
             ));
         }
+        self.validate_tab_colors()
+    }
+
+    /// Tab colors (SPEC §4.4): the bar needs 3:1 against both tab surfaces and the title text
+    /// needs 4.5:1 on the tinted active and inactive backgrounds.
+    pub fn validate_tab_colors(&self) -> Result<(), ThemeError> {
+        let u = &self.ui;
+        for (name, c) in u.tab_colors() {
+            for (what, surface) in [("background", u.background), ("surface", u.surface)] {
+                let r = c.contrast(surface);
+                if r < TAB_BAR_CONTRAST {
+                    return err(format!(
+                        "{}: tab_color_{name} contrast {r:.2}:1 against {what} is below \
+                         {TAB_BAR_CONTRAST}:1",
+                        self.name
+                    ));
+                }
+            }
+            for (what, base, amount) in [
+                ("active", u.background, TINT_ACTIVE),
+                ("inactive", u.surface, TINT_INACTIVE),
+            ] {
+                let r = u.text.contrast(tint(base, c, amount));
+                if r < MIN_CONTRAST {
+                    return err(format!(
+                        "{}: title text on the {what} tab tinted {name} has contrast {r:.2}:1, \
+                         below {MIN_CONTRAST}:1",
+                        self.name
+                    ));
+                }
+            }
+        }
         Ok(())
     }
+}
+
+/// Whether `c` passes both tab-color checks (bar 3:1, title 4.5:1 on both tints).
+fn tab_color_ok(c: Rgba, bg: Rgba, surface: Rgba, text: Rgba) -> bool {
+    c.contrast(bg) >= TAB_BAR_CONTRAST
+        && c.contrast(surface) >= TAB_BAR_CONTRAST
+        && text.contrast(tint(bg, c, TINT_ACTIVE)) >= MIN_CONTRAST
+        && text.contrast(tint(surface, c, TINT_INACTIVE)) >= MIN_CONTRAST
+}
+
+/// The color closest in OKLCH lightness to `c` (hue kept) that passes [`tab_color_ok`]; `c`
+/// itself when it already does. When nothing passes, the bar-only fix (validation then flags it).
+pub fn fit_tab_color(c: Rgba, bg: Rgba, surface: Rgba, text: Rgba) -> Rgba {
+    if tab_color_ok(c, bg, surface, text) {
+        return c;
+    }
+    let base = c.to_oklch();
+    for step in 1..=100 {
+        for dir in [1.0f32, -1.0] {
+            let mut l = base;
+            l.l = (base.l + dir * step as f32 * 0.01).clamp(0.0, 1.0);
+            let cand = l.to_rgba();
+            if tab_color_ok(cand, bg, surface, text) {
+                return cand;
+            }
+        }
+    }
+    c.ensure_contrast(&[bg, surface], TAB_BAR_CONTRAST)
+}
+
+/// `base` mixed with `color` by `amount` (0.14 = 14 %), the tab tint.
+pub fn tint(base: Rgba, color: Rgba, amount: f32) -> Rgba {
+    base.mix(color, amount)
 }
 
 pub fn contrast_ratio_fg_bg(t: &Theme) -> f32 {
@@ -247,13 +368,22 @@ fn derive_ui(fg: Rgba, bg: Rgba, ansi: &[Rgba; 16], o: &RawUi) -> Result<UiToken
         Ok(opt_color(&format!("ui.{f}"), v)?.unwrap_or(d))
     };
     let surface = pick("surface", &o.surface, shift(bg, fg, 0.04))?;
+    let text = pick("text", &o.text, fg)?;
+    // Derived tab colors are lightness-adjusted to keep the 2 px bar legible (3:1) on both tab
+    // surfaces; explicit `[ui]` entries are used as written and checked by `validate`.
+    let tab_pick =
+        |f: &str, v: &Option<String>, d: Rgba| -> Result<Rgba, ThemeError> {
+            Ok(opt_color(&format!("ui.{f}"), v)?
+                .unwrap_or_else(|| fit_tab_color(d, bg, surface, text)))
+        };
+    let (red, yellow, purple) = (ansi[1], ansi[3], ansi[5]);
     Ok(UiTokens {
         background: bg,
         surface,
         elevated_surface: pick("elevated_surface", &o.elevated_surface, surface)?,
         border: pick("border", &o.border, shift(bg, fg, 0.12))?,
         border_variant: pick("border_variant", &o.border_variant, shift(bg, fg, 0.07))?,
-        text: pick("text", &o.text, fg)?,
+        text,
         text_muted: pick("text_muted", &o.text_muted, fg.mix(bg, 0.3))?,
         text_placeholder: pick("text_placeholder", &o.text_placeholder, fg.mix(bg, 0.5))?,
         element_hover: pick("element_hover", &o.element_hover, shift(bg, fg, 0.07))?,
@@ -262,6 +392,19 @@ fn derive_ui(fg: Rgba, bg: Rgba, ansi: &[Rgba; 16], o: &RawUi) -> Result<UiToken
         success: pick("success", &o.success, ansi[2])?,
         warning: pick("warning", &o.warning, ansi[3])?,
         error: pick("error", &o.error, ansi[1])?,
+        tab_color_blue: tab_pick("tab_color_blue", &o.tab_color_blue, ansi[4])?,
+        tab_color_purple: tab_pick("tab_color_purple", &o.tab_color_purple, ansi[5])?,
+        tab_color_pink: tab_pick("tab_color_pink", &o.tab_color_pink, red.mix(purple, 0.5))?,
+        tab_color_red: tab_pick("tab_color_red", &o.tab_color_red, ansi[1])?,
+        tab_color_orange: tab_pick(
+            "tab_color_orange",
+            &o.tab_color_orange,
+            red.mix(yellow, 0.5),
+        )?,
+        tab_color_yellow: tab_pick("tab_color_yellow", &o.tab_color_yellow, ansi[3])?,
+        tab_color_green: tab_pick("tab_color_green", &o.tab_color_green, ansi[2])?,
+        tab_color_teal: tab_pick("tab_color_teal", &o.tab_color_teal, ansi[6])?,
+        tab_color_gray: tab_pick("tab_color_gray", &o.tab_color_gray, ansi[8])?,
     })
 }
 
@@ -350,5 +493,54 @@ brights = ["#525561", "#de8f94", "#bad6a1", "#e9d4a1", "#a3c8ef", "#cba2dd", "#9
             .unwrap_err()
             .0
             .contains("contrast"));
+    }
+
+    #[test]
+    fn tab_colors_derive_from_ansi_deterministically() {
+        let a = parse_theme(MINI).unwrap();
+        let b = parse_theme(MINI).unwrap();
+        assert_eq!(a.ui.tab_colors(), b.ui.tab_colors());
+        let names: Vec<_> = a.ui.tab_colors().iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names,
+            ["blue", "purple", "pink", "red", "orange", "yellow", "green", "teal", "gray"]
+        );
+        assert_eq!(a.ui.tab_color("nope"), None);
+        // Colors that already pass are used as the derivation produced them.
+        let (bg, surface, text) = (a.ui.background, a.ui.surface, a.ui.text);
+        let red = fit_tab_color(a.ansi[1], bg, surface, text);
+        assert_eq!(a.ui.tab_color("red"), Some(red));
+        let orange = fit_tab_color(a.ansi[1].mix(a.ansi[3], 0.5), bg, surface, text);
+        assert_eq!(a.ui.tab_color("orange"), Some(orange));
+    }
+
+    #[test]
+    fn ui_overrides_win_for_tab_colors() {
+        let src = format!("{MINI}\n[ui]\ntab_color_teal = \"#123456\"\n");
+        let t = parse_theme(&src).unwrap();
+        assert_eq!(t.ui.tab_color("teal"), Some(Rgba::rgb(0x12, 0x34, 0x56)));
+    }
+
+    #[test]
+    fn validate_flags_a_tab_color_that_breaks_contrast() {
+        let src = format!("{MINI}\n[ui]\ntab_color_gray = \"#101010\"\n");
+        let t = parse_theme(&src).unwrap();
+        let e = t.validate().unwrap_err().to_string();
+        assert!(e.contains("tab_color_gray"), "{e}");
+    }
+
+    #[test]
+    fn custom_rgb_is_clamped_keeping_hue() {
+        let t = parse_theme(MINI).unwrap();
+        let surfaces = [t.ui.background, t.ui.surface];
+        let weak = Rgba::rgb(0x30, 0x30, 0x60);
+        let fixed = weak.ensure_contrast(&surfaces, TAB_BAR_CONTRAST);
+        assert!(surfaces
+            .iter()
+            .all(|s| fixed.contrast(*s) >= TAB_BAR_CONTRAST));
+        let (a, b) = (weak.to_oklch(), fixed.to_oklch());
+        assert!((a.h - b.h).abs() < 0.2, "hue kept: {} vs {}", a.h, b.h);
+        let ok = Rgba::rgb(0xff, 0xc0, 0x40);
+        assert_eq!(ok.ensure_contrast(&surfaces, TAB_BAR_CONTRAST), ok);
     }
 }

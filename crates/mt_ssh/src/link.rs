@@ -108,6 +108,13 @@ pub enum Command {
         axis: u8,
         permille: u16,
     },
+    /// Set (or with `None` clear) the manual color of the tab whose root pane is `pane` (a local
+    /// id). Sent once the pane exists on the daemon, which keeps it across reconnects and for
+    /// other clients.
+    SetTabColor {
+        pane: u64,
+        color: Option<String>,
+    },
     /// Skip the backoff wait (or retry after a fatal failure).
     ReconnectNow,
     Shutdown,
@@ -141,6 +148,8 @@ struct PaneRec {
     spawned_size: (u16, u16),
     /// `(parent, axis, permille, sent)` from [`Command::Split`].
     split: Option<(u64, u8, u16, bool)>,
+    /// A color change not yet delivered to the daemon (`Some(None)` is a clear).
+    color: Option<Option<String>>,
 }
 
 /// `Split` messages that can go out now (both panes exist on the daemon); marks them sent.
@@ -166,6 +175,20 @@ fn due_splits(panes: &mut BTreeMap<u64, PaneRec>) -> Vec<Msg> {
                 parent,
                 axis,
                 permille,
+            });
+        }
+    }
+    out
+}
+
+/// `SetTabColor` messages that can go out now (the pane exists on the daemon); marks them sent.
+fn due_colors(panes: &mut BTreeMap<u64, PaneRec>) -> Vec<Msg> {
+    let mut out = Vec::new();
+    for p in panes.values_mut() {
+        if let (Some(pane), true) = (p.remote, p.color.is_some()) {
+            out.push(Msg::SetTabColor {
+                pane,
+                color: p.color.take().flatten(),
             });
         }
     }
@@ -208,6 +231,7 @@ fn apply_offline(c: Command, panes: &mut BTreeMap<u64, PaneRec>) -> Option<bool>
                     size: (cols, rows),
                     spawned_size: (cols, rows),
                     split: None,
+                    color: None,
                 },
             );
             None
@@ -220,6 +244,12 @@ fn apply_offline(c: Command, panes: &mut BTreeMap<u64, PaneRec>) -> Option<bool>
         } => {
             if let Some(p) = panes.get_mut(&pane) {
                 p.split = Some((parent, axis, permille, false));
+            }
+            None
+        }
+        Command::SetTabColor { pane, color } => {
+            if let Some(p) = panes.get_mut(&pane) {
+                p.color = Some(color);
             }
             None
         }
@@ -482,7 +512,7 @@ async fn session(
                             cols, rows,
                             scrollback: cfg.scrollback,
                         };
-                        panes.insert(pane, PaneRec { remote: None, last_seq: 0, size: (cols, rows), spawned_size: (cols, rows), spawn: Some(c), split: None });
+                        panes.insert(pane, PaneRec { remote: None, last_seq: 0, size: (cols, rows), spawned_size: (cols, rows), spawn: Some(c), split: None, color: None });
                         Some(Msg::Spawn(req))
                     }
                     Command::Split { pane, parent, axis, permille } => {
@@ -490,6 +520,15 @@ async fn session(
                             p.split = Some((parent, axis, permille, false));
                         }
                         for m in due_splits(panes) {
+                            if let Err(e) = send(&mut w, &m).await { return End::Lost(e); }
+                        }
+                        None
+                    }
+                    Command::SetTabColor { pane, color } => {
+                        if let Some(p) = panes.get_mut(&pane) {
+                            p.color = Some(color);
+                        }
+                        for m in due_colors(panes) {
                             if let Err(e) = send(&mut w, &m).await { return End::Lost(e); }
                         }
                         None
@@ -532,6 +571,7 @@ async fn session(
                             }
                         }
                         replies.extend(due_splits(panes));
+                replies.extend(due_colors(panes));
                         for m in &replies {
                             if let Err(e) = send(&mut w, m).await { return End::Lost(e); }
                         }

@@ -42,10 +42,16 @@ pub struct MenuNav {
     /// First visible entry when the list is longer than `max_rows`.
     pub scroll: usize,
     pub max_rows: usize,
+    /// Highlighted swatch within a swatch-grid row.
+    pub col: usize,
 }
 
 fn selectable(r: &MenuRow) -> bool {
-    r.enabled && matches!(r.kind, RowKind::Item | RowKind::Submenu(_))
+    r.enabled
+        && matches!(
+            r.kind,
+            RowKind::Item | RowKind::Submenu(_) | RowKind::Swatches { .. }
+        )
 }
 
 impl MenuNav {
@@ -57,6 +63,7 @@ impl MenuNav {
             sub: None,
             scroll: 0,
             max_rows: max_rows.max(1),
+            col: 0,
         }
     }
 
@@ -205,11 +212,51 @@ impl MenuNav {
             .map(|&at| self.row(at).is_some_and(selectable))
             .collect();
         let ok = |i: usize| flags[i];
+        // Inside the swatch grid: ← → move across a row (wrapping), Enter picks.
+        let current = self
+            .highlight
+            .and_then(|h| vis.get(h).copied())
+            .and_then(|at| self.row(at))
+            .cloned();
+        if let Some(MenuRow {
+            kind: RowKind::Swatches { items, .. },
+            enabled: true,
+            ..
+        }) = &current
+        {
+            let n = items.len();
+            match key {
+                NavKey::Left => {
+                    self.col = (self.col.min(n - 1) + n - 1) % n;
+                    return NavOutcome::Moved;
+                }
+                NavKey::Right => {
+                    self.col = (self.col.min(n - 1) + 1) % n;
+                    return NavOutcome::Moved;
+                }
+                NavKey::Enter => {
+                    let sw = &items[self.col.min(n - 1)];
+                    return NavOutcome::Activate(format!("color:{}", sw.id));
+                }
+                _ => {}
+            }
+        }
         match key {
             NavKey::Down | NavKey::Up => {
                 self.sub = None;
                 self.highlight = Self::step(self.highlight, vis.len(), &ok, key == NavKey::Down);
                 self.keep_visible();
+                // Keep the column when moving between grid rows; clamp on a shorter row.
+                if let Some(MenuRow {
+                    kind: RowKind::Swatches { items, .. },
+                    ..
+                }) = self
+                    .highlight
+                    .and_then(|h| vis.get(h).copied())
+                    .and_then(|at| self.row(at))
+                {
+                    self.col = self.col.min(items.len() - 1);
+                }
                 NavOutcome::Moved
             }
             NavKey::Home | NavKey::End => {
@@ -400,5 +447,79 @@ mod tests {
         assert_eq!(n.activate((3, Some(0))), Some("swap_left".into()));
         assert_eq!(n.activate((3, None)), None);
         assert_eq!(n.activate((0, None)), None, "disabled");
+    }
+
+    fn grid_rows() -> Vec<MenuRow> {
+        use crate::tab_color::swatches;
+        let all = swatches(&Default::default());
+        let swatch_row = |i: usize, chunk: &[crate::tab_color::Swatch]| MenuRow {
+            kind: RowKind::Swatches {
+                items: chunk.to_vec(),
+                selected: "default".into(),
+            },
+            ..item(&format!("color-row-{i}"), true)
+        };
+        vec![
+            item("rename", true),
+            MenuRow {
+                kind: RowKind::Header,
+                ..item("color", false)
+            },
+            swatch_row(0, &all[..5]),
+            swatch_row(1, &all[5..]),
+            item("dup", true),
+        ]
+    }
+
+    #[test]
+    fn grid_arrows_wrap_within_a_row_and_enter_picks_the_swatch() {
+        let mut n = MenuNav::new(grid_rows(), 20);
+        n.key(NavKey::Down); // rename
+        n.key(NavKey::Down); // grid row 0 (header skipped)
+        assert_eq!(n.highlight, Some(2));
+        assert_eq!(n.col, 0);
+        n.key(NavKey::Left);
+        assert_eq!(n.col, 4, "left wraps within the row");
+        n.key(NavKey::Right);
+        assert_eq!(n.col, 0);
+        n.key(NavKey::Right);
+        n.key(NavKey::Right);
+        assert_eq!(
+            n.key(NavKey::Enter),
+            NavOutcome::Activate("color:purple".into())
+        );
+    }
+
+    #[test]
+    fn grid_up_down_keep_the_column_and_leave_at_the_edges() {
+        let mut n = MenuNav::new(grid_rows(), 20);
+        n.key(NavKey::Down);
+        n.key(NavKey::Down);
+        n.key(NavKey::Right);
+        n.key(NavKey::Right);
+        n.key(NavKey::Right); // col 3
+        n.key(NavKey::Down);
+        assert_eq!(
+            (n.highlight, n.col),
+            (Some(3), 3),
+            "second row, same column"
+        );
+        assert_eq!(
+            n.key(NavKey::Enter),
+            NavOutcome::Activate("color:teal".into())
+        );
+        n.key(NavKey::Down);
+        assert_eq!(n.highlight, Some(4), "leaves the grid below");
+        n.key(NavKey::Up);
+        assert_eq!(n.highlight, Some(3), "and re-enters from below");
+        n.key(NavKey::Up);
+        n.key(NavKey::Up);
+        assert_eq!(n.highlight, Some(0), "leaves the grid above");
+    }
+
+    #[test]
+    fn grid_rows_are_not_activated_as_plain_items() {
+        let n = MenuNav::new(grid_rows(), 20);
+        assert_eq!(n.activate((2, None)), None, "swatches report their own ids");
     }
 }

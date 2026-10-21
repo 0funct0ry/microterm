@@ -35,6 +35,7 @@ pub mod settings;
 pub mod ssh_host;
 pub mod state;
 pub mod tab_chrome;
+pub mod tab_color;
 pub mod terminal_view;
 pub mod textgrid;
 pub mod theme;

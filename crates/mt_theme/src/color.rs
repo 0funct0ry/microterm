@@ -74,6 +74,28 @@ impl Rgba {
         Self::rgb(m(self.r, other.r), m(self.g, other.g), m(self.b, other.b))
     }
 
+    /// Adjusts OKLCH lightness (hue kept) until `self` has at least `min` contrast against
+    /// every color in `against`. Returns `self` unchanged when it already does. Moves away from
+    /// the backgrounds: darker on light surfaces, lighter on dark ones.
+    pub fn ensure_contrast(self, against: &[Rgba], min: f32) -> Rgba {
+        let ok = |c: Rgba| against.iter().all(|b| c.contrast(*b) >= min);
+        if ok(self) || against.is_empty() {
+            return self;
+        }
+        let avg = against.iter().map(|b| b.luminance()).sum::<f32>() / against.len() as f32;
+        let dir = if avg > 0.18 { -1.0 } else { 1.0 };
+        let mut lch = self.to_oklch();
+        let mut best = self;
+        for _ in 0..100 {
+            lch.l = (lch.l + dir * 0.01).clamp(0.0, 1.0);
+            best = lch.to_rgba();
+            if ok(best) {
+                break;
+            }
+        }
+        best
+    }
+
     pub fn to_oklch(self) -> Oklch {
         let lin = |c: u8| srgb_to_linear(f32::from(c) / 255.0);
         let (r, g, b) = (lin(self.r), lin(self.g), lin(self.b));

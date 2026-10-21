@@ -19,6 +19,10 @@ pub struct TabChrome {
     pub badge: Option<StatusKind>,
     /// A pane of this tab is zoomed (SPEC §17.1).
     pub zoomed: bool,
+    /// The tab's resolved color (SPEC §4.4), when it has one.
+    pub color: Option<crate::tab_color::TabColorChrome>,
+    /// The status dot has the tab's color and gets a 1 px ring in the tab background.
+    pub dot_ring: bool,
 }
 
 pub fn dot_of(state: StatusState) -> Option<StatusKind> {
@@ -59,6 +63,30 @@ pub fn tab_chrome(status: Option<&Status>, attention: Option<NotifyLevel>) -> Ta
         tooltip: status.map(tooltip_of),
         badge: attention.map(badge_of),
         zoomed: false,
+        color: None,
+        dot_ring: false,
+    }
+}
+
+impl TabChrome {
+    /// Adds the tab color: the tooltip gains the color name and source, and a status dot that
+    /// would vanish into the color gets a ring.
+    pub fn with_color(
+        mut self,
+        color: crate::tab_color::TabColorChrome,
+        ui: &mt_theme::UiTokens,
+    ) -> Self {
+        let line = crate::tab_color::tooltip(&color.name, color.source, color.rule.as_deref());
+        self.tooltip = Some(match self.tooltip.take() {
+            Some(status) => format!("{status}\n{line}"),
+            None => line,
+        });
+        self.dot_ring = [self.dot, self.badge]
+            .into_iter()
+            .flatten()
+            .any(|k| crate::tab_color::dot_needs_ring(ui, k, color.rgba));
+        self.color = Some(color);
+        self
     }
 }
 
@@ -112,6 +140,33 @@ mod tests {
         let long = mt_mux::sanitize(&"x".repeat(300), 20);
         let c = tab_chrome(Some(&st(StatusState::Waiting, &long, None)), None);
         assert_eq!(c.tooltip.unwrap().chars().count(), "waiting: ".len() + 20);
+    }
+
+    #[test]
+    fn color_extends_the_tooltip_and_rings_a_matching_dot() {
+        use crate::tab_color::TabColorChrome;
+        let ui = crate::theme::Theme::one_dark().tab_ui;
+        let color = |name: &str, rgba| TabColorChrome {
+            name: name.into(),
+            rgba,
+            source: mt_mux::ColorSource::Rule,
+            rule: Some("domain:prod-*".into()),
+            style: mt_config::TabColorStyle::BarTint,
+        };
+        let status = st(StatusState::Error, "boom", None);
+        let c = tab_chrome(Some(&status), None).with_color(color("red", ui.tab_color_red), &ui);
+        assert_eq!(
+            c.tooltip.as_deref(),
+            Some("error: boom\nColor: red (rule: domain:prod-*)")
+        );
+        assert!(c.dot_ring, "red tab, error dot");
+        let c = tab_chrome(Some(&status), None).with_color(color("blue", ui.tab_color_blue), &ui);
+        assert!(!c.dot_ring);
+        let c = tab_chrome(None, None).with_color(color("red", ui.tab_color_red), &ui);
+        assert_eq!(
+            c.tooltip.as_deref(),
+            Some("Color: red (rule: domain:prod-*)")
+        );
     }
 
     #[test]

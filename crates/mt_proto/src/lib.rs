@@ -20,6 +20,7 @@ pub const PROTO_VERSION: u32 = 1;
 /// Longest accepted line, in bytes.
 pub const MAX_LINE: usize = 1024 * 1024;
 
+pub mod color;
 pub mod mux;
 pub mod selector;
 pub mod tools;
@@ -248,6 +249,9 @@ pub struct SpawnParams {
     pub cols: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u16>,
+    /// Color for the new tab (name or `#rrggbb`), `ctl tab new --color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -546,6 +550,17 @@ pub struct TabRenameParams {
     pub title: String,
 }
 
+/// `tab.set_color`: a name or `#rrggbb`, or `clear` to drop the manual color.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabColorParams {
+    #[serde(flatten)]
+    pub target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub clear: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordStartParams {
     pub pane: u64,
@@ -615,6 +630,7 @@ pub enum Request {
     TabFocus(TabFocusParams),
     TabRename(TabRenameParams),
     TabClose(Target),
+    TabSetColor(TabColorParams),
     PaneList(Target),
     PaneGet(Target),
     PaneSendText(SendTextParams),
@@ -661,6 +677,7 @@ pub const METHODS: &[&str] = &[
     "tab.focus",
     "tab.rename",
     "tab.close",
+    "tab.set_color",
     "pane.list",
     "pane.get",
     "pane.send_text",
@@ -706,6 +723,7 @@ impl Request {
             Request::TabFocus(_) => "tab.focus",
             Request::TabRename(_) => "tab.rename",
             Request::TabClose(_) => "tab.close",
+            Request::TabSetColor(_) => "tab.set_color",
             Request::PaneList(_) => "pane.list",
             Request::PaneGet(_) => "pane.get",
             Request::PaneSendText(_) => "pane.send_text",
@@ -775,6 +793,7 @@ impl Request {
             Request::WindowNew(p) | Request::TabNew(p) => to(p),
             Request::TabFocus(p) => to(p),
             Request::TabRename(p) => to(p),
+            Request::TabSetColor(p) => to(p),
             Request::PaneSendText(p) => to(p),
             Request::PaneGetText(p) => to(p),
             Request::PaneRun(p) => to(p),
@@ -844,6 +863,7 @@ impl Request {
             "tab.focus" => Request::TabFocus(p(method, params)?),
             "tab.rename" => Request::TabRename(p(method, params)?),
             "tab.close" => Request::TabClose(p(method, params)?),
+            "tab.set_color" => Request::TabSetColor(p(method, params)?),
             "pane.list" => Request::PaneList(p(method, params)?),
             "pane.get" => Request::PaneGet(p(method, params)?),
             "pane.send_text" => Request::PaneSendText(p(method, params)?),
@@ -991,6 +1011,12 @@ pub struct TabInfo {
     /// How the panes are split; `null` from older servers.
     #[serde(default)]
     pub layout: Option<LayoutNode>,
+    /// Resolved color (name or `#rrggbb`); absent when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// `manual`, `declared` or `rule`; absent when there is no color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_source: Option<String>,
 }
 
 /// `window list`.
@@ -1023,6 +1049,10 @@ pub struct TabNode {
     pub panes: Vec<PaneInfo>,
     #[serde(default)]
     pub layout: Option<LayoutNode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1213,6 +1243,12 @@ pub enum Event {
         from: usize,
         to: usize,
     },
+    /// The tab's resolved color changed; `color` is `None` when it now has none.
+    TabColorChanged {
+        tab: u64,
+        color: Option<String>,
+        source: String,
+    },
     WindowAdded {
         window: u64,
     },
@@ -1287,6 +1323,7 @@ impl Event {
             Event::TabAdded { .. } => "tab.added",
             Event::TabRemoved { .. } => "tab.removed",
             Event::TabMoved { .. } => "tab.moved",
+            Event::TabColorChanged { .. } => "tab.color_changed",
             Event::WindowAdded { .. } => "window.added",
             Event::WindowRemoved { .. } => "window.removed",
             Event::WorkspaceAdded { .. } => "workspace.added",
@@ -1317,6 +1354,7 @@ impl Event {
             Event::TabAdded { tab, .. }
             | Event::TabRemoved { tab, .. }
             | Event::TabMoved { tab, .. }
+            | Event::TabColorChanged { tab, .. }
             | Event::LayoutChanged { tab } => Subject::Tab(*tab),
             Event::WindowAdded { window } | Event::WindowRemoved { window } => {
                 Subject::Window(*window)
@@ -1576,6 +1614,11 @@ mod tests {
                 title: "x".into(),
             }),
             Request::TabClose(t.clone()),
+            Request::TabSetColor(TabColorParams {
+                target: Target::tab(5),
+                color: Some("pink".into()),
+                clear: false,
+            }),
             Request::PaneList(t.clone()),
             Request::PaneGet(t.clone()),
             Request::PaneSendText(SendTextParams {
@@ -1691,12 +1734,33 @@ mod tests {
 
     /// The method list is the public IPC surface (SPEC §12.2): changing it is a deliberate act.
     #[test]
+    fn tab_color_params_clear_form_round_trips() {
+        let r = Request::TabSetColor(TabColorParams {
+            target: Target::tab(5),
+            color: None,
+            clear: true,
+        });
+        let (m, v) = (r.method(), r.params());
+        assert_eq!(Request::from_parts(m, v).unwrap(), r);
+    }
+
+    #[test]
+    fn tab_info_color_is_optional_on_the_wire() {
+        let old = json!({"id":1,"title":"t","window":1,"workspace":"w","domain":"local",
+            "active":true,"focused":true,"panes":[2]});
+        let t: TabInfo = serde_json::from_value(old).unwrap();
+        assert_eq!((&t.color, &t.color_source), (&None, &None));
+        let v = serde_json::to_value(&t).unwrap();
+        assert!(v.get("color").is_none());
+    }
+
+    #[test]
     fn method_list_is_pinned() {
         assert_eq!(
             METHODS.join(" "),
             "mux.list workspace.list workspace.create workspace.switch workspace.rename \
              workspace.delete window.list window.new window.focus window.close tab.list tab.new \
-             tab.focus tab.rename tab.close pane.list pane.get pane.send_text pane.get_text \
+             tab.focus tab.rename tab.close tab.set_color pane.list pane.get pane.send_text pane.get_text \
              pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
              pane.close pane.split pane.focus pane.zoom pane.resize pane.swap pane.rotate \
              record.start record.stop replay.start config.reload subscribe menu.list menu.show \

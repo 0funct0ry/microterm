@@ -46,6 +46,8 @@ actions!(
         ActivateCopyMode,
         Search,
         SelectTheme,
+        ClearTabColor,
+        SetTabColorInteractive,
         IncreaseFontSize,
         DecreaseFontSize,
         ResetFontSize,
@@ -89,6 +91,11 @@ pub struct Split(pub mt_mux::Dir);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct ShowContextMenu(pub String);
+
+/// Color the active tab: a name (`pink`) or `#rrggbb`, or a `[tab_bar.palette]` name (M11.3).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct SetTabColor(pub String);
 
 /// Run a context-menu item, `"menu/item"`, against the focused pane (SPEC §10.9.1).
 #[derive(Clone, PartialEq, Action)]
@@ -729,6 +736,28 @@ pub static ACTIONS: &[ActionDef] = &[
         ShowContextMenu("viewport".into())
     ),
     def!(
+        args "SetTabColor",
+        "Set tab color",
+        "Color the active tab with a name (blue, purple, pink, red, orange, yellow, green, teal, gray), a `[tab_bar.palette]` name or `#rrggbb`",
+        SetTabColor(String::new())
+    ),
+    def!(
+        "SetTabColorInteractive",
+        "Tab: Set color…",
+        "Pick a color for the active tab from a list",
+        &[],
+        &[],
+        SetTabColorInteractive
+    ),
+    def!(
+        "ClearTabColor",
+        "Tab: Clear color",
+        "Remove the manual color of the active tab; declared colors and rules still apply",
+        &[],
+        &[],
+        ClearTabColor
+    ),
+    def!(
         args "ShowContextMenu",
         "Show context menu",
         "Open the named context menu (`viewport`, `tab`) for the focused pane or the active tab",
@@ -784,6 +813,7 @@ pub const CATEGORIES: &[&str] = &[
     "Fonts & look",
     "Config",
     "Menus",
+    "Tab colors",
     "Misc",
     "Debug",
 ];
@@ -833,6 +863,7 @@ impl ActionDef {
             }
             "ReloadConfig" | "OpenConfig" => "Config",
             "ShowContextMenu" | "InvokeMenuItem" => "Menus",
+            "SetTabColor" | "SetTabColorInteractive" | "ClearTabColor" => "Tab colors",
             _ => "Misc",
         }
     }
@@ -883,6 +914,10 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
         ("Split", Some(ActionArg::Str(d))) => Ok(Box::new(Split(
             mt_mux::Dir::parse(d).ok_or("direction must be left, right, up or down")?,
         ))),
+        ("SetTabColor", Some(ActionArg::Str(c))) => {
+            mt_mux::TabColor::parse(c).map_err(|e| e.to_string())?;
+            Ok(Box::new(SetTabColor(c.clone())))
+        }
         ("ShowContextMenu", Some(ActionArg::Str(id))) => match mt_config::menu::menu(id) {
             Some(_) => Ok(Box::new(ShowContextMenu(id.clone()))),
             None => Err(format!("ShowContextMenu: unknown menu \"{id}\"")),

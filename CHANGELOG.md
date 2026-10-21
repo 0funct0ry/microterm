@@ -3,6 +3,23 @@
 ## Unreleased
 
 ### Added
+- **M11.3 — Tab colors.** Tabs can be colored: nine theme-resolved names (`blue`, `purple`, `pink`,
+  `red`, `orange`, `yellow`, `green`, `teal`, `gray`) or `#rrggbb`. The tab right-click menu gets a
+  "Tab Color" heading with a 2 × 5 swatch grid (hollow ring = Default, check on the current color,
+  arrow-key navigation); the palette gets "Tab: Set color…" and "Tab: Clear color"; new actions
+  `SetTabColor`, `ClearTabColor`, `SetTabColorInteractive`; `ctl tab color`, `tab new --color`,
+  `color`/`color_source` in `tab list` and `list`, a `color:` selector key and `ctl events --type
+  tab.color_changed`. Precedence is manual > declared (`color` on workspace tabs, `[[launch]]`
+  profiles and `[[ssh_domains]]`) > the first matching `[[tab_bar.color_rules]]` entry (any pane of
+  the tab); `[tab_bar] color_style` is `bar+tint` (default), `bar`, `tint`, `dot` or `none`, and
+  `[tab_bar.palette]` overrides or adds colors. Nine `tab_color_*` theme tokens derive from the ANSI
+  palette with lightness clamped so the bar keeps 3:1 and the title 4.5:1 on the tint (`make
+  themes` enforces it; Everforest Light, Solarized Light and Tokyo Night Day got a slightly
+  stronger `[ui] text`). Remote tab colors live on the mux daemon (`PaneInfo.color` on the root pane
+  and `SetTabColor`, mux frame kind 21), so they survive reconnects and reach other clients.
+  `Mux::move_tab_to_new_window` keeps a tab's colors. Deferred: AT labels (GPUI has no API yet), a
+  GUI reading remote colors back on attach (it does not rebuild remote tabs from `Attached`),
+  a "move tab to new window" menu row.
 - **M11.2 — Shell-registered menu items.** A shell or program registers items for its own pane's
   `viewport` menu over a private sequence (`OSC 7717;menu;add|clear`, base64 fields): at most 16
   items per pane, 256 B labels, 1 KiB payloads and 10 registrations per second, with dropped and

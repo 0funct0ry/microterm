@@ -44,6 +44,7 @@ pub enum Key {
     Active,
     Status,
     Exited,
+    Color,
 }
 
 impl Key {
@@ -61,6 +62,7 @@ impl Key {
             "active" => Key::Active,
             "status" => Key::Status,
             "exited" => Key::Exited,
+            "color" => Key::Color,
             _ => return None,
         })
     }
@@ -79,6 +81,7 @@ impl Key {
             Key::Active => "active",
             Key::Status => "status",
             Key::Exited => "exited",
+            Key::Color => "color",
         }
     }
 
@@ -89,7 +92,7 @@ impl Key {
             Key::Id => true,
             Key::Title => matches!(r, Pane | Tab | Window),
             Key::Cwd | Key::Cmd | Key::Status | Key::Exited => r == Pane,
-            Key::Domain => matches!(r, Pane | Tab),
+            Key::Domain | Key::Color => matches!(r, Pane | Tab),
             Key::Workspace => r != Workspace,
             Key::Window | Key::Tab => match self {
                 Key::Window => matches!(r, Tab | Pane),
@@ -183,7 +186,7 @@ impl Selector {
             let key = Key::parse(key.trim()).ok_or_else(|| {
                 RpcError::bad_request(format!(
                     "unknown selector key {:?} (keys: id, title, cwd, cmd, domain, workspace, \
-                     window, tab, focused, active, status, exited)",
+                     window, tab, focused, active, status, exited, color)",
                     key.trim()
                 ))
             })?;
@@ -302,6 +305,7 @@ mod tests {
             ("active:true", &[Window, Tab, Pane]),
             ("status:idle", &[Pane]),
             ("exited:false", &[Pane]),
+            ("color:red", &[Tab, Pane]),
         ];
         for (expr, ok) in table {
             let s = Selector::parse(expr).unwrap();

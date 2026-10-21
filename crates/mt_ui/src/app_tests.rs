@@ -1583,7 +1583,16 @@ spawn = { command = ["sh"] }
     });
     assert_eq!(
         open_menu_rows(&view, cx),
-        ["close", "close_others", "rename", "dup"]
+        [
+            "close",
+            "close_others",
+            "rename",
+            "color-sep",
+            "color",
+            "color-row-0",
+            "color-row-1",
+            "dup"
+        ]
     );
     cx.simulate_keystrokes("escape");
     let pane = focused(&view, cx);
@@ -1664,4 +1673,237 @@ fn a_bad_menu_config_keeps_the_previous_menus(cx: &mut TestAppContext) {
     assert!(view.read_with(vcx, |t, _| t.open_menu.is_none()));
     assert!(right_click(&view, vcx, pane));
     assert!(open_menu_rows(&view, vcx).contains(&"b".to_string()));
+}
+
+// ---- M11.3: tab colors -----------------------------------------------------------------------
+
+fn manual_color(view: &Entity<AppWindow>, cx: &mut VisualTestContext, tab: u64) -> Option<String> {
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .tab(tab)
+            .and_then(|t| t.color)
+            .map(|c| c.to_string())
+    })
+}
+
+fn tab_menu_swatch_state(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> (usize, String) {
+    view.read_with(cx, |t, _| {
+        let rows = &t.open_menu.as_ref().expect("menu open").nav.rows;
+        let grid: Vec<_> = rows
+            .iter()
+            .filter_map(|r| match &r.kind {
+                crate::menu::RowKind::Swatches { items, selected } => {
+                    Some((items.len(), selected.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        (grid.iter().map(|g| g.0).sum(), grid[0].1.clone())
+    })
+}
+
+#[gpui::test]
+fn the_tab_menu_swatch_grid_sets_checks_and_clears_a_color(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let tab = view.read_with(cx, |t, _| t.tabs[0].id);
+    let open = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+        view.update(cx, |this, cx| {
+            this.open_tab_menu(tab, gpui::point(gpui::px(10.), gpui::px(10.)), cx)
+        });
+    };
+    open(&view, cx);
+    assert_eq!(tab_menu_swatch_state(&view, cx), (10, "default".into()));
+
+    // Picking pink colors the tab and the reopened menu checks pink.
+    view.update(cx, |this, cx| this.pick_tab_color(tab, "pink", cx));
+    assert_eq!(manual_color(&view, cx, tab).as_deref(), Some("pink"));
+    let chrome = view.update(cx, |_, cx| {
+        let pane = crate::mux_host::host(cx).mux.tab(tab).unwrap().pane().id;
+        crate::mux_host::tab_chrome(cx, pane)
+    });
+    let c = chrome.color.expect("the tab has a color");
+    assert_eq!(
+        (c.name.as_str(), c.source),
+        ("pink", mt_mux::ColorSource::Manual)
+    );
+    assert!(chrome.tooltip.unwrap().contains("Color: pink"));
+    open(&view, cx);
+    assert_eq!(tab_menu_swatch_state(&view, cx).1, "pink");
+
+    // The hollow ring clears the manual color.
+    view.update(cx, |this, cx| this.pick_tab_color(tab, "default", cx));
+    assert_eq!(manual_color(&view, cx, tab), None);
+}
+
+#[gpui::test]
+fn keyboard_picks_a_swatch_and_closes_the_menu(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let tab = view.read_with(cx, |t, _| t.tabs[0].id);
+    view.update(cx, |this, cx| {
+        this.open_tab_menu(tab, gpui::point(gpui::px(10.), gpui::px(10.)), cx)
+    });
+    // close, close others, rename, then the grid; two columns right of the ring is purple.
+    cx.simulate_keystrokes("down down down down right right enter");
+    assert_eq!(manual_color(&view, cx, tab).as_deref(), Some("purple"));
+    assert!(
+        view.read_with(cx, |t, _| t.open_menu.is_none()),
+        "menu closed"
+    );
+}
+
+#[gpui::test]
+fn pane_menus_have_no_tab_color(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let pane = view.read_with(cx, |t, _| t.tabs[0].pane);
+    right_click(&view, cx, pane);
+    assert!(!open_menu_rows(&view, cx)
+        .iter()
+        .any(|r| r.starts_with("color")));
+}
+
+fn resolved(
+    view: &Entity<AppWindow>,
+    cx: &mut VisualTestContext,
+    tab: u64,
+) -> (Option<String>, &'static str) {
+    view.update(cx, |_, cx| {
+        let (c, s) = crate::mux_host::host(cx)
+            .mux
+            .tab(tab)
+            .unwrap()
+            .resolved_color();
+        (c.map(|c| c.to_string()), s.name())
+    })
+}
+
+fn refresh_colors(view: &Entity<AppWindow>, cx: &mut VisualTestContext) {
+    view.update(cx, |_, cx| crate::mux_host::refresh_color_rules(cx));
+}
+
+#[gpui::test]
+fn color_rules_follow_titles_and_manual_colors_override_then_the_ring_restores(
+    cx: &mut TestAppContext,
+) {
+    let f = temp_config(
+        "color-rules",
+        "[[tab_bar.color_rules]]\nmatch = \"title:build*\"\ncolor = \"red\"\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    let (tab, pane) = view.read_with(cx, |t, _| (t.tabs[0].id, t.tabs[0].pane));
+    refresh_colors(&view, cx);
+    assert_eq!(resolved(&view, cx, tab), (None, "none"));
+
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_pane_title(pane, "build api");
+    });
+    refresh_colors(&view, cx);
+    assert_eq!(resolved(&view, cx, tab), (Some("red".into()), "rule"));
+    let chrome = view.update(cx, |_, cx| crate::mux_host::tab_chrome(cx, pane));
+    assert!(
+        chrome
+            .tooltip
+            .unwrap()
+            .contains("Color: red (rule: title:build*)"),
+        "tooltip names color and source"
+    );
+
+    view.update(cx, |this, cx| this.pick_tab_color(tab, "blue", cx));
+    refresh_colors(&view, cx);
+    assert_eq!(resolved(&view, cx, tab), (Some("blue".into()), "manual"));
+    view.update(cx, |this, cx| this.pick_tab_color(tab, "default", cx));
+    assert_eq!(
+        resolved(&view, cx, tab),
+        (Some("red".into()), "rule"),
+        "the ring restores the rule"
+    );
+
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx).mux.set_pane_title(pane, "shell");
+    });
+    refresh_colors(&view, cx);
+    assert_eq!(
+        resolved(&view, cx, tab),
+        (None, "none"),
+        "a rule that stops matching clears"
+    );
+}
+
+#[gpui::test]
+fn an_ssh_domain_colors_its_tabs_and_a_declared_tab_color_wins(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "domain-color",
+        "[[ssh_domains]]\nname = \"prod-db\"\nhost = \"db.example\"\ncolor = \"red\"\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    let window = view.read_with(cx, |t, _| t.mux_window);
+    let (prod, own) = view.update(cx, |_, cx| {
+        let h = crate::mux_host::host(cx);
+        let id = h.mux.register_ssh_domain("prod-db");
+        let (a, _) = h
+            .spawn_tab(
+                window,
+                mt_mux::SpawnSpec {
+                    domain: id,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let (b, _) = h
+            .spawn_tab(
+                window,
+                mt_mux::SpawnSpec {
+                    domain: id,
+                    color: Some(mt_mux::TabColor::Named(mt_mux::NamedColor::Teal)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        (a, b)
+    });
+    refresh_colors(&view, cx);
+    assert_eq!(resolved(&view, cx, prod), (Some("red".into()), "declared"));
+    assert_eq!(resolved(&view, cx, own), (Some("teal".into()), "declared"));
+    // A manual color overrides, and clearing restores the domain color.
+    view.update(cx, |this, cx| this.pick_tab_color(prod, "pink", cx));
+    assert_eq!(resolved(&view, cx, prod).1, "manual");
+    view.update(cx, |this, cx| this.pick_tab_color(prod, "default", cx));
+    assert_eq!(resolved(&view, cx, prod), (Some("red".into()), "declared"));
+}
+
+#[gpui::test]
+fn the_palette_sets_and_clears_the_active_tab_color(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let tab = view.read_with(cx, |t, _| t.tabs[t.active_tab].id);
+    cx.dispatch_action(SetTabColorInteractive);
+    let labels: Vec<String> = view.read_with(cx, |t, _| {
+        let p = t.picker.as_ref().expect("the color picker is open");
+        assert_eq!(p.kind, OverlayKind::TabColorPicker);
+        p.state
+            .visible()
+            .1
+            .iter()
+            .map(|m| p.state.label(m).to_string())
+            .collect()
+    });
+    assert_eq!(labels[0], "Default");
+    assert_eq!(labels[1..4], ["blue", "purple", "pink"]);
+    cx.simulate_input("pink");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(manual_color(&view, cx, tab).as_deref(), Some("pink"));
+    cx.dispatch_action(ClearTabColor);
+    assert_eq!(manual_color(&view, cx, tab), None);
+    cx.dispatch_action(SetTabColor("#f59e42".into()));
+    assert_eq!(manual_color(&view, cx, tab).as_deref(), Some("#f59e42"));
+    // The `#` tab provider row carries the swatch.
+    cx.dispatch_action(ShowCommandPalette);
+    cx.simulate_input("#");
+    let swatch = view.read_with(cx, |t, _| {
+        t.palette_entries_for_test()
+            .into_iter()
+            .find_map(|(l, e)| l.starts_with("Go to tab").then_some(e.swatch))
+    });
+    assert!(matches!(swatch, Some(Some(Some(_)))));
 }

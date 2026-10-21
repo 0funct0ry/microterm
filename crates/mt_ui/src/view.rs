@@ -266,6 +266,25 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &ShowWorkspaceSwitcher, w, cx| {
                 this.toggle(OverlayKind::WorkspaceSwitcher, w, cx)
             }))
+            .on_action(cx.listener(|this, a: &SetTabColor, _, cx| {
+                let palette = this.cfg.tab_bar.palette.clone();
+                match mt_mux::TabColor::parse_with_palette(&a.0, &palette) {
+                    Ok(c) => {
+                        if let Some(id) = this.tabs.get(this.active_tab).map(|t| t.id) {
+                            this.set_tab_color(id, Some(c), cx);
+                        }
+                    }
+                    Err(e) => this.toast(ToastKind::Warning, e.to_string(), cx),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ClearTabColor, _, cx| {
+                if let Some(id) = this.tabs.get(this.active_tab).map(|t| t.id) {
+                    this.set_tab_color(id, None, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SetTabColorInteractive, w, cx| {
+                this.toggle(OverlayKind::TabColorPicker, w, cx)
+            }))
             .on_action(cx.listener(|this, _: &SelectTheme, w, cx| {
                 this.toggle(OverlayKind::ThemeSelector, w, cx)
             }))
@@ -1483,6 +1502,7 @@ impl AppWindow {
 
     fn picker_modal(&self, picker: &PickerData, cx: &mut Context<Self>) -> impl IntoElement {
         let (offset, visible) = picker.state.visible();
+        let theme = *cx.global::<crate::theme::Theme>();
         let rows: Vec<PickerRow> = visible
             .iter()
             .map(|m| {
@@ -1494,6 +1514,14 @@ impl AppWindow {
                     chip: entry.chip.clone(),
                     icon: entry.icon,
                     status: entry.status,
+                    swatch: entry.swatch.map(|c| match c {
+                        Some(c) => crate::theme::hsla(crate::tab_color::resolve_rgba(
+                            &theme.tab_ui,
+                            &self.cfg.tab_bar.palette,
+                            c,
+                        )),
+                        None => gpui::transparent_black(),
+                    }),
                 }
             })
             .collect();
@@ -1521,6 +1549,7 @@ impl AppWindow {
                 | OverlayKind::Launcher
                 | OverlayKind::WorkspaceSwitcher
                 | OverlayKind::ThemeSelector
+                | OverlayKind::TabColorPicker
         );
         let mut ctx = KeyContext::default();
         ctx.add(CONTEXT_OVERLAY);

@@ -58,6 +58,7 @@ action = "Disable"          # unbind a default
 | Keys | Effect |
 |---|---|
 | `theme` | colours of the terminal and the UI |
+| `[tab_bar] color_style`, `[tab_bar.palette]`, `[[tab_bar.color_rules]]`, `color` on `[[workspaces]]` tabs, `[[launch]]` and `[[ssh_domains]]` | tab colors; see [Tab colors](/docs/tabs-and-workspaces/#tab-colors) |
 | `font.*` | cell metrics, ligatures, OpenType features and the fallback chain; see [Fonts](/docs/fonts/) |
 | `window.padding`, `opacity`, `blur`, `initial_size` | viewport padding, background transparency, size of new windows |
 | `cursor.style`, `blink`, `blink_interval_ms` | default cursor (programs can still change it with DECSCUSR) |

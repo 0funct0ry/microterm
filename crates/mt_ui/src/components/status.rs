@@ -18,11 +18,22 @@ pub enum StatusKind {
 pub struct StatusDot {
     kind: StatusKind,
     size: f32,
+    /// A 1 px ring in this color, so the dot stays visible on a same-colored tab.
+    ring: Option<gpui::Hsla>,
 }
 
 impl StatusDot {
     pub fn new(kind: StatusKind) -> Self {
-        Self { kind, size: 6.0 }
+        Self {
+            kind,
+            size: 6.0,
+            ring: None,
+        }
+    }
+
+    pub fn ring(mut self, color: Option<gpui::Hsla>) -> Self {
+        self.ring = color;
+        self
     }
 }
 
@@ -43,6 +54,7 @@ impl RenderOnce for StatusDot {
             .size(px(self.size))
             .rounded_full()
             .bg(color)
+            .when_some(self.ring, |d, ring| d.border_1().border_color(ring))
     }
 }
 

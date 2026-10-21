@@ -8,6 +8,7 @@ use crate::domain::{
     Domain, DomainId, DomainKind, DomainState, LocalDomain, SshDomain, LOCAL_DOMAIN_ID,
 };
 use crate::status::{sanitize, NotifyLimiter, Status, StatusSource};
+use mt_proto::color::{self, ColorSource, TabColor};
 
 pub type Id = u64;
 
@@ -97,9 +98,20 @@ pub struct Tab {
     pub active_pane: Id,
     /// The pane shown full-size while the tab is zoomed (SPEC §17.1).
     pub zoomed: Option<Id>,
+    /// Manual color (menu, palette, ctl).
+    pub color: Option<TabColor>,
+    /// Color declared by config (workspace tab, launch profile, SSH domain).
+    pub declared_color: Option<TabColor>,
+    /// Result of the first matching `[[tab_bar.color_rules]]`, maintained by the UI layer.
+    pub rule_color: Option<TabColor>,
 }
 
 impl Tab {
+    /// The color in effect and where it came from (manual > declared > rule > none).
+    pub fn resolved_color(&self) -> (Option<TabColor>, ColorSource) {
+        color::resolve(self.color, self.declared_color, self.rule_color)
+    }
+
     /// The focused pane.
     pub fn pane(&self) -> &Pane {
         self.tree
@@ -169,6 +181,12 @@ pub enum MuxEvent {
     },
     TitleChanged {
         pane: Id,
+    },
+    /// The tab's resolved color or its source changed (including rules starting or stopping).
+    TabColorChanged {
+        tab: Id,
+        color: Option<TabColor>,
+        source: ColorSource,
     },
     CwdChanged {
         pane: Id,
@@ -663,6 +681,9 @@ impl Mux {
             tree: PaneTree::Leaf(pane),
             active_pane: pane_id,
             zoomed: None,
+            color: None,
+            declared_color: None,
+            rule_color: None,
         };
         let win = self.window_mut(window)?;
         let at = if win.tabs.is_empty() {
@@ -762,6 +783,95 @@ impl Mux {
         let pane = t.pane().id;
         self.emit(MuxEvent::TitleChanged { pane });
         Ok(())
+    }
+
+    fn tab_mut(&mut self, tab: Id) -> Result<&mut Tab, Error> {
+        self.windows
+            .iter_mut()
+            .flat_map(|w| w.tabs.iter_mut())
+            .find(|t| t.id == tab)
+            .ok_or(Error::NoTab(tab))
+    }
+
+    /// The tab with id `tab`, in any window.
+    pub fn tab(&self, tab: Id) -> Option<&Tab> {
+        self.windows
+            .iter()
+            .flat_map(|w| w.tabs.iter())
+            .find(|t| t.id == tab)
+    }
+
+    /// Applies `f` to one of the tab's color inputs and emits `TabColorChanged` only when the
+    /// resolved color or its source changed.
+    fn update_tab_color(&mut self, tab: Id, f: impl FnOnce(&mut Tab)) -> Result<(), Error> {
+        let t = self.tab_mut(tab)?;
+        let before = t.resolved_color();
+        f(t);
+        let after = t.resolved_color();
+        if after != before {
+            self.emit(MuxEvent::TabColorChanged {
+                tab,
+                color: after.0,
+                source: after.1,
+            });
+        }
+        Ok(())
+    }
+
+    /// Sets (or with `None` clears) the manual color. Declared colors and rules still apply.
+    pub fn set_tab_color(&mut self, tab: Id, color: Option<TabColor>) -> Result<(), Error> {
+        self.update_tab_color(tab, |t| t.color = color)
+    }
+
+    /// Sets the color declared by config.
+    pub fn set_declared_color(&mut self, tab: Id, color: Option<TabColor>) -> Result<(), Error> {
+        self.update_tab_color(tab, |t| t.declared_color = color)
+    }
+
+    /// Sets the first-matching-rule color.
+    pub fn set_rule_color(&mut self, tab: Id, color: Option<TabColor>) -> Result<(), Error> {
+        self.update_tab_color(tab, |t| t.rule_color = color)
+    }
+
+    /// Applies the colors a [`SpawnSpec`] carries to the tab just created from it.
+    pub fn apply_spawn_colors(&mut self, tab: Id, spec: &crate::SpawnSpec) {
+        if spec.color.is_some() {
+            let _ = self.set_declared_color(tab, spec.color);
+        }
+        if spec.manual_color.is_some() {
+            let _ = self.set_tab_color(tab, spec.manual_color);
+        }
+    }
+
+    /// Moves `tab` out of `window` into a new window of the same workspace. The tab keeps its
+    /// id, panes and colors. Returns the new window's id.
+    pub fn move_tab_to_new_window(&mut self, window: Id, tab: Id) -> Result<Id, Error> {
+        let workspace = self
+            .window(window)
+            .ok_or(Error::NoWindow(window))?
+            .workspace_id;
+        let win = self.window_mut(window)?;
+        let pos = win
+            .tabs
+            .iter()
+            .position(|t| t.id == tab)
+            .ok_or(Error::NoTab(tab))?;
+        let moved = win.tabs.remove(pos);
+        if win.active > pos || win.active >= win.tabs.len() {
+            win.active = win.active.saturating_sub(1);
+        }
+        self.emit(MuxEvent::TabRemoved { window, tab });
+        let new = self.alloc();
+        self.windows.push(Window {
+            id: new,
+            workspace_id: workspace,
+            title: String::new(),
+            tabs: vec![moved],
+            active: 0,
+        });
+        self.emit(MuxEvent::WindowAdded { window: new });
+        self.emit(MuxEvent::TabAdded { window: new, tab });
+        Ok(new)
     }
 
     // ---- panes ----
@@ -1053,6 +1163,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use mt_proto::color::NamedColor;
 
     fn recorded(mux: &mut Mux) -> Arc<Mutex<Vec<MuxEvent>>> {
         let log = Arc::new(Mutex::new(Vec::new()));
@@ -1297,6 +1408,74 @@ mod tests {
         assert_eq!(mux.window(w).unwrap().active, 0);
         mux.activate_tab_relative(w, -1).unwrap();
         assert_eq!(mux.window(w).unwrap().active, 2);
+    }
+
+    const RED: TabColor = TabColor::Named(NamedColor::Red);
+    const BLUE: TabColor = TabColor::Named(NamedColor::Blue);
+    const TEAL: TabColor = TabColor::Named(NamedColor::Teal);
+
+    fn color_events(log: &Arc<Mutex<Vec<MuxEvent>>>) -> usize {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, MuxEvent::TabColorChanged { .. }))
+            .count()
+    }
+
+    #[test]
+    fn tab_color_event_only_on_resolved_change() {
+        let (mut mux, _, tabs) = mux_with_tabs(1);
+        let log = recorded(&mut mux);
+        let t = tabs[0];
+        mux.set_tab_color(t, None).unwrap();
+        assert_eq!(color_events(&log), 0, "no-op clear");
+        mux.set_tab_color(t, Some(RED)).unwrap();
+        mux.set_tab_color(t, Some(RED)).unwrap();
+        assert_eq!(color_events(&log), 1, "no-op set");
+        // A rule below a manual color does not change what is shown.
+        mux.set_rule_color(t, Some(TEAL)).unwrap();
+        assert_eq!(color_events(&log), 1);
+        // Clearing manual reveals the rule: the source changes.
+        mux.set_tab_color(t, None).unwrap();
+        assert_eq!(color_events(&log), 2);
+        assert_eq!(
+            mux.tab(t).unwrap().resolved_color(),
+            (Some(TEAL), ColorSource::Rule)
+        );
+        // Rule stops matching.
+        mux.set_rule_color(t, None).unwrap();
+        assert_eq!(color_events(&log), 3);
+    }
+
+    #[test]
+    fn clear_only_clears_manual() {
+        let (mut mux, _, tabs) = mux_with_tabs(1);
+        let t = tabs[0];
+        mux.set_declared_color(t, Some(BLUE)).unwrap();
+        mux.set_tab_color(t, Some(RED)).unwrap();
+        mux.set_tab_color(t, None).unwrap();
+        assert_eq!(
+            mux.tab(t).unwrap().resolved_color(),
+            (Some(BLUE), ColorSource::Declared)
+        );
+    }
+
+    #[test]
+    fn color_survives_reorder_and_new_window() {
+        let (mut mux, w, tabs) = mux_with_tabs(3);
+        mux.set_tab_color(tabs[0], Some(RED)).unwrap();
+        mux.move_tab(w, 0, 2).unwrap();
+        assert_eq!(mux.tab(tabs[0]).unwrap().color, Some(RED));
+        let nw = mux.move_tab_to_new_window(w, tabs[0]).unwrap();
+        assert_eq!(mux.tab_location(tabs[0]).map(|l| l.0), Some(nw));
+        assert_eq!(mux.window(w).unwrap().tabs.len(), 2);
+        assert_eq!(mux.tab(tabs[0]).unwrap().color, Some(RED));
+    }
+
+    #[test]
+    fn color_on_unknown_tab_errors() {
+        let (mut mux, _, _) = mux_with_tabs(1);
+        assert_eq!(mux.set_tab_color(9999, Some(RED)), Err(Error::NoTab(9999)));
     }
 
     #[test]

@@ -12,7 +12,7 @@ item it acts on is covered in [Selectors & targeting](/docs/selectors-and-target
 microterm ctl list
 microterm ctl workspace list | create NAME | switch NAME | rename OLD NEW | delete NAME [--force]
 microterm ctl window    list | new | focus | close
-microterm ctl tab       list | new | focus | rename | close
+microterm ctl tab       list | new | focus | rename | color | close
 microterm ctl pane      list | get | send-text | get-text | run | wait | notify | status | close
 microterm ctl events | record | replay | reload-config | skill | mcp
 ```
@@ -68,6 +68,7 @@ microterm ctl tab new [--window ID] [--workspace NAME] [--domain NAME] [--cwd DI
                       [--title T] [-- CMD ARGS…]
 microterm ctl tab focus [--tab ID | --match EXPR | --index N | --relative N] [--window ID]
 microterm ctl tab rename [--tab ID | --match EXPR] TITLE
+microterm ctl tab color [--tab ID | --match EXPR] (NAME | '#rrggbb' | --clear)
 microterm ctl tab close [--tab ID | --match EXPR] [--force] [--all]
 ```
 
@@ -76,6 +77,13 @@ the target workspace and becomes its active tab. `--workspace` switches to that 
 (creating it when it does not exist); the first tab opened in an empty workspace becomes that
 workspace's first tab. `--domain` takes `local`, the name of an [SSH domain](/docs/ssh-domains/),
 or `ssh:[user@]host[:port]` for a temporary one.
+
+`color` sets the manual color of a tab (a name, `#rrggbb` or `--clear`) and prints what applies
+now: `pink (manual)`, `red (declared)`, `teal (rule)` or `none`. `tab new --color NAME` opens a tab
+already colored. An unknown name is a usage error that lists the valid ones. `tab list --json` and
+`list --json` carry `color` and `color_source` (`manual`, `declared` or `rule`; absent when the
+tab has none). `microterm ctl events --type tab.color_changed` streams `{tab, color, source}`
+whenever the resolved color changes, including when a rule starts or stops matching.
 
 `focus` makes a tab active: a target, `--index N` (zero-based, within the window) or
 `--relative N` (from the active tab, wrapping around). `rename` sets the title; an empty title

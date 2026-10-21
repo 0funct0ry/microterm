@@ -33,6 +33,8 @@ struct Meta {
     exited: Option<ExitInfo>,
     subs: Vec<Sub>,
     split: Option<SplitInfo>,
+    /// The tab's manual color; only ever set on a root pane (no `split`).
+    color: Option<String>,
 }
 
 struct PaneEntry {
@@ -67,6 +69,7 @@ impl PaneEntry {
             exited: m.exited,
             session: self.session.clone(),
             split: m.split,
+            color: m.color.clone(),
         }
     }
 }
@@ -219,6 +222,21 @@ impl Server {
                 }
                 _ => err(format!("cannot record split of pane {pane} from {parent}")),
             },
+            Msg::SetTabColor { pane, color } => {
+                let valid = color
+                    .as_deref()
+                    .map_or(Ok(()), |c| mt_proto::color::TabColor::parse(c).map(|_| ()));
+                match (self.find(pane), valid) {
+                    (Some(p), Ok(())) if lock(&p.meta).split.is_none() => {
+                        lock(&p.meta).color = color;
+                    }
+                    (Some(_), Ok(())) => err(format!(
+                        "pane {pane} is not the root pane of its tab; colors live on the root"
+                    )),
+                    (None, _) => err(format!("pane {pane} does not exist")),
+                    (_, Err(e)) => err(e.to_string()),
+                }
+            }
             Msg::Kill { pane } => match self.find(pane) {
                 Some(p) => p.pane().kill(),
                 None => err(format!("pane {pane} does not exist")),
