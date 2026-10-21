@@ -343,6 +343,11 @@ impl Emulator {
         )
     }
 
+    /// Items shell programs registered with `OSC 7717` (SPEC §10.9.7).
+    pub fn menu_items(&self) -> Vec<crate::menu_reg::RegItem> {
+        self.tracker.menus().items().to_vec()
+    }
+
     /// The working directory the program reported with OSC 7.
     pub fn cwd(&self) -> Option<String> {
         self.tracker.cwd().map(str::to_string)

@@ -15,6 +15,7 @@ mod events;
 mod headless;
 mod input;
 mod lines;
+pub mod menu_reg;
 mod mouse;
 mod process;
 mod replay;

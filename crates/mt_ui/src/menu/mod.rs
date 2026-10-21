@@ -4,6 +4,7 @@
 
 pub mod expand;
 pub mod nav;
+pub mod shell;
 
 use std::collections::BTreeMap;
 
@@ -71,6 +72,8 @@ pub struct Facts {
     pub row: PaneRow,
     facts: BTreeMap<WhenKey, FactValue>,
     pub values: Values,
+    /// Items registered by programs in the pane and project items (SPEC §10.9.7).
+    pub shell: shell::ShellState,
 }
 
 impl Facts {
@@ -160,6 +163,7 @@ impl Facts {
                 }
             }
         }
+        let shell = shell::collect(cfg, remote, v.get("cwd"), term);
         Some(Facts {
             pane,
             tab: row.tab,
@@ -168,6 +172,7 @@ impl Facts {
             row,
             facts: f,
             values: v,
+            shell,
         })
     }
 
@@ -460,6 +465,9 @@ pub fn resolve(cfg: &Config, menu: &str, f: &Facts) -> Vec<MenuRow> {
         last_user = Some(user);
         rows.push(row);
     }
+    if reg::menu(menu).is_some_and(|m| m.shell_registrable) {
+        rows.extend(shell::rows(cfg, f));
+    }
     tidy(rows)
 }
 
@@ -547,6 +555,9 @@ pub fn parse_address(addr: &str) -> Result<(&str, &str), PlanError> {
 pub fn plan(cfg: &Config, menu: &str, item: &str, f: &Facts) -> Result<Invocation, PlanError> {
     if reg::menu(menu).is_none() {
         return Err(PlanError::UnknownMenu(menu.to_string()));
+    }
+    if reg::menu(menu).is_some_and(|m| m.shell_registrable) && shell::origin_of(item).is_some() {
+        return shell::plan(cfg, menu, item, f);
     }
     let entries = reg::entries(cfg, menu);
     let entry = reg::find_entry(&entries, item)
@@ -820,6 +831,9 @@ fn rows_json(rows: &[MenuRow]) -> Value {
                 });
                 if let RowKind::Submenu(c) = &r.kind {
                     v["items"] = rows_json(c);
+                }
+                if let Some(o) = shell::origin_of(&r.id) {
+                    v["origin"] = json!(o);
                 }
                 v
             })

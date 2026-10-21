@@ -58,6 +58,7 @@ pub fn event_of(e: &MuxEvent) -> Event {
             kind: kind.clone(),
             summary: summary.clone(),
         },
+        MuxEvent::MenuItemsChanged { pane } => Event::MenuItemsChanged { pane },
         MuxEvent::TabAdded { window, tab } => Event::TabAdded { window, tab },
         MuxEvent::TabRemoved { window, tab } => Event::TabRemoved { window, tab },
         MuxEvent::TabMoved {

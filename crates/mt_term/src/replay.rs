@@ -28,7 +28,7 @@ fn push_mark(out: &mut String, m: &Mark) {
             };
         }
         Mark::Cwd(p) => push_cwd(out, p),
-        Mark::Reset | Mark::Restored(_) | Mark::Vt(_) => {}
+        Mark::Reset | Mark::Restored(_) | Mark::Vt(_) | Mark::MenuReg(_) | Mark::ClearHistory => {}
     }
 }
 
@@ -191,6 +191,7 @@ pub(crate) fn synthesize<T>(
     if let Some(cwd) = tracker.cwd() {
         push_cwd(&mut out, cwd);
     }
+    tracker.menus().replay(&mut out);
 
     // Cursor, then modes (origin mode last: CUP must be absolute).
     let cp = grid.cursor.point;

@@ -68,6 +68,9 @@ fn nav_key(ev: &KeyDownEvent, platform: crate::platform::Platform) -> Option<Nav
 /// Chip text per row id, from the rows' actions and the live keymap.
 fn menu_chips(settings: &Settings, rows: &[MenuRow], out: &mut HashMap<String, String>) {
     for r in rows {
+        if let Some(origin) = crate::menu::shell::origin_of(&r.id) {
+            out.insert(r.id.clone(), origin.to_string());
+        }
         if let Some(chip) = r
             .chip_action
             .as_deref()

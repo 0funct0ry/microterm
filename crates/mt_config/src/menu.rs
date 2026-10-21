@@ -76,6 +76,11 @@ pub struct MenuSecurity {
     pub dangerous: Vec<String>,
     /// Selectors (§12.3) of panes for which `confirm = "auto"` always confirms.
     pub confirm_panes: Vec<String>,
+    /// Directories whose panes may run shell-registered `spawn` items and project menus
+    /// (SPEC §10.9.7). Absolute; `"/dir"` is exact, `"/dir/**"` is the subtree.
+    pub trusted_dirs: Vec<String>,
+    /// Honour items registered from ssh-domain panes (never `spawn`).
+    pub allow_remote_items: bool,
 }
 
 impl Default for MenuSecurity {
@@ -85,6 +90,8 @@ impl Default for MenuSecurity {
                 .map(String::from)
                 .to_vec(),
             confirm_panes: ["title:*prod*", "domain:*prod*"].map(String::from).to_vec(),
+            trusted_dirs: Vec::new(),
+            allow_remote_items: false,
         }
     }
 }
@@ -1293,6 +1300,20 @@ pub fn validate(cfg: &Config) -> Vec<MenuIssue> {
                     field: Some("confirm_panes"),
                 },
                 format!("menu_security.confirm_panes[{i}]: {}", e.message),
+            );
+        }
+    }
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    for (i, raw) in cfg.menu_security.trusted_dirs.iter().enumerate() {
+        if let Err(e) = crate::trust::parse_entry(raw, home.as_deref()) {
+            c.push(
+                Loc {
+                    table: vec!["menu_security".into()],
+                    item: None,
+                    sub: None,
+                    field: Some("trusted_dirs"),
+                },
+                format!("menu_security.trusted_dirs[{i}]: {e}"),
             );
         }
     }

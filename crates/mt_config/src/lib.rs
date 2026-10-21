@@ -9,6 +9,7 @@ pub mod load;
 pub mod menu;
 pub mod schema;
 pub mod template;
+pub mod trust;
 pub mod watch;
 
 pub use diagnostics::{

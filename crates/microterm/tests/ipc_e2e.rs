@@ -2268,3 +2268,57 @@ fn menu_icons_lists_names_without_an_instance() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v.as_array().unwrap().len(), lines.len());
 }
+
+#[test]
+fn shell_registered_items_are_listed_run_and_limited_headlessly() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh(r#"printf '\033]7717;menu;add;t;UnVuIHRlc3Rz;send;ZWNobyBtZW51LSQoKDYqNykp\007\033]7717;menu;add;sp;U3Bhd24gaXQ=;spawn;WyJzaCJd\007\033]7717;menu;add;evil;RXZpbA==;ctl;cGFuZSBjbG9zZSAtLXBhbmUgMSAtLWZvcmNl\007'; echo ready; exec sh"#, &["--title", "reg"]);
+    mt.wait_text(&pane, "ready");
+    mt.until("the registrations", |mt| {
+        mt.json(&["menu", "show", "viewport", "--pane", &pane])["items"]
+            .to_string()
+            .contains("shell:evil")
+    });
+    let show = mt.json(&["menu", "show", "viewport", "--pane", &pane]);
+    let rows = show["items"].as_array().unwrap();
+    let t = rows.iter().find(|r| r["id"] == "shell:t").expect("row");
+    assert_eq!(t["origin"], "shell");
+    assert_eq!(t["label"], "Run tests");
+    assert_eq!(t["enabled"], true);
+    // spawn is shown disabled in an untrusted directory.
+    let sp = rows.iter().find(|r| r["id"] == "shell:sp").unwrap();
+    assert_eq!(sp["enabled"], false);
+
+    let d = mt.json(&[
+        "menu",
+        "invoke",
+        "viewport/shell:t",
+        "--pane",
+        &pane,
+        "--dry-run",
+    ]);
+    assert_eq!(d["kind"], "send");
+    assert_eq!(d["text"], "echo menu-$((6*7))\n");
+
+    // Tier 2: spawn refused, a ctl item aimed at another pane refused.
+    let (code, err) = mt.ctl_err(&["menu", "invoke", "viewport/shell:sp", "--pane", &pane]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("not trusted"), "{err}");
+    let (code, err) = mt.ctl_err(&["menu", "invoke", "viewport/shell:evil", "--pane", &pane]);
+    assert_ne!(code, 0, "{err}");
+    assert!(
+        err.contains("own pane"),
+        "refused by the Tier 2 check, not by luck: {err}"
+    );
+    assert!(
+        mt.list().to_string().contains(&format!("\"id\":{pane},")),
+        "pane survived"
+    );
+
+    // The allowed item types into its own pane.
+    mt.ctl(&["menu", "invoke", "viewport/shell:t", "--pane", &pane]);
+    mt.wait_text(&pane, "menu-42");
+    // The registered items never become config items.
+    let list = mt.json(&["menu", "list"]);
+    assert!(!list.to_string().contains("shell:t"));
+}

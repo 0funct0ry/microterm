@@ -76,6 +76,8 @@ pub enum TermEvent {
     },
     /// OSC 9 notification text (unsanitised; the mux cleans it).
     Notify(String),
+    /// The pane's shell-registered menu items changed (`OSC 7717`, SPEC §10.9.7).
+    MenuItemsChanged,
 }
 
 impl std::fmt::Debug for TermEvent {
@@ -92,6 +94,7 @@ impl std::fmt::Debug for TermEvent {
             Self::CommandFinished(c) => write!(f, "CommandFinished({c:?})"),
             Self::Progress { state, value } => write!(f, "Progress({state:?}, {value:?})"),
             Self::Notify(t) => write!(f, "Notify({t:?})"),
+            Self::MenuItemsChanged => write!(f, "MenuItemsChanged"),
         }
     }
 }

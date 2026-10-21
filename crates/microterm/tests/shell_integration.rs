@@ -24,7 +24,15 @@ fn snippet(shell: &str) -> String {
 fn every_snippet_emits_all_four_marks_and_the_working_directory() {
     for shell in ["bash", "zsh", "fish"] {
         let text = snippet(shell);
-        for needle in ["133;A", "133;B", "133;C", "133;D", "]7;file://"] {
+        for needle in [
+            "133;A",
+            "133;B",
+            "133;C",
+            "133;D",
+            "]7;file://",
+            "]7717;menu;add",
+            "mt-menu",
+        ] {
             assert!(text.contains(needle), "{shell} snippet lacks {needle}");
         }
     }
@@ -134,5 +142,60 @@ fn zsh_snippet_produces_exact_command_records() {
 fn fish_snippet_produces_exact_command_records() {
     if let Some(t) = session("fish", &["--no-config", "-i"], "source") {
         exercise(&t);
+    }
+}
+
+/// `mt-menu add|clear` in a real shell reach the pane's registry with the exact text.
+fn menu_registration(t: &Terminal) {
+    use mt_term::menu_reg::RegKind;
+    until("the first prompt", || t.has_marks());
+    t.write(b"mt-menu add \"Run tests\" -- make test 'a b'\r".to_vec());
+    until("the registration", || !t.menu_items().0.is_empty());
+    let (items, dropped, malformed) = t.menu_items();
+    assert_eq!((dropped, malformed), (0, 0));
+    assert_eq!(items[0].id, "run-tests");
+    assert_eq!(items[0].label, "Run tests");
+    assert_eq!(items[0].kind, RegKind::Send);
+    // Quoted for the shell it is typed into: bash and zsh escape, fish single-quotes.
+    assert!(
+        ["make test a\\ b", "make test 'a b'"].contains(&items[0].payload.as_str()),
+        "{:?}",
+        items[0].payload
+    );
+
+    t.write(b"mt-menu add --spawn --id sp Spawn -- cargo 'say \"hi\"'\r".to_vec());
+    until("the spawn item", || t.menu_items().0.len() == 2);
+    let sp = t.menu_items().0.into_iter().find(|i| i.id == "sp").unwrap();
+    assert_eq!(sp.kind, RegKind::Spawn);
+    assert_eq!(sp.payload, r#"["cargo","say \"hi\""]"#);
+
+    t.write(b"mt-menu clear run-tests\r".to_vec());
+    until("the clear", || t.menu_items().0.len() == 1);
+    t.write(b"mt-menu clear\r".to_vec());
+    until("the clear all", || t.menu_items().0.is_empty());
+    // Usage errors register nothing.
+    t.write(b"mt-menu add nolabel\r".to_vec());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(t.menu_items().0.is_empty());
+}
+
+#[test]
+fn bash_mt_menu_registers_items() {
+    if let Some(t) = session("bash", &["--noprofile", "--norc", "-i"], ".") {
+        menu_registration(&t);
+    }
+}
+
+#[test]
+fn zsh_mt_menu_registers_items() {
+    if let Some(t) = session("zsh", &["-f", "-i"], ".") {
+        menu_registration(&t);
+    }
+}
+
+#[test]
+fn fish_mt_menu_registers_items() {
+    if let Some(t) = session("fish", &["--no-config", "-i"], "source") {
+        menu_registration(&t);
     }
 }

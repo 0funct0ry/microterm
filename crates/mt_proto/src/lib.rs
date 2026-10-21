@@ -1250,6 +1250,10 @@ pub enum Event {
         kind: String,
         summary: String,
     },
+    /// The pane's shell-registered menu items changed (SPEC §10.9.7).
+    MenuItemsChanged {
+        pane: u64,
+    },
     /// First line of a `subscribe` with `snapshot`: the whole tree (the `mux.list` result).
     Snapshot {
         tree: Value,
@@ -1291,6 +1295,7 @@ impl Event {
             Event::WorkspaceRemoved { .. } => "workspace.removed",
             Event::DomainStateChanged { .. } => "domain.state_changed",
             Event::MenuInvoked { .. } => "menu.invoked",
+            Event::MenuItemsChanged { .. } => "menu.items_changed",
             Event::Snapshot { .. } => "snapshot",
         }
     }
@@ -1307,7 +1312,8 @@ impl Event {
             | Event::Notification { pane, .. }
             | Event::PaneExited { pane, .. }
             | Event::CommandFinished { pane, .. }
-            | Event::MenuInvoked { pane, .. } => Subject::Pane(*pane),
+            | Event::MenuInvoked { pane, .. }
+            | Event::MenuItemsChanged { pane } => Subject::Pane(*pane),
             Event::TabAdded { tab, .. }
             | Event::TabRemoved { tab, .. }
             | Event::TabMoved { tab, .. }

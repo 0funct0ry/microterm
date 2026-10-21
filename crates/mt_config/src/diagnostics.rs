@@ -390,7 +390,12 @@ const ROOT: &[(&str, K)] = &[
     ("menu_groups", K::Map(&[("items", K::Array(MENU_ITEM))])),
     (
         "menu_security",
-        K::Table(&[("dangerous", K::Leaf), ("confirm_panes", K::Leaf)]),
+        K::Table(&[
+            ("dangerous", K::Leaf),
+            ("confirm_panes", K::Leaf),
+            ("trusted_dirs", K::Leaf),
+            ("allow_remote_items", K::Leaf),
+        ]),
     ),
 ];
 

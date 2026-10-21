@@ -386,3 +386,263 @@ fn the_reference_draws_every_icon() {
     );
     assert!(!doc.contains("@license") && !doc.contains("class=\"lucide"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Shell-registered items (M11.2)
+
+mod shell_items {
+    use super::*;
+    use crate::menu::shell::{Origin, ShellItem};
+    use mt_term::menu_reg::RegKind;
+
+    fn item(id: &str, kind: RegKind, payload: &str) -> ShellItem {
+        ShellItem {
+            id: id.into(),
+            label: format!("Label {id}"),
+            kind,
+            payload: payload.into(),
+            origin: Origin::Shell,
+        }
+    }
+
+    fn with(items: Vec<ShellItem>, cwd: Option<&str>, remote: bool) -> (Config, Facts) {
+        let mut dir = None;
+        let mut c = Config::default();
+        if let Some(cwd) = cwd {
+            dir = Some(std::path::PathBuf::from(cwd).canonicalize().unwrap());
+            c.menu_security.trusted_dirs.clear();
+        }
+        let (m, p) = mux(1);
+        let mut f = facts(&c, &m, p[0]);
+        f.shell.items = items;
+        f.remote = remote;
+        if remote {
+            f.row.domain = "prod".into();
+        }
+        if let Some(d) = dir {
+            f.values.set("cwd", d.to_string_lossy().into_owned());
+        }
+        (c, f)
+    }
+
+    fn trusted_cfg(c: &mut Config, dir: &str) {
+        c.menu_security.trusted_dirs = vec![dir.into()];
+    }
+
+    #[test]
+    fn rows_follow_config_rows_under_a_header_with_an_origin() {
+        let (c, f) = with(vec![item("t", RegKind::Send, "make test")], None, false);
+        let rows = resolve(&c, "viewport", &f);
+        let l = labels(&rows);
+        assert_eq!(&l[l.len() - 3..], ["---", "[Shell]", "Label t"]);
+        let last = rows.last().unwrap();
+        assert_eq!(last.id, "shell:t");
+        assert!(last.enabled);
+        assert_eq!(crate::menu::shell::origin_of(&last.id), Some("shell"));
+        // Not offered in the tab menu.
+        let tab = resolve(&c, "tab", &f);
+        assert!(tab.iter().all(|r| !r.id.starts_with("shell:")));
+        let j = show_json(&c, "viewport", &f);
+        assert!(j.to_string().contains(r#""origin":"shell""#));
+    }
+
+    #[test]
+    fn send_goes_to_its_own_pane_and_ends_with_enter() {
+        let (c, f) = with(vec![item("t", RegKind::Send, "make test")], None, false);
+        let inv = plan(&c, "viewport", "shell:t", &f).unwrap();
+        assert_eq!(inv.pane, f.pane);
+        assert_eq!(
+            inv.plan,
+            Plan::Send {
+                text: "make test\n".into()
+            }
+        );
+        assert!(inv.confirm.is_none(), "{:?}", inv.confirm);
+        // Hostile payloads: controls are stripped, an embedded newline is refused.
+        let (c, f) = with(vec![item("e", RegKind::Send, "ls\x1b[2J")], None, false);
+        let inv = plan(&c, "viewport", "shell:e", &f).unwrap();
+        assert_eq!(
+            inv.plan,
+            Plan::Send {
+                text: "ls[2J\n".into()
+            }
+        );
+        let (c, f) = with(vec![item("n", RegKind::Send, "a\nrm -rf ~")], None, false);
+        assert!(matches!(
+            plan(&c, "viewport", "shell:n", &f),
+            Err(PlanError::Expand(_))
+        ));
+    }
+
+    #[test]
+    fn dangerous_text_and_remote_panes_always_confirm() {
+        let (c, f) = with(vec![item("d", RegKind::Send, "rm -rf /")], None, false);
+        assert!(plan(&c, "viewport", "shell:d", &f)
+            .unwrap()
+            .confirm
+            .is_some());
+        let mut it = item("r", RegKind::Send, "uptime");
+        it.origin = Origin::Shell;
+        let mut c2 = Config::default();
+        c2.menu_security.allow_remote_items = true;
+        let (_, f) = with(vec![it], None, true);
+        assert!(plan(&c2, "viewport", "shell:r", &f)
+            .unwrap()
+            .confirm
+            .is_some());
+    }
+
+    #[test]
+    fn ctl_is_limited_to_the_own_pane() {
+        let ok = |s: &str| {
+            let (c, f) = with(vec![item("c", RegKind::Ctl, s)], None, false);
+            plan(&c, "viewport", "shell:c", &f)
+        };
+        assert!(matches!(
+            ok("pane status set --state working build").unwrap().plan,
+            Plan::Ctl { .. }
+        ));
+        for bad in [
+            "pane send-text --pane 7 hi",
+            "pane close --match 'title:*'",
+            "pane close --all",
+            "pane get-text --pane=3",
+            "tab close",
+            "workspace delete x",
+            "menu invoke viewport/zoom",
+        ] {
+            assert!(ok(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn spawn_needs_a_trusted_local_directory() {
+        let dir = std::env::temp_dir().join(format!("mt_ui_shell_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.canonicalize().unwrap();
+        let payload = r#"["make","test"]"#;
+        // Untrusted: shown disabled, refused when planned.
+        let (c, f) = with(
+            vec![item("s", RegKind::Spawn, payload)],
+            Some(d.to_str().unwrap()),
+            false,
+        );
+        let rows = resolve(&c, "viewport", &f);
+        assert!(!rows.last().unwrap().enabled);
+        assert!(matches!(
+            plan(&c, "viewport", "shell:s", &f),
+            Err(PlanError::Unavailable(_))
+        ));
+        // Trusted (exact): allowed, in a split right of this pane only.
+        let (mut c, f) = with(
+            vec![item("s", RegKind::Spawn, payload)],
+            Some(d.to_str().unwrap()),
+            false,
+        );
+        trusted_cfg(&mut c, d.to_str().unwrap());
+        let inv = plan(&c, "viewport", "shell:s", &f).unwrap();
+        let Plan::Spawn {
+            argv, place, ctl, ..
+        } = &inv.plan
+        else {
+            panic!()
+        };
+        assert_eq!(argv, &["make", "test"]);
+        assert_eq!(*place, SpawnWhere::SplitRight);
+        assert!(!ctl);
+        // The same directory over an ssh domain is never trusted, even when listed.
+        let (mut c, f) = with(
+            vec![item("s", RegKind::Spawn, payload)],
+            Some(d.to_str().unwrap()),
+            true,
+        );
+        trusted_cfg(&mut c, d.to_str().unwrap());
+        c.menu_security.allow_remote_items = true;
+        assert!(plan(&c, "viewport", "shell:s", &f).is_err());
+        // Trust is re-evaluated per plan: removing the entry revokes it.
+        let (mut c, f) = with(
+            vec![item("s", RegKind::Spawn, payload)],
+            Some(d.to_str().unwrap()),
+            false,
+        );
+        trusted_cfg(&mut c, d.to_str().unwrap());
+        assert!(plan(&c, "viewport", "shell:s", &f).is_ok());
+        c.menu_security.trusted_dirs.clear();
+        assert!(plan(&c, "viewport", "shell:s", &f).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_ids_and_other_menus_do_not_resolve() {
+        let (c, f) = with(vec![item("t", RegKind::Send, "x")], None, false);
+        assert!(matches!(
+            plan(&c, "viewport", "shell:nope", &f),
+            Err(PlanError::UnknownItem(_))
+        ));
+        assert!(plan(&c, "tab", "shell:t", &f).is_err());
+    }
+
+    #[test]
+    fn project_files_need_trust_and_report_when_ignored() {
+        let dir = std::env::temp_dir().join(format!("mt_ui_proj_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.canonicalize().unwrap();
+        std::fs::write(
+            d.join(".microterm-menu.toml"),
+            "[[items]]\nid = \"tests\"\nlabel = \"Run tests\"\nspawn = [\"make\", \"test\"]\n",
+        )
+        .unwrap();
+        let mut c = Config::default();
+        let ds = d.to_str().unwrap();
+        let st = crate::menu::shell::collect(&c, false, Some(ds), None);
+        assert!(st.items.is_empty() && st.project_ignored);
+        // Remote panes never read project files.
+        c.menu_security.trusted_dirs = vec![ds.into()];
+        assert!(crate::menu::shell::collect(&c, true, Some(ds), None)
+            .items
+            .is_empty());
+        let st = crate::menu::shell::collect(&c, false, Some(ds), None);
+        assert_eq!(st.items.len(), 1);
+        assert_eq!(st.items[0].row_id(), "project:tests");
+        assert!(!st.project_ignored);
+        // A broken file is a disabled diagnostic row, not a crash.
+        std::fs::write(d.join(".microterm-menu.toml"), "[menu_security]\n").unwrap();
+        assert!(crate::menu::shell::collect(&c, false, Some(ds), None)
+            .project_error
+            .is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn project_file_aliases_are_found_in_order() {
+        let dir = std::env::temp_dir().join(format!("mt_ui_alias_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.canonicalize().unwrap();
+        let ds = d.to_str().unwrap();
+        let mut c = Config::default();
+        c.menu_security.trusted_dirs = vec![ds.into()];
+        let file = |label: &str| format!("[[items]]\nlabel = \"{label}\"\nsend = \"x\"\n");
+        for name in [
+            ".p-menu.toml",
+            ".menu.toml",
+            ".mt-menu.toml",
+            ".microterm-menu.toml",
+        ] {
+            std::fs::write(d.join(name), file(name)).unwrap();
+            let st = crate::menu::shell::collect(&c, false, Some(ds), None);
+            assert_eq!(st.project_file, Some(name));
+            assert_eq!(st.items[0].label, name, "later names lose to earlier ones");
+        }
+        // Untrusted: the diagnostic names the file that was found.
+        c.menu_security.trusted_dirs.clear();
+        let (_, mut f) = with(vec![], None, false);
+        f.shell = crate::menu::shell::collect(&c, false, Some(ds), None);
+        let rows = resolve(&c, "viewport", &f);
+        assert!(rows
+            .last()
+            .unwrap()
+            .label
+            .starts_with(".microterm-menu.toml ignored"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

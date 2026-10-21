@@ -40,6 +40,22 @@ a shared rc file. It also works over SSH: a remote shell with the snippet sends 
 The snippets keep your own prompt: they wrap whatever `PS1`, `PROMPT` or `fish_prompt` contains and do not
 replace `PROMPT_COMMAND` or the zsh hook arrays (bash's array form is supported).
 
+## Menu items: `mt-menu`
+
+The snippets also define `mt-menu`, which adds items to the right-click menu of the current pane
+(see [Context menus](/docs/context-menus/#items-registered-by-the-shell) for what they may do):
+
+```sh
+mt-menu add [--id ID] [--ctl|--spawn] LABEL -- COMMAND [ARG...]
+mt-menu clear [ID]
+```
+
+The default kind types the quoted command into the pane and presses Enter. `--ctl` runs
+`microterm ctl COMMAND` for this pane, and `--spawn` opens the command in a split (trusted
+directories only). `mt-menu` writes a private escape sequence, `OSC 7717 ; menu ; add|clear ; …`,
+so it also works over ssh and inside tmux-less remote shells; anything that can print to the
+terminal can register items, which is why they are restricted.
+
 ## Checking it works
 
 ```sh

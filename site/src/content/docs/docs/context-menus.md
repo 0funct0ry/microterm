@@ -160,6 +160,74 @@ confirm_panes = ["title:*prod*", "domain:*prod*"]
 
 Don't put secrets in menu items; keep them in your environment or a keychain helper.
 
+## Items registered by the shell
+
+A shell, or any program in a pane, can add items to **that pane's** right-click menu. Load the
+[shell integration](/docs/shell-integration/) and run:
+
+```sh
+mt-menu add "Run tests" -- make test            # types `make test` + Enter into this pane
+mt-menu add --ctl "Mark waiting" -- pane status set --state waiting review
+mt-menu clear tests                             # one item (the id is the slugged label)
+mt-menu clear                                   # all of them
+```
+
+The items appear in the `viewport` menu after your own, under a **Shell** heading, with a `shell`
+chip. They disappear when the shell exits, on `clear` (scrollback erase), on a terminal reset and
+when the pane closes. They are never saved, never reach the command palette or key bindings, and
+you can run one headlessly with `microterm ctl menu invoke viewport/shell:<id> --pane P`
+(`ctl menu show viewport --pane P` marks them with `"origin": "shell"`).
+
+Over an ssh domain the same sequence works, and a reconnect restores the items, but they are
+**ignored** unless `[menu_security] allow_remote_items = true`; they show under **Shell (remote)**
+and always ask for confirmation.
+
+### What a registered item may do
+
+The text a program prints is not trusted, so registered items run with fewer rights than your
+config items:
+
+| Kind | Rule |
+|---|---|
+| `send` | Types into its own pane only. Control characters are stripped and a newline in the text is refused. Dangerous patterns and remote panes ask for confirmation. |
+| `ctl` | Only `pane …` verbs, aimed at its own pane (`--pane`, `--match`, `--tab`, `--window`, `--workspace` and `--all` are refused; `menu invoke` too). |
+| `spawn` | Only when the pane's working directory is **trusted** (below), and never in a remote pane. Otherwise the row is shown disabled. |
+
+Limits per pane: 16 items, 256 bytes per label, 1 KiB per payload, and 10 registrations per
+second. Anything beyond that, or malformed, is ignored and counted.
+
+### Trusted directories
+
+Trust lives only in your own config; there is no command or prompt that adds to it:
+
+```toml
+[menu_security]
+trusted_dirs = ["/home/me/work/app", "/home/me/src/**"]   # exact directory, or `/**` for the subtree
+```
+
+Entries must be absolute (`~/` is expanded). Both the entry and the pane's directory are resolved
+through symlinks before they are compared, so a link inside a trusted tree that points outside it
+is not trusted. Trust is checked again every time an item runs.
+
+### Per-project menus
+
+A project menu file in a pane's working directory adds items when that directory is trusted. Any of these names works (the first that exists, in this order, is used and the others are ignored): `.microterm-menu.toml`, `.mt-menu.toml`, `.menu.toml`, `.p-menu.toml`.
+
+```toml
+[[items]]
+label = "Run tests"
+send = "make test"
+
+[[items]]
+id = "watch"
+label = "Watch build"
+spawn = ["cargo", "watch", "-x", "build"]
+```
+
+Each item has exactly one of `send`, `ctl` or `spawn`, and the file can hold nothing else (it can
+never grant itself trust). They show under **Project**. In a directory that is not trusted the file
+is ignored and the menu shows one disabled row saying so.
+
 ## Mistakes in the config
 
 Menu problems show in the config banner with a line and column, and microterm keeps using the

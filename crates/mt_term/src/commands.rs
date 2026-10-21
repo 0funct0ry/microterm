@@ -47,6 +47,10 @@ pub enum Mark {
     Cwd(String),
     /// `ESC c` (RIS): the screen and scrollback are gone, and with them every anchor.
     Reset,
+    /// `CSI 3 J`: the program cleared the scrollback (what `clear` sends).
+    ClearHistory,
+    /// `OSC 7717;menu;…`: a shell-registered menu item (see `menu_reg.rs`).
+    MenuReg(crate::menu_reg::RegCmd),
     /// A sequence the engine does not model (colours, OSC 9, OSC 22, XTSHIFTESCAPE): see `vt.rs`.
     Vt(crate::vt::VtSeq),
 }
@@ -59,6 +63,8 @@ enum SniffState {
     OscEsc,
     /// After `ESC [`.
     Csi,
+    /// After `ESC [ 3`.
+    Csi3,
     /// After `ESC [ >`, collecting parameters.
     CsiGt,
     /// After `ESC [ ?`, collecting parameters (DECSET/DECRST/DECRQM).
@@ -110,6 +116,7 @@ impl OscSniffer {
                     _ => self.state = SniffState::Ground,
                 },
                 SniffState::Csi => match b {
+                    b'3' => self.state = SniffState::Csi3,
                     b'>' => {
                         self.buf.clear();
                         self.state = SniffState::CsiGt;
@@ -117,6 +124,14 @@ impl OscSniffer {
                     b'?' => {
                         self.buf.clear();
                         self.state = SniffState::CsiQ;
+                    }
+                    0x1b => self.state = SniffState::Esc,
+                    _ => self.state = SniffState::Ground,
+                },
+                SniffState::Csi3 => match b {
+                    b'J' => {
+                        out.push((i + 1, Mark::ClearHistory));
+                        self.state = SniffState::Ground;
                     }
                     0x1b => self.state = SniffState::Esc,
                     _ => self.state = SniffState::Ground,
@@ -206,6 +221,9 @@ impl OscSniffer {
 }
 
 fn parse_payload(p: &[u8], st: bool) -> Option<Mark> {
+    if let Some(rest) = p.strip_prefix(b"7717;") {
+        return crate::menu_reg::parse(rest).map(Mark::MenuReg);
+    }
     // Marks carry short payloads; anything longer is not one of ours.
     if p.len() > MAX_PAYLOAD && (p.starts_with(b"133;") || p.starts_with(b"7;")) {
         return None;
@@ -372,6 +390,7 @@ pub struct CommandTracker {
     cap: usize,
     cols: usize,
     cwd: Option<String>,
+    menus: crate::menu_reg::MenuRegistry,
     seen: bool,
     next_seq: u64,
     finished_total: u64,
@@ -387,6 +406,7 @@ impl CommandTracker {
             cap: scrollback,
             cols,
             cwd: None,
+            menus: Default::default(),
             seen: false,
             next_seq: 1,
             finished_total: 0,
@@ -408,6 +428,16 @@ impl CommandTracker {
         self.cmds
             .back()
             .is_some_and(|r| r.open() && r.output.is_some())
+    }
+
+    /// The menu items shell programs registered for this pane (SPEC §10.9.7).
+    pub fn menus(&self) -> &crate::menu_reg::MenuRegistry {
+        &self.menus
+    }
+
+    /// Drops the registered menu items (the process exited). Returns whether any existed.
+    pub fn clear_menus(&mut self) -> bool {
+        self.menus.reset()
     }
 
     /// The last OSC 7 working directory.
@@ -515,7 +545,7 @@ impl CommandTracker {
             self.cwd = Some(p);
             return None;
         }
-        if matches!(mark, Mark::Vt(_)) {
+        if matches!(mark, Mark::Vt(_) | Mark::MenuReg(_) | Mark::ClearHistory) {
             return None;
         }
         if mark == Mark::Reset {
@@ -530,7 +560,7 @@ impl CommandTracker {
         let restored = matches!(mark, Mark::Restored(_));
         let at = self.anchor(term);
         match mark {
-            Mark::Cwd(_) | Mark::Reset | Mark::Vt(_) => {}
+            Mark::Cwd(_) | Mark::Reset | Mark::Vt(_) | Mark::MenuReg(_) | Mark::ClearHistory => {}
             Mark::PromptStart { secondary: true } => {}
             Mark::PromptStart { .. } => {
                 if self.prompts.back() != Some(&at.id) {
@@ -759,7 +789,22 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
             let mark = marks[mi].1.clone();
             match &mark {
                 Mark::Vt(seq) => crate::vt::apply(term, shared, seq.clone()),
-                Mark::Reset => crate::vt::reset(term, shared),
+                Mark::Reset => {
+                    crate::vt::reset(term, shared);
+                    if tracker.menus.reset() {
+                        shared.notify(crate::TermEvent::MenuItemsChanged);
+                    }
+                }
+                Mark::ClearHistory => {
+                    if tracker.menus.reset() {
+                        shared.notify(crate::TermEvent::MenuItemsChanged);
+                    }
+                }
+                Mark::MenuReg(cmd) => {
+                    if tracker.menus.apply(cmd.clone(), now_ms()) {
+                        shared.notify(crate::TermEvent::MenuItemsChanged);
+                    }
+                }
                 _ => {}
             }
             if let Some(done) = tracker.apply(term, mark) {
@@ -1090,5 +1135,56 @@ mod tests {
         assert!(a.truncated, "its start was in the cleared history");
         session(&mut e, "b", "z\r\n", 0);
         assert_eq!(e.last_command(1).unwrap().output, "z\n");
+    }
+
+    fn reg(id: &str) -> Vec<u8> {
+        use crate::menu_reg::b64_encode;
+        format!(
+            "\x1b]7717;menu;add;{id};{};send;{}\x07",
+            b64_encode(id.as_bytes()),
+            b64_encode(b"make test")
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn menu_items_follow_the_lifecycle_and_replay() {
+        let mut e = Emulator::new(40, 5, 100);
+        e.advance(&reg("tests"));
+        e.advance(b"\x1b]7717;menu;add;lint;");
+        e.advance(b"TGludA==;send;Y2FyZ28gY2xpcHB5\x1b\\");
+        assert_eq!(e.menu_items().len(), 2);
+        assert!(e
+            .drain_events()
+            .iter()
+            .any(|ev| matches!(ev, crate::TermEvent::MenuItemsChanged)));
+
+        // A replay stream rebuilds the same items after its leading RIS.
+        let bytes = e.replay_bytes(100);
+        let mut b = Emulator::new(40, 5, 100);
+        b.advance(&reg("stale"));
+        b.advance(&bytes);
+        assert_eq!(b.menu_items(), e.menu_items());
+
+        // `clear` (CSI 3 J), `CSI J` (not a clear) and RIS.
+        e.advance(b"\x1b[J");
+        assert_eq!(e.menu_items().len(), 2);
+        e.advance(b"\x1b[3J");
+        assert!(e.menu_items().is_empty());
+        e.advance(&reg("again"));
+        e.advance(b"\x1bc");
+        assert!(e.menu_items().is_empty());
+    }
+
+    #[test]
+    fn hostile_output_is_bounded() {
+        let mut e = Emulator::new(40, 5, 100);
+        // `cat` of a file full of registrations: capped, counted, never panics.
+        for i in 0..50 {
+            e.advance(&reg(&format!("i{i}")));
+        }
+        e.advance(b"\x1b]7717;menu;add;x;!!;send;!!\x07\x1b]7717;menu;nope\x07");
+        let n = e.menu_items().len();
+        assert!(n <= crate::menu_reg::RATE_PER_SEC as usize && n > 0, "{n}");
     }
 }

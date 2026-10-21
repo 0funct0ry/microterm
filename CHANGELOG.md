@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### Added
+- **M11.2 — Shell-registered menu items.** A shell or program registers items for its own pane's
+  `viewport` menu over a private sequence (`OSC 7717;menu;add|clear`, base64 fields): at most 16
+  items per pane, 256 B labels, 1 KiB payloads and 10 registrations per second, with dropped and
+  malformed counters. Items vanish on shell exit, `clear`, reset and pane close, and the mux daemon
+  replays them on attach, so reconnects restore them. They run as Tier 2: `send` into their own
+  pane, `ctl` limited to `pane` verbs on their own pane, `spawn` only from a trusted local
+  directory. New `[menu_security] trusted_dirs` (canonical paths, exact or `/**`; config-only) and
+  `allow_remote_items` (ssh panes are never trusted). A project menu file (`.microterm-menu.toml`, `.mt-menu.toml`, `.menu.toml` or `.p-menu.toml`) in a trusted
+  directory adds project items; in an untrusted one it is ignored with a one-line row. Rows show
+  under a labelled header with an origin chip and addresses `viewport/shell:<id>`; `ctl menu show`
+  marks them and `ctl menu invoke` runs them. `mt-menu add|clear` in the bash, zsh and fish
+  snippets, a `menu.items_changed` event, and docs for Context menus and Shell integration.
 - **M11.1 — Custom context menus.** Every right-click menu is a named menu from a registry
   (`viewport`, `tab`) with id-keyed rows, one entry point and a typed context. Right-click acts on
   the pane under the pointer without moving focus. The viewport menu gains a built-in **Panes**

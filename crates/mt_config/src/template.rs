@@ -153,6 +153,8 @@ confirm_prompts = true           # offer `Close 3 panes? [y/N]` when a close nee
 [menu_security]
 dangerous = ["rm -rf", "DROP ", "kubectl delete", "git push --force"]  # always confirm
 confirm_panes = ["title:*prod*", "domain:*prod*"]  # confirm = "auto" always confirms here
+trusted_dirs = []  # directories ("/dir" exact, "/dir/**" subtree) where shell-registered `spawn` items and project menu files (.microterm-menu.toml, .mt-menu.toml, .menu.toml, .p-menu.toml) work
+allow_remote_items = false  # honour menu items registered from ssh-domain panes
 "##;
 
 #[cfg(test)]

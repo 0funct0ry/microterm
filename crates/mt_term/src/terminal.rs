@@ -365,6 +365,9 @@ impl Terminal {
 
     /// Reports that a remote process exited (shows up as `TermEvent::ChildExit`).
     pub fn remote_exited(&self, status: Option<i32>) {
+        if self.tracker().clear_menus() {
+            self.shared.notify(TermEvent::MenuItemsChanged);
+        }
         self.shared.notify(TermEvent::ChildExit(status));
     }
 
@@ -609,6 +612,14 @@ impl Terminal {
 
     pub fn scroll_to_abs(&self, abs: usize, center: bool) {
         crate::lines::scroll_to_abs(&mut self.term.lock(), abs, center);
+    }
+
+    /// Items shell programs registered for this pane (`OSC 7717`, SPEC §10.9.7), with the
+    /// dropped and malformed counters.
+    pub fn menu_items(&self) -> (Vec<crate::menu_reg::RegItem>, u64, u64) {
+        let t = self.tracker();
+        let m = t.menus();
+        (m.items().to_vec(), m.dropped(), m.malformed())
     }
 
     fn tracker(&self) -> std::sync::MutexGuard<'_, CommandTracker> {
@@ -970,6 +981,14 @@ fn run_reader(mut io: LocalIo, exited: ExitSlot) {
     };
     if let Some(sig) = status.1 {
         io.shared.exit_signal.store(sig, Ordering::Relaxed);
+    }
+    let had = io
+        .tracker
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear_menus();
+    if had {
+        io.shared.notify(TermEvent::MenuItemsChanged);
     }
     io.shared.notify(TermEvent::ChildExit(status.0));
     io.shared.notify(TermEvent::Wakeup);

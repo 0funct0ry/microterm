@@ -322,3 +322,19 @@ fn type_errors_in_items_are_errors() {
     let e = errors("[[context_menu.viewport.items]]\nlabel = \"x\"\nspawn = { command = [\"a\"], where = \"left\" }\n");
     assert!(e[0].contains("unknown variant `left`"), "{e:?}");
 }
+
+#[test]
+fn trusted_dirs_must_be_absolute_without_wildcards() {
+    let cfg: mt_config::Config = toml::from_str(
+        "[menu_security]\ntrusted_dirs = [\"/ok/dir\", \"rel\", \"/a/*/b\", \"/p/**\"]\nallow_remote_items = true\n",
+    )
+    .unwrap();
+    assert!(cfg.menu_security.allow_remote_items);
+    let msgs: Vec<String> = mt_config::menu::validate(&cfg)
+        .into_iter()
+        .map(|i| i.message)
+        .collect();
+    assert_eq!(msgs.len(), 2, "{msgs:?}");
+    assert!(msgs[0].contains("trusted_dirs[1]") && msgs[0].contains("absolute"));
+    assert!(msgs[1].contains("trusted_dirs[2]"));
+}

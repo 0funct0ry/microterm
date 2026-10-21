@@ -203,6 +203,10 @@ pub enum MuxEvent {
         kind: String,
         summary: String,
     },
+    /// A pane's shell-registered menu items changed (SPEC §10.9.7).
+    MenuItemsChanged {
+        pane: Id,
+    },
     TabAdded {
         window: Id,
         tab: Id,
@@ -984,6 +988,13 @@ impl Mux {
 
     pub fn notify_command_finished(&mut self, pane: Id, exit_code: Option<i32>) {
         self.emit(MuxEvent::CommandFinished { pane, exit_code });
+    }
+
+    /// A pane's shell-registered menu items changed (`OSC 7717`).
+    pub fn notify_menu_items_changed(&mut self, pane: Id) {
+        if self.pane(pane).is_some() {
+            self.emit(MuxEvent::MenuItemsChanged { pane });
+        }
     }
 
     /// Records a context-menu invocation for `ctl events` (SPEC §10.9.5).

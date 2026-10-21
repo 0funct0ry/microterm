@@ -813,6 +813,7 @@ impl AppWindow {
         let mut finished = Vec::new();
         let mut progress = Vec::new();
         let mut notes = Vec::new();
+        let mut menu_items_changed = false;
         let term = session.term.clone();
         for ev in session.term.drain_events() {
             match ev {
@@ -842,6 +843,7 @@ impl AppWindow {
                 TermEvent::CommandFinished(code) => finished.push(code),
                 TermEvent::Progress { state, value } => progress.push((state, value)),
                 TermEvent::Notify(text) => notes.push(text),
+                TermEvent::MenuItemsChanged => menu_items_changed = true,
             }
         }
         session.refresh();
@@ -864,6 +866,17 @@ impl AppWindow {
         }
         for text in notes {
             mux_host::on_osc_notify(cx, pane, &text);
+        }
+        if menu_items_changed {
+            mux_host::host(cx).mux.notify_menu_items_changed(pane);
+            // An open menu of this pane is stale: close it (it reopens with the new rows).
+            if self
+                .open_menu
+                .as_ref()
+                .is_some_and(|m| m.facts.pane == pane)
+            {
+                self.open_menu = None;
+            }
         }
         if let Some(code) = exit {
             // `pane run --keep` leaves the tab open, showing the exit notice.

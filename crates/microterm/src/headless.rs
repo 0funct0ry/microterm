@@ -162,6 +162,7 @@ impl Host {
                             }
                         }
                     }
+                    TermEvent::MenuItemsChanged => self.mux.notify_menu_items_changed(pane),
                     TermEvent::Bell
                     | TermEvent::ResetTitle
                     | TermEvent::ClipboardStore(..)
