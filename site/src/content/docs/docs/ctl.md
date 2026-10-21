@@ -96,7 +96,7 @@ microterm ctl pane wait [TARGET] [--match REGEX] [--idle DUR] [--exit] [--comman
 microterm ctl pane notify [TARGET] [--title T] [--level info|attention|error] [--desktop] [MESSAGE]
 microterm ctl pane status set [TARGET] [--state S] [--progress N] [--ttl DUR] [TEXT]
 microterm ctl pane status clear|get [TARGET]
-microterm ctl pane split [TARGET] (--horizontal | --vertical) [--percent N] [--cwd DIR] [-- CMD…]
+microterm ctl pane split [TARGET] (--horizontal | --vertical | --direction D) [--percent N] [--cwd DIR] [-- CMD…]
 microterm ctl pane focus [TARGET] [--direction left|right|up|down]
 microterm ctl pane zoom [TARGET]
 microterm ctl pane resize [TARGET] --direction D [--cells N]
@@ -181,6 +181,23 @@ microterm ctl replay FILE.cast [--speed 1.0] [--new-window]
 ```
 
 Plays the file into a new tab (or window) and prints `tab=… pane=… window=…`.
+
+## menu
+
+```sh
+microterm ctl menu list
+microterm ctl menu show MENU [TARGET]
+microterm ctl menu invoke MENU/ITEM [TARGET] [--dry-run] [--force]
+microterm ctl menu check [--config PATH]
+microterm ctl menu icons
+```
+
+Lists, shows and runs [context-menu](/docs/context-menus/) items, built-in (`viewport/zoom`,
+`viewport/split_left`, `tab/close`) or configured. `invoke` is an input verb: it needs `--pane`,
+`--match` or `$MICROTERM_PANE` and never falls back to the focused pane. It exits 3 for an unknown
+item, 1 when the item's `when` does not hold, and 8 when the item would ask for confirmation
+(pass `--force`). `--dry-run` prints the expanded argv or text and runs nothing. `check` validates
+the menu config and `icons` lists the names usable as `icon = "…"`, both with no running instance.
 
 ## reload-config
 

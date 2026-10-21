@@ -64,7 +64,7 @@ EXAMPLES:
     /// One object per line: {"type":"pane.command_finished","pane":12,"exit_code":1,"ts":"…"}.
     /// --type takes dotted names (workspace.*, window.*, tab.*, pane.added, pane.removed, pane.focused,
     /// pane.title_changed, pane.cwd_changed, pane.exited, pane.command_finished,
-    /// pane.status_changed, pane.notification, domain.state_changed); --match keeps events whose
+    /// pane.status_changed, pane.notification, domain.state_changed, menu.invoked); --match keeps events whose
     /// pane, tab or window the selector matches; --snapshot first prints the current tree as
     /// {"type":"snapshot","tree":{…}}. pane.output is not streamed (use `pane wait`). Exits 2
     /// when the GUI quits.
@@ -151,6 +151,78 @@ EXAMPLES:
   #   command = \"microterm\"
   #   args = [\"ctl\", \"mcp\"]")]
     Mcp,
+
+    /// Context menus: list, show, invoke, check (SPEC §10.9).
+    #[command(subcommand)]
+    Menu(MenuCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MenuCmd {
+    /// List every menu with its facts, placeholders, allowed kinds and items.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl menu list
+  microterm ctl menu list --json | jq '.[] | {id, placeholders}'")]
+    List,
+    /// Show a menu's rows for a pane, with `when` evaluated (no click facts).
+    ///
+    /// The pane defaults to $MICROTERM_PANE, else the focused pane.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl menu show viewport --pane 3")]
+    Show {
+        /// Menu id: viewport or tab.
+        menu: String,
+        #[command(flatten)]
+        target: PaneTarget,
+    },
+    /// Run a menu item on a pane as if it was chosen.
+    ///
+    /// MENU/ITEM names the item (viewport/zoom, tab/close, or a configured id). The pane is
+    /// --pane, --match or $MICROTERM_PANE; it never falls back to the focused pane. There are
+    /// no click facts; {selection} is the pane's current selection. Exits 3 for an unknown
+    /// item, 1 when its `when` does not hold, and 8 when it would ask for confirmation
+    /// (pass --force). --dry-run prints the expanded argv or text and runs nothing.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl menu invoke viewport/zoom --pane 3
+  microterm ctl menu invoke viewport/split_left            # inside a pane: split it
+  microterm ctl menu invoke viewport/blame --pane 3 --dry-run --json")]
+    Invoke {
+        /// MENU/ITEM, e.g. viewport/zoom.
+        #[arg(value_name = "MENU/ITEM")]
+        item: String,
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Resolve and expand, but do not run.
+        #[arg(long)]
+        dry_run: bool,
+        /// Run an item that would ask for confirmation.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List the icon names an item can use (`icon = "…"`); needs no running instance.
+    ///
+    /// One name per line; --json prints an array.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl menu icons
+  microterm ctl menu icons | grep git")]
+    Icons,
+    /// Validate the menu config of a config file; needs no running instance.
+    ///
+    /// Prints every diagnostic with its line and column and exits 1 on an error, like
+    /// `microterm config check`.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl menu check
+  microterm ctl menu check --config ./microterm.toml")]
+    Check {
+        /// Config file to check (default: the one microterm loads).
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -592,14 +664,16 @@ EXAMPLES:
     Status(StatusCmd),
     /// Split a pane in two; the new pane takes focus (SPEC §17.1).
     ///
-    /// --horizontal puts the new pane to the right, --vertical below. --percent is the new
-    /// pane's share (default 50). The new pane inherits the target's domain and cwd. Prints
-    /// the new pane's ids like `tab new`.
+    /// --horizontal puts the new pane to the right, --vertical below; --direction picks any
+    /// side (left and up put it before the target). --percent is the new pane's share
+    /// (default 50). The new pane inherits the target's domain and cwd. Prints the new pane's
+    /// ids like `tab new`.
     #[command(
         group = clap::ArgGroup::new("axis").required(true),
         after_help = "\
 EXAMPLES:
   microterm ctl pane split --horizontal                    # inside a pane: split it
+  microterm ctl pane split --pane 3 --direction left       # new pane left of pane 3
   eval \"$(microterm ctl pane split --vertical --percent 30 -- htop)\"   # sets tab= pane= window="
     )]
     Split {
@@ -611,6 +685,9 @@ EXAMPLES:
         /// One above the other: the new pane goes below.
         #[arg(long, group = "axis")]
         vertical: bool,
+        /// The side of the target the new pane goes on.
+        #[arg(long, value_enum, group = "axis")]
+        direction: Option<DirectionArg>,
         /// Share of the space the new pane takes, 1 to 99.
         #[arg(long, value_name = "N")]
         percent: Option<u8>,

@@ -62,17 +62,18 @@ impl MuxHost {
         self.open.remove(&window);
     }
 
-    /// Splits `pane` and records what to launch in the new one.
+    /// Splits `pane` toward `dir` and records what to launch in the new one.
     pub(crate) fn split_pane(
         &mut self,
         pane: Id,
-        axis: mt_mux::Axis,
+        dir: mt_mux::Dir,
         new_share: f32,
         spec: SpawnSpec,
     ) -> Option<Id> {
+        let axis = dir.axis();
         let new = self
             .mux
-            .split_pane(pane, axis, new_share, Some(spec.domain), spec.cwd.clone())
+            .split_pane_toward(pane, dir, new_share, Some(spec.domain), spec.cwd.clone())
             .ok()?;
         self.pending.insert(
             new,
@@ -239,12 +240,12 @@ fn realise_split(host: &mut MuxHost, pane: Id, node: &mt_config::schema::Workspa
         host.pending.insert(pane, leaf_spec(node));
         return pane;
     };
-    let axis = match kind {
-        mt_config::schema::SplitKind::Horizontal => mt_mux::Axis::Horizontal,
-        mt_config::schema::SplitKind::Vertical => mt_mux::Axis::Vertical,
+    let dir = match kind {
+        mt_config::schema::SplitKind::Horizontal => mt_mux::Dir::Right,
+        mt_config::schema::SplitKind::Vertical => mt_mux::Dir::Down,
     };
     let first_share = f32::from(node.percent.unwrap_or(50).clamp(1, 99)) / 100.0;
-    let Some(second) = host.split_pane(pane, axis, 1.0 - first_share, leaf_spec(b)) else {
+    let Some(second) = host.split_pane(pane, dir, 1.0 - first_share, leaf_spec(b)) else {
         return pane;
     };
     let first = realise_split(host, pane, a);
@@ -454,8 +455,206 @@ fn first_window_of_active(cx: &mut App) -> Option<Id> {
     host(cx).mux.focused_window()
 }
 
+/// Every pane's live terminal.
+fn pane_terminals(cx: &mut App) -> HashMap<Id, Arc<Terminal>> {
+    let panes: Vec<Id> = host(cx)
+        .mux
+        .windows()
+        .iter()
+        .flat_map(|w| w.tabs.iter())
+        .flat_map(|t| t.tree.panes())
+        .map(|p| p.id)
+        .collect();
+    panes
+        .into_iter()
+        .filter_map(|p| terminal(cx, p).map(|t| (p, t)))
+        .collect()
+}
+
+/// `menu.invoke` (SPEC §10.9.6): built-ins with a request go through `handle_call`; GUI-only
+/// ones and catalogue actions run in the pane's window; the rest through [`menu_execute`].
+fn menu_invoke(cx: &mut App, p: &mt_proto::MenuInvokeParams) -> Reply {
+    use crate::menu::{Plan, Prepared};
+    let rows = rows(cx);
+    let cfg = cx.global::<Settings>().config.clone();
+    let terms = pane_terminals(cx);
+    let (inv, facts) =
+        match crate::menu::prepare_invoke(&cfg, &rows, p, &|id| terms.get(&id).cloned())? {
+            Prepared::DryRun(v) => return Ok(v),
+            Prepared::Run(b) => *b,
+        };
+    let mut done = crate::menu::describe(&inv);
+    done["executed"] = json!(true);
+    match &inv.plan {
+        Plan::Builtin(b) => {
+            if let Some(req) = b.request(&facts, p.target.force) {
+                handle_call(cx, req)?;
+            } else {
+                let b = *b;
+                in_pane_window(cx, inv.pane, move |view, window, cx| {
+                    view.run_gui_builtin(b, &facts, window, cx)
+                })?;
+            }
+        }
+        Plan::Action(_) => {
+            let inv2 = inv.clone();
+            in_pane_window(cx, inv.pane, move |view, window, cx| {
+                view.run_menu_action(&inv2, window, cx)
+            })?;
+        }
+        _ => {
+            menu_execute(cx, &inv)?;
+        }
+    }
+    Ok(done)
+}
+
+/// Runs `f` in the OS window showing `pane`'s tab.
+fn in_pane_window(
+    cx: &mut App,
+    pane: Id,
+    f: impl FnOnce(&mut AppWindow, &mut gpui::Window, &mut gpui::Context<AppWindow>),
+) -> Result<(), RpcError> {
+    let window = host(cx)
+        .mux
+        .locate_pane(pane)
+        .map(|(w, _)| w)
+        .ok_or_else(|| not_found("pane", pane))?;
+    show_window_workspace(cx, window)?;
+    let handle =
+        host(cx).open.get(&window).copied().ok_or_else(|| {
+            RpcError::bad_request(format!("pane {pane} is not in an open window"))
+        })?;
+    handle
+        .update(cx, |view, win, cx| f(view, win, cx))
+        .map_err(|e| RpcError::internal(e.to_string()))
+}
+
+/// Runs a planned `send` / `spawn` / `ctl` item and records it (SPEC §10.9.5).
+pub(crate) fn menu_execute(cx: &mut App, inv: &crate::menu::Invocation) -> Reply {
+    use crate::menu::Plan;
+    crate::menu::audit(&mut host(cx).mux, inv);
+    match &inv.plan {
+        Plan::Send { text } => {
+            pane_terminal(cx, inv.pane)?.write(text.as_bytes().to_vec());
+            Ok(json!({}))
+        }
+        Plan::Spawn { .. } => {
+            let pane = spawn_menu_pane(cx, inv)?;
+            Ok(json!({ "pane": pane }))
+        }
+        Plan::Ctl { argv } => {
+            run_ctl_item(cx, inv.pane, argv.clone());
+            Ok(json!({ "async": true }))
+        }
+        Plan::Builtin(_) | Plan::Action(_) => {
+            Err(RpcError::bad_request("this menu item needs the GUI"))
+        }
+    }
+}
+
+/// A menu `spawn`: a new local pane running the argv where the item says (SPEC §10.9.2).
+fn spawn_menu_pane(cx: &mut App, inv: &crate::menu::Invocation) -> Result<Id, RpcError> {
+    use mt_config::menu::SpawnWhere;
+    let crate::menu::Plan::Spawn {
+        argv,
+        cwd,
+        title,
+        place,
+        close_on_success,
+        ctl,
+        env,
+    } = &inv.plan
+    else {
+        return Err(RpcError::internal("not a spawn"));
+    };
+    let h = host(cx);
+    let (window, _) = h
+        .mux
+        .locate_pane(inv.pane)
+        .ok_or_else(|| not_found("pane", inv.pane))?;
+    let local_parent = h.mux.pane_domain(inv.pane) == Some(mt_mux::LOCAL_DOMAIN_ID);
+    let cwd = cwd.as_deref().map(ipc_ops::expand_tilde).or_else(|| {
+        h.mux
+            .pane(inv.pane)
+            .and_then(|p| p.cwd.clone())
+            .filter(|_| local_parent)
+    });
+    let spec = SpawnSpec {
+        domain: mt_mux::LOCAL_DOMAIN_ID,
+        cwd,
+        command: Some(argv.clone()),
+        title: title.clone(),
+        env: env.clone(),
+        no_ctl: !ctl,
+        ..Default::default()
+    };
+    let dir = match place {
+        SpawnWhere::SplitLeft => Some(mt_mux::Dir::Left),
+        SpawnWhere::SplitRight => Some(mt_mux::Dir::Right),
+        SpawnWhere::SplitUp => Some(mt_mux::Dir::Up),
+        SpawnWhere::SplitDown => Some(mt_mux::Dir::Down),
+        SpawnWhere::Tab | SpawnWhere::Window => None,
+    };
+    let fail = || RpcError::internal("could not open the pane");
+    let new = match (place, dir) {
+        (_, Some(d)) => h.split_pane(inv.pane, d, 0.5, spec).ok_or_else(fail)?,
+        (SpawnWhere::Window, _) => {
+            let w = h.mux.spawn_window(None);
+            let (_, pane) = h.spawn_tab(w, spec).ok_or_else(fail)?;
+            h.runtime.mark_menu_spawn(pane, *close_on_success);
+            open_window(cx, w);
+            return Ok(pane);
+        }
+        _ => h.spawn_tab(window, spec).ok_or_else(fail)?.1,
+    };
+    host(cx).runtime.mark_menu_spawn(new, *close_on_success);
+    show_window_workspace(cx, window)?;
+    reconcile_window(cx, window, false);
+    Ok(new)
+}
+
+/// A menu `ctl` item: runs off the main thread (it calls back into this instance) and reports
+/// the outcome as a toast.
+fn run_ctl_item(cx: &mut App, pane: Id, argv: Vec<String>) {
+    let Some(runner) = crate::menu::ctl_runner() else {
+        toast_all(
+            cx,
+            crate::components::ToastKind::Warning,
+            "ctl menu items are not available in this build".into(),
+        );
+        return;
+    };
+    let socket = host(cx).socket.clone();
+    let label = argv.join(" ");
+    let task = cx
+        .background_executor()
+        .spawn(async move { runner(argv, pane, socket) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        let _ = cx.update(|cx| {
+            let (kind, text) = match result {
+                Ok(out) if out.trim().is_empty() => (
+                    crate::components::ToastKind::Success,
+                    format!("ctl {label}"),
+                ),
+                Ok(out) => (
+                    crate::components::ToastKind::Success,
+                    mt_mux::sanitize(&out, 200),
+                ),
+                Err(e) => (
+                    crate::components::ToastKind::Error,
+                    mt_mux::sanitize(&format!("ctl {label}: {e}"), 200),
+                ),
+            };
+            toast_all(cx, kind, text);
+        });
+    })
+    .detach();
+}
+
 /// Snapshot of the mux with each pane's live terminal facts, for `ctl` listings and targets.
-fn rows(cx: &mut App) -> Rows {
+pub(crate) fn rows(cx: &mut App) -> Rows {
     let panes: Vec<Id> = host(cx)
         .mux
         .windows()
@@ -678,7 +877,12 @@ fn close(cx: &mut App, request: &Request) -> Reply {
 fn split(cx: &mut App, p: &mt_proto::PaneSplitParams) -> Reply {
     let rows = rows(cx);
     let h = host(cx);
-    let done = ipc_ops::split_model(&mut h.mux, &rows, p)?;
+    let ipc_ops::SplitDone {
+        result: done,
+        parent,
+        axis,
+        permille,
+    } = ipc_ops::split_model(&mut h.mux, &rows, p)?;
     let domain = h
         .mux
         .pane_domain(done.pane)
@@ -691,12 +895,9 @@ fn split(cx: &mut App, p: &mt_proto::PaneSplitParams) -> Reply {
             cwd,
             command: p.command.clone().filter(|c| !c.is_empty()),
             split_from: Some(mt_mux::SplitOrigin {
-                parent: p.target.pane.unwrap_or_default(),
-                axis: match p.axis {
-                    mt_proto::SplitAxis::Horizontal => mt_mux::Axis::Horizontal,
-                    mt_proto::SplitAxis::Vertical => mt_mux::Axis::Vertical,
-                },
-                permille: u16::from(p.percent.unwrap_or(50)) * 10,
+                parent,
+                axis,
+                permille,
             }),
             ..Default::default()
         },
@@ -1133,6 +1334,16 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         }
         // Streaming is the server's business; it never forwards `subscribe`.
         Request::Subscribe(_) => Ok(json!({})),
+        Request::MenuList => Ok(crate::menu::list_json(
+            &cx.global::<Settings>().config.clone(),
+        )),
+        Request::MenuShow(p) => {
+            let rows = rows(cx);
+            let cfg = cx.global::<Settings>().config.clone();
+            let terms = pane_terminals(cx);
+            crate::menu::show(&cfg, &rows, &p, &|id| terms.get(&id).cloned())
+        }
+        Request::MenuInvoke(p) => menu_invoke(cx, &p),
     }
 }
 
@@ -1298,6 +1509,7 @@ tabs = [
                     Request::PaneSplit(mt_proto::PaneSplitParams {
                         target: Target::pane(target),
                         axis,
+                        direction: None,
                         percent: None,
                         cwd: None,
                         command: Some(vec!["htop".into()]),

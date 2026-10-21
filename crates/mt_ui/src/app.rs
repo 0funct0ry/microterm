@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use gpui::{
     prelude::*, px, App, Bounds, ClipboardItem, Context, FocusHandle, KeyDownEvent, KeyUpEvent,
-    Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Subscription, Window,
+    ScrollDelta, ScrollWheelEvent, SharedString, Subscription, Window,
 };
 use mt_mux::{DomainState, SpawnSpec};
 use mt_ssh::prompt::{PromptKind as SshAsk, PromptRequest, Secret};
@@ -160,6 +160,8 @@ pub enum Target {
     Tab(usize),
     /// Index into `config.launch`.
     Launch(usize),
+    /// A configured context-menu item, `menu/item` (SPEC §10.9.1).
+    MenuItem(String),
 }
 
 /// Provider groups of the command palette (the `u8` tag in `PickerState`).
@@ -260,7 +262,10 @@ pub struct AppWindow {
     pub(crate) pane_area: Rc<Cell<(f32, f32, f32, f32)>>,
     pub(crate) scrollbar_visible: bool,
     scrollbar_epoch: u64,
-    pub(crate) tab_menu: Option<(Point<Pixels>, u64)>,
+    /// The open context menu (SPEC §10.9).
+    pub(crate) open_menu: Option<crate::menu_view::OpenMenu>,
+    /// A context-menu item waiting on its confirmation dialog.
+    pub(crate) menu_confirm: Option<crate::menu_view::PendingMenu>,
     pub(crate) mouse: crate::mouse_input::MouseState,
     /// Built-in plus `[[hyperlink_rules]]` patterns; rebuilt on config reload.
     pub(crate) links: Arc<mt_patterns::LinkSet>,
@@ -381,7 +386,8 @@ impl AppWindow {
             pane_area: Rc::new(Cell::new((0.0, 0.0, 0.0, 0.0))),
             scrollbar_visible: false,
             scrollbar_epoch: 0,
-            tab_menu: None,
+            open_menu: None,
+            menu_confirm: None,
             mouse: Default::default(),
             links: crate::mouse_input::build_links(&cfg),
             cell,
@@ -518,12 +524,17 @@ impl AppWindow {
                     opts.command = spec.command;
                     // Local panes only: SSH-domain panes never get these (SPEC §12.6 S7).
                     let socket = mux_host::host(cx).socket.clone();
-                    opts.env.extend(crate::ipc_ops::pane_env(
-                        pane,
-                        tab_id,
-                        self.mux_window,
-                        socket.as_deref(),
-                    ));
+                    if spec.no_ctl {
+                        opts.env.extend(crate::ipc_ops::no_ctl_env());
+                    } else {
+                        opts.env.extend(crate::ipc_ops::pane_env(
+                            pane,
+                            tab_id,
+                            self.mux_window,
+                            socket.as_deref(),
+                        ));
+                    }
+                    opts.env.extend(spec.env);
                     if let Err(e) = self.attach_pane_terminal(i, pane, opts, window, cx) {
                         self.toast(
                             ToastKind::Error,
@@ -914,6 +925,9 @@ impl AppWindow {
             }
             return;
         }
+        if self.menu_key(ev, window, cx) {
+            return;
+        }
         if self.renaming.is_some() {
             self.rename_key(ev, cx);
             return;
@@ -1140,8 +1154,7 @@ impl AppWindow {
             );
             return;
         }
-        self.tab_menu = None;
-        self.mouse.menu = None;
+        self.open_menu = None;
         self.prepare(kind, cx);
         self.overlays.open(kind);
         self.sync_focus(window);
@@ -1178,6 +1191,7 @@ impl AppWindow {
             }
             OverlayKind::PasteConfirm
             | OverlayKind::CloseConfirm
+            | OverlayKind::MenuConfirm
             | OverlayKind::NamePrompt
             | OverlayKind::WorkspaceDesigner
             | OverlayKind::SshPrompt => {}
@@ -1186,7 +1200,7 @@ impl AppWindow {
 
     /// Esc: closes only the top overlay and hands focus back.
     pub(crate) fn dismiss_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tab_menu.take().is_some() || self.mouse.menu.take().is_some() {
+        if self.open_menu.take().is_some() {
             cx.notify();
             return;
         }
@@ -1245,6 +1259,7 @@ impl AppWindow {
             }
             OverlayKind::PasteConfirm => self.paste_confirm = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
+            OverlayKind::MenuConfirm => self.menu_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
             OverlayKind::WorkspaceDesigner => self.designer = None,
         }
@@ -1376,6 +1391,44 @@ impl AppWindow {
             });
             e.status = chrome.dot.or(chrome.badge);
             items.push((format!("Go to tab: {}", tab.title), e));
+        }
+        // Configured menu items with an explicit id, runnable on the focused pane.
+        let cfg = self.cfg.clone();
+        for (menu, mc) in &cfg.context_menu {
+            let Some(def) = mt_config::menu::menu(menu) else {
+                continue;
+            };
+            let groups = &cfg.menu_groups;
+            let menu_items = mc.items.iter().flat_map(|i| match &i.include {
+                Some(g) => groups
+                    .get(g)
+                    .map_or(&[][..], |g| &g.items[..])
+                    .iter()
+                    .collect::<Vec<_>>(),
+                None => vec![i],
+            });
+            for item in menu_items {
+                let (Some(id), Some(label)) = (&item.id, &item.label) else {
+                    continue;
+                };
+                if !matches!(
+                    item.kind(),
+                    Some(
+                        mt_config::menu::Kind::Action
+                            | mt_config::menu::Kind::Send
+                            | mt_config::menu::Kind::Spawn
+                            | mt_config::menu::Kind::Ctl
+                    )
+                ) {
+                    continue;
+                }
+                let addr = format!("{}/{id}", def.id);
+                let mut e = Entry::new(Target::MenuItem(addr.clone()), format!("menu:{addr}"));
+                e.detail = Some(format!("Context menu item {addr}"));
+                let mut name = def.id.to_string();
+                name[..1].make_ascii_uppercase();
+                items.push((format!("{name} menu: {label}"), e));
+            }
         }
         let current = *cx.global::<Theme>();
         let registry = cx.global::<Settings>().registry.clone();
@@ -1594,6 +1647,7 @@ impl AppWindow {
                 }
             }
             Target::Tab(i) => self.activate_tab(i, cx),
+            Target::MenuItem(addr) => self.invoke_menu_address(&addr, window, cx),
             // A workspace switch has no "new window" form; the modifier acts like plain Enter.
             Target::Workspace(name) => self.switch_workspace_named(name, false, cx),
             Target::CreateWorkspace => {
@@ -2353,6 +2407,11 @@ impl AppWindow {
                     self.confirm_close(window, cx);
                 }
             }
+            Some(OverlayKind::MenuConfirm) => {
+                if ev.keystroke.key == "enter" {
+                    self.confirm_menu(window, cx);
+                }
+            }
             Some(OverlayKind::NamePrompt) => self.prompt_key(ev, window, cx),
             Some(OverlayKind::WorkspaceDesigner) => self.designer_key(ev, window, cx),
             None => {}
@@ -2471,6 +2530,9 @@ impl AppWindow {
             self.font_size_override = None;
         }
         self.cfg = cfg.clone();
+        if diff.has(mt_config::Effect::Menus) && self.open_menu.take().is_some() {
+            cx.notify();
+        }
         self.links = crate::mouse_input::build_links(&cfg);
         self.mouse.link_cache.clear();
         self.mouse.hover = None;

@@ -80,6 +80,21 @@ pub struct SwitchWorkspaceRelative(pub isize);
 #[action(namespace = microterm, no_json)]
 pub struct ActivatePaneDirection(pub mt_mux::Dir);
 
+/// Split the focused pane; the new pane goes on the `dir` side and takes focus (M11.1).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct Split(pub mt_mux::Dir);
+
+/// Open a context menu by registry id for the focused pane or active tab (SPEC §10.9.1).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct ShowContextMenu(pub String);
+
+/// Run a context-menu item, `"menu/item"`, against the focused pane (SPEC §10.9.1).
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct InvokeMenuItem(pub String);
+
 /// Swap the focused pane with its neighbour.
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
@@ -316,6 +331,22 @@ pub static ACTIONS: &[ActionDef] = &[
         &["cmd-shift-d"],
         &["ctrl-shift-e"],
         SplitVertical
+    ),
+    def!(
+        "Split(left)",
+        "Split pane left",
+        "Split the focused pane; the new pane goes on the left",
+        &[],
+        &[],
+        Split(mt_mux::Dir::Left)
+    ),
+    def!(
+        "Split(up)",
+        "Split pane up",
+        "Split the focused pane; the new pane goes above",
+        &[],
+        &[],
+        Split(mt_mux::Dir::Up)
     ),
     def!(
         "ClosePane",
@@ -684,6 +715,32 @@ pub static ACTIONS: &[ActionDef] = &[
         ActivateTab(0)
     ),
     def!(
+        args "Split",
+        "Split pane",
+        "Split the focused pane toward `left`, `right`, `up` or `down`; the new pane takes focus",
+        Split(mt_mux::Dir::Right)
+    ),
+    def!(
+        "ShowContextMenu(viewport)",
+        "Show context menu",
+        "Open the viewport context menu at the cursor; navigate with the arrow keys, Enter and Esc, type to filter",
+        &[],
+        &[],
+        ShowContextMenu("viewport".into())
+    ),
+    def!(
+        args "ShowContextMenu",
+        "Show context menu",
+        "Open the named context menu (`viewport`, `tab`) for the focused pane or the active tab",
+        ShowContextMenu(String::new())
+    ),
+    def!(
+        args "InvokeMenuItem",
+        "Invoke menu item",
+        "Run a context-menu item, `\"menu/item\"` (for example `\"viewport/zoom\"`), against the focused pane",
+        InvokeMenuItem(String::new())
+    ),
+    def!(
         args "SwitchWorkspace",
         "Switch to workspace",
         "Switch to the workspace with the given name",
@@ -726,6 +783,7 @@ pub const CATEGORIES: &[&str] = &[
     "Modes",
     "Fonts & look",
     "Config",
+    "Menus",
     "Misc",
     "Debug",
 ];
@@ -747,6 +805,7 @@ impl ActionDef {
             | "ToggleFullscreen" => "Tabs & windows",
             "SplitHorizontal"
             | "SplitVertical"
+            | "Split"
             | "ClosePane"
             | "TogglePaneZoom"
             | "RotatePanes"
@@ -773,6 +832,7 @@ impl ActionDef {
                 "Fonts & look"
             }
             "ReloadConfig" | "OpenConfig" => "Config",
+            "ShowContextMenu" | "InvokeMenuItem" => "Menus",
             _ => "Misc",
         }
     }
@@ -820,6 +880,21 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
         ("ActivatePaneDirection", Some(ActionArg::Str(d))) => Ok(Box::new(ActivatePaneDirection(
             mt_mux::Dir::parse(d).ok_or("direction must be left, right, up or down")?,
         ))),
+        ("Split", Some(ActionArg::Str(d))) => Ok(Box::new(Split(
+            mt_mux::Dir::parse(d).ok_or("direction must be left, right, up or down")?,
+        ))),
+        ("ShowContextMenu", Some(ActionArg::Str(id))) => match mt_config::menu::menu(id) {
+            Some(_) => Ok(Box::new(ShowContextMenu(id.clone()))),
+            None => Err(format!("ShowContextMenu: unknown menu \"{id}\"")),
+        },
+        ("InvokeMenuItem", Some(ActionArg::Str(addr))) => match addr.split_once('/') {
+            Some((m, i)) if mt_config::menu::menu(m).is_some() && !i.is_empty() => {
+                Ok(Box::new(InvokeMenuItem(addr.clone())))
+            }
+            _ => Err(format!(
+                "InvokeMenuItem takes \"menu/item\" with a known menu, not {addr:?}"
+            )),
+        },
         ("SwapPane", Some(ActionArg::Str(d))) => Ok(Box::new(SwapPane(
             mt_mux::Dir::parse(d).ok_or("direction must be left, right, up or down")?,
         ))),

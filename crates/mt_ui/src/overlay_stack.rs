@@ -15,6 +15,8 @@ pub enum OverlayKind {
     CloseConfirm,
     NamePrompt,
     WorkspaceDesigner,
+    /// A context-menu item waiting on confirmation (SPEC §10.9.5).
+    MenuConfirm,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -37,9 +39,11 @@ impl OverlayKind {
             Self::QuickSelect | Self::CopyMode => Class::Mode,
             Self::Search => Class::Search,
             Self::PasteConfirm => Class::Paste,
-            Self::CloseConfirm | Self::NamePrompt | Self::SshPrompt | Self::WorkspaceDesigner => {
-                Class::Dialog
-            }
+            Self::CloseConfirm
+            | Self::NamePrompt
+            | Self::SshPrompt
+            | Self::WorkspaceDesigner
+            | Self::MenuConfirm => Class::Dialog,
         }
     }
 }

@@ -61,7 +61,7 @@ copy_on_select = false
 trim_trailing_whitespace = true
 
 [mouse]
-right_click = "context_menu"     # "context_menu" | "paste" | "none"
+right_click = "context_menu"     # "context_menu" | "paste" | "none" (= context_menu.viewport.trigger)
 hide_while_typing = true
 scroll_multiplier = 3
 focus_follows_mouse = false      # hovering a pane focuses it (splits)
@@ -141,6 +141,18 @@ allow_shift_capture = true       # let programs make Shift-modified mouse events
 color = "auto"                   # "auto" | "always" | "never" (NO_COLOR is always honoured)
 history_send_text = false        # keep lines containing `send-text` in the history
 confirm_prompts = true           # offer `Close 3 panes? [y/N]` when a close needs confirmation
+
+# Context menus (`viewport`, `tab`): add items, prune built-ins, change triggers.
+# [context_menu.viewport]
+# mode = "append"                # "append" | "prepend" | "replace"
+# [[context_menu.viewport.items]]
+# label = "git log -S {selection}"
+# when = "selection"
+# spawn = { command = ["git", "log", "-S", "{selection}"], cwd = "{cwd}", where = "split-right" }
+
+[menu_security]
+dangerous = ["rm -rf", "DROP ", "kubectl delete", "git push --force"]  # always confirm
+confirm_panes = ["title:*prod*", "domain:*prod*"]  # confirm = "auto" always confirms here
 "##;
 
 #[cfg(test)]

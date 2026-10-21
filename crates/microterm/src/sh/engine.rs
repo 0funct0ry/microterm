@@ -17,7 +17,7 @@ use super::live::Shared;
 use super::session::{parse_meta, Meta, Session, Switch, META_HELP, META_WORDS};
 use crate::client::Client;
 use crate::ctl::{
-    CtlAction, CtlArgs, PaneCmd, SkillCmd, StatusCmd, TabCmd, WindowCmd, WorkspaceCmd,
+    CtlAction, CtlArgs, MenuCmd, PaneCmd, SkillCmd, StatusCmd, TabCmd, WindowCmd, WorkspaceCmd,
 };
 use crate::ctl_cmd::{self, Ctx};
 use crate::output::{Body, CtlError, Output};
@@ -82,6 +82,13 @@ pub fn readonly_allows(a: &CtlAction) -> bool {
                     | PaneCmd::Status(StatusCmd::Get(_)),
             )
             | CtlAction::Skill(SkillCmd::Show(_))
+            | CtlAction::Menu(
+                MenuCmd::List
+                    | MenuCmd::Show { .. }
+                    | MenuCmd::Check { .. }
+                    | MenuCmd::Icons
+                    | MenuCmd::Invoke { dry_run: true, .. }
+            )
     )
 }
 
@@ -311,6 +318,10 @@ impl Engine {
                 CtlAction::Mcp => Err(CtlError::usage(
                     "mcp serves stdio: run `microterm ctl mcp` outside the shell",
                 )),
+                CtlAction::Menu(MenuCmd::Check { config }) => {
+                    crate::ctl_cmd::menu_check(config.as_deref(), json)
+                }
+                CtlAction::Menu(MenuCmd::Icons) => Ok(crate::ctl_cmd::menu_icons(json)),
                 action => self.dispatch_once(action, json, io),
             };
             if let Err(e) = &res {
@@ -942,6 +953,7 @@ mod tests {
             "workspace delete old",
             "reload-config",
             "pane run -- ls",
+            "menu invoke viewport/zoom --pane 3",
         ] {
             r.line(line);
             assert_eq!(r.engine.session.last, exit::USAGE, "{line}");
@@ -965,6 +977,9 @@ mod tests {
             "cat 7",
             "tab list",
             "pane status get 3",
+            "menu list",
+            "menu show viewport",
+            "menu invoke viewport/zoom --pane 3 --dry-run",
         ] {
             r.line(line);
             // Allowed verbs get as far as connecting, which fails here: exit 2.

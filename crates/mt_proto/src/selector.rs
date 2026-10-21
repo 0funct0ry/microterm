@@ -140,7 +140,7 @@ pub struct Selector {
     pub clauses: Vec<Clause>,
 }
 
-fn glob_to_regex(glob: &str) -> Result<Regex, RpcError> {
+pub(crate) fn glob_to_regex(glob: &str) -> Result<Regex, RpcError> {
     let mut re = String::from("^");
     for c in glob.chars() {
         match c {
@@ -154,7 +154,7 @@ fn glob_to_regex(glob: &str) -> Result<Regex, RpcError> {
 }
 
 /// `~` and `~/…` become `$HOME` (SPEC §12.3: `cwd` is matched with `~` expanded).
-fn expand_home(path: &str) -> String {
+pub(crate) fn expand_home(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     match path.strip_prefix('~') {
         Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {

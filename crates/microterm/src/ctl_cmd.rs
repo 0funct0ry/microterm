@@ -23,8 +23,8 @@ use serde_json::Value;
 use crate::cli::RecordArgs;
 use crate::client::{Client, ClientError};
 use crate::ctl::{
-    CtlAction, CtlArgs, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget, WindowCmd, WindowTarget,
-    WorkspaceCmd,
+    CtlAction, CtlArgs, MenuCmd, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget, WindowCmd,
+    WindowTarget, WorkspaceCmd,
 };
 use crate::output::{Body, ColKind, Column, CtlError, Output, Table};
 use crate::render::{render, render_error, RenderOpts};
@@ -44,6 +44,96 @@ pub struct Ctx<'a> {
 impl Ctx<'_> {
     fn connect(&self) -> Result<Client, ClientError> {
         connect(self.socket.as_deref())
+    }
+}
+
+/// `menu show` rows as indented `id<TAB>label` lines; disabled rows are marked.
+fn menu_rows_text(items: &Value, depth: usize) -> String {
+    let mut out = String::new();
+    for r in items.as_array().map(Vec::as_slice).unwrap_or_default() {
+        let indent = "  ".repeat(depth);
+        match r["type"].as_str() {
+            Some("separator") => out.push_str(&format!("{indent}---\n")),
+            Some("header") => out.push_str(&format!(
+                "{indent}[{}]\n",
+                r["label"].as_str().unwrap_or_default()
+            )),
+            _ => {
+                let off = if r["enabled"].as_bool() == Some(false) {
+                    "\t(disabled)"
+                } else {
+                    ""
+                };
+                out.push_str(&format!(
+                    "{indent}{}\t{}{off}\n",
+                    r["id"].as_str().unwrap_or_default(),
+                    r["label"].as_str().unwrap_or_default()
+                ));
+                if let Some(kids) = r.get("items") {
+                    out.push_str(&menu_rows_text(kids, depth + 1));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `menu icons`: the bundled icon names, one per line (no instance needed).
+pub fn menu_icons(json: bool) -> Output {
+    let names = mt_config::menu::ICON_NAMES;
+    if json {
+        Output::new(Body::Json(serde_json::json!(names)))
+    } else {
+        let mut text = names.join("\n");
+        text.push('\n');
+        Output::new(Body::Raw(text))
+    }
+}
+
+/// `menu check`: the config's menu diagnostics, with no instance needed (SPEC §10.9.6).
+pub fn menu_check(config: Option<&Path>, json: bool) -> Result<Output, CtlError> {
+    let path = mt_config::load::config_path(config);
+    let name = mt_config::load::display_name(&path);
+    let render = |d: &mt_config::Diagnostic| d.render(&name);
+    let is_menu = |d: &mt_config::Diagnostic| {
+        [
+            "context_menu",
+            "menu_groups",
+            "menu_security",
+            "right_click",
+        ]
+        .iter()
+        .any(|k| d.message.contains(k))
+    };
+    match mt_config::load::load(&path) {
+        Err(diags) => {
+            let lines: Vec<String> = diags.iter().map(render).collect();
+            Err(CtlError::usage(lines.join("\n")))
+        }
+        Ok(loaded) => {
+            let warnings: Vec<String> = loaded
+                .warnings
+                .iter()
+                .filter(|d| is_menu(d))
+                .map(|d| format!("warning: {}", render(d)))
+                .collect();
+            let menus = mt_config::menu::MENUS.len();
+            let items: usize = mt_config::menu::MENUS
+                .iter()
+                .map(|m| mt_config::menu::entries(&loaded.config, m.id).len())
+                .sum();
+            let out = if json {
+                Output::new(Body::Json(serde_json::json!({
+                    "ok": true,
+                    "menus": menus,
+                    "items": items,
+                    "warnings": warnings,
+                })))
+            } else {
+                Output::text(format!("menus OK ({menus} menus, {items} rows)"))
+            };
+            Ok(warnings.into_iter().fold(out, Output::with_note))
+        }
     }
 }
 
@@ -110,6 +200,26 @@ pub fn run(args: CtlArgs) -> i32 {
     match &args.action {
         CtlAction::Skill(cmd) => return microterm::agent::run_skill(cmd, json),
         CtlAction::Mcp => return crate::mcp::run(),
+        CtlAction::Menu(MenuCmd::Icons) => {
+            let opts = RenderOpts::detect(false, json);
+            return present(
+                Ok(menu_icons(json)),
+                json,
+                &opts,
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+            );
+        }
+        CtlAction::Menu(MenuCmd::Check { config }) => {
+            let opts = RenderOpts::detect(false, json);
+            return present(
+                menu_check(config.as_deref(), json),
+                json,
+                &opts,
+                &mut std::io::stdout(),
+                &mut std::io::stderr(),
+            );
+        }
         _ => {}
     }
     let opts = RenderOpts::detect(false, json);
@@ -634,17 +744,25 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                 target,
                 horizontal,
                 vertical: _,
+                direction,
                 percent,
                 cwd,
                 command,
             } => {
+                let direction = direction.map(mt_proto::Direction::from);
+                let side_by_side = horizontal
+                    || matches!(
+                        direction,
+                        Some(mt_proto::Direction::Left | mt_proto::Direction::Right)
+                    );
                 let v = call(Request::PaneSplit(mt_proto::PaneSplitParams {
                     target: pane_target(target, env),
-                    axis: if horizontal {
+                    axis: if side_by_side {
                         mt_proto::SplitAxis::Horizontal
                     } else {
                         mt_proto::SplitAxis::Vertical
                     },
+                    direction,
                     percent,
                     cwd: cwd.as_deref().map(abs),
                     command: (!command.is_empty()).then_some(command),
@@ -767,6 +885,94 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
         }
         CtlAction::ReloadConfig => quiet(call(Request::ConfigReload)?),
         CtlAction::Skill(_) | CtlAction::Mcp => unreachable!("handled in run()"),
+        CtlAction::Menu(MenuCmd::Check { config }) => menu_check(config.as_deref(), json),
+        CtlAction::Menu(MenuCmd::Icons) => Ok(menu_icons(json)),
+        CtlAction::Menu(MenuCmd::List) => {
+            let v = call(Request::MenuList)?;
+            result(v, &|v| {
+                let rows = v
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|m| {
+                        let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+                        vec![
+                            s("id"),
+                            s("trigger"),
+                            m["items"].as_array().map_or(0, Vec::len).to_string(),
+                            s("description"),
+                        ]
+                    })
+                    .collect();
+                Ok(table(
+                    vec![
+                        Column::new("MENU", ColKind::Text),
+                        Column::new("TRIGGER", ColKind::Text),
+                        Column::new("ITEMS", ColKind::Id),
+                        Column::low("DESCRIPTION", ColKind::Text, 1),
+                    ],
+                    rows,
+                    "menu",
+                ))
+            })
+        }
+        CtlAction::Menu(MenuCmd::Show { menu, target }) => {
+            let v = call(Request::MenuShow(mt_proto::MenuShowParams {
+                target: pane_target(target, env),
+                menu,
+            }))?;
+            result(v, &|v| {
+                Ok(Output::new(Body::Raw(menu_rows_text(&v["items"], 0))))
+            })
+        }
+        CtlAction::Menu(MenuCmd::Invoke {
+            item,
+            target,
+            dry_run,
+            force,
+        }) => {
+            let v = call(Request::MenuInvoke(mt_proto::MenuInvokeParams {
+                target: Target {
+                    force,
+                    ..pane_target(target, env)
+                },
+                item,
+                dry_run,
+            }))?;
+            result(v, &|v| {
+                if dry_run {
+                    let mut card = Vec::new();
+                    if let Value::Object(m) = &v {
+                        for (k, val) in m {
+                            if val.is_null() {
+                                continue;
+                            }
+                            let text = match val {
+                                Value::String(s) => s.clone(),
+                                Value::Array(a) => a
+                                    .iter()
+                                    .map(|x| {
+                                        x.as_str().map_or_else(|| x.to_string(), str::to_string)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                other => other.to_string(),
+                            };
+                            card.push((k.clone(), text));
+                        }
+                    }
+                    Ok(Output::new(Body::Card(card)))
+                } else {
+                    Ok(Output::text(format!(
+                        "ran {}/{} on pane {}",
+                        v["menu"].as_str().unwrap_or_default(),
+                        v["item"].as_str().unwrap_or_default(),
+                        v["pane"]
+                    )))
+                }
+            })
+        }
     }
 }
 

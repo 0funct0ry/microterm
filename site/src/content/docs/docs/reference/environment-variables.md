@@ -21,6 +21,22 @@ The four `MICROTERM_*` variables are exported into **local** panes only. Panes o
 host, and it is never forwarded over SSH. The ids are the ones at the time the pane started; a
 pane's tab and window do not change today.
 
+## Exported to context-menu programs
+
+A [context-menu](/docs/context-menus/) `spawn` item runs its program with these as well (each
+present only when it has a value, with control characters removed):
+
+| Variable | Value |
+|----------|-------|
+| `MT_SELECTION`, `MT_WORD`, `MT_LINE`, `MT_LINK`, `MT_PATH` | what was right-clicked |
+| `MT_CWD`, `MT_TITLE`, `MT_DOMAIN` | the clicked pane |
+| `MT_PANE`, `MT_TAB`, `MT_WINDOW` | ids of the clicked pane, its tab and window |
+| `MT_MENU`, `MT_ITEM` | the menu and item that ran |
+
+Such a program gets the `MICROTERM_*` variables (and so `microterm ctl` access) only when the item
+sets `spawn.ctl = true`; otherwise they are set empty, which also stops `ctl` from finding the
+socket on its own.
+
 `MICROTERM_UNIX_SOCKET` is only used by clients. A new GUI instance always creates its own socket,
 even when started from inside a pane.
 

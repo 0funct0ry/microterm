@@ -9,6 +9,15 @@ use crate::model::{Axis, Id, Pane, PaneTree};
 pub const MIN_RATIO: f32 = 0.05;
 pub const MAX_RATIO: f32 = 0.95;
 
+/// Where a split puts the new pane relative to the one it splits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// The new pane is `a` (left or top).
+    Before,
+    /// The new pane is `b` (right or bottom).
+    After,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dir {
     Left,
@@ -33,6 +42,14 @@ impl Dir {
         match self {
             Dir::Left | Dir::Right => Axis::Horizontal,
             Dir::Up | Dir::Down => Axis::Vertical,
+        }
+    }
+
+    /// Splitting toward `Left`/`Up` puts the new pane before the old one.
+    pub fn placement(self) -> Placement {
+        match self {
+            Dir::Left | Dir::Up => Placement::Before,
+            Dir::Right | Dir::Down => Placement::After,
         }
     }
 
@@ -150,23 +167,41 @@ impl PaneTree {
 
     /// Replaces leaf `target` with a split holding it (`a`) and `new` (`b`).
     pub fn split_leaf(&mut self, target: Id, axis: Axis, ratio: f32, new: Pane) -> bool {
+        self.split_leaf_at(target, axis, ratio, new, Placement::After)
+    }
+
+    /// Replaces leaf `target` with a split holding it and `new`, with `new` on the side given
+    /// by `placement`. `ratio` stays the share of `a`, whichever pane that is.
+    pub fn split_leaf_at(
+        &mut self,
+        target: Id,
+        axis: Axis,
+        ratio: f32,
+        new: Pane,
+        placement: Placement,
+    ) -> bool {
         match self {
             PaneTree::Leaf(p) if p.id == target => {
-                let old = PaneTree::Leaf(p.clone());
+                let old = Box::new(PaneTree::Leaf(p.clone()));
+                let new = Box::new(PaneTree::Leaf(new));
+                let (a, b) = match placement {
+                    Placement::Before => (new, old),
+                    Placement::After => (old, new),
+                };
                 *self = PaneTree::Split {
                     axis,
                     ratio: clamp_ratio(ratio),
-                    a: Box::new(old),
-                    b: Box::new(PaneTree::Leaf(new)),
+                    a,
+                    b,
                 };
                 true
             }
             PaneTree::Leaf(_) => false,
             PaneTree::Split { a, b, .. } => {
                 if a.contains(target) {
-                    a.split_leaf(target, axis, ratio, new)
+                    a.split_leaf_at(target, axis, ratio, new, placement)
                 } else {
-                    b.split_leaf(target, axis, ratio, new)
+                    b.split_leaf_at(target, axis, ratio, new, placement)
                 }
             }
         }
@@ -428,6 +463,28 @@ mod tests {
         assert_eq!(ids(&t), vec![1, 2]);
         let l = t.layout(R);
         assert!((l[0].1.w - 30.0).abs() < 1e-3 && (l[1].1.x - 30.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn split_before_puts_new_pane_first() {
+        let mut t = leaf(1);
+        assert!(t.split_leaf_at(1, Axis::Horizontal, 0.3, pane(2), Placement::Before));
+        assert_eq!(ids(&t), vec![2, 1]);
+        let l = t.layout(R);
+        assert_eq!(l[0].0, 2);
+        assert!((l[0].1.w - 30.0).abs() < 1e-3, "ratio is the share of `a`");
+        let mut t = leaf(1);
+        assert!(t.split_leaf_at(1, Axis::Vertical, 0.5, pane(2), Placement::Before));
+        assert_eq!(t.neighbour(1, Dir::Up, U), Some(2));
+        assert_eq!(t.neighbour(2, Dir::Down, U), Some(1));
+    }
+
+    #[test]
+    fn dir_maps_to_axis_and_placement() {
+        assert_eq!(Dir::Left.placement(), Placement::Before);
+        assert_eq!(Dir::Up.placement(), Placement::Before);
+        assert_eq!(Dir::Right.placement(), Placement::After);
+        assert_eq!(Dir::Down.placement(), Placement::After);
     }
 
     #[test]

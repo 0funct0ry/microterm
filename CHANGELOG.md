@@ -3,6 +3,28 @@
 ## Unreleased
 
 ### Added
+- **M11.1 — Custom context menus.** Every right-click menu is a named menu from a registry
+  (`viewport`, `tab`) with id-keyed rows, one entry point and a typed context. Right-click acts on
+  the pane under the pointer without moving focus. The viewport menu gains a built-in **Panes**
+  group (Toggle zoom, Swap ▸ left/right/up/down, Rotate, Split left/right/up/down, Close pane;
+  Swap and Rotate only with more than one pane, chips show bindings). Menus open from the keyboard
+  (`ShowContextMenu`), the viewport menu separates built-in rows from config rows, and menus navigate with arrows, Enter, Esc and type-to-filter, with one level of
+  submenus and `max_rows` scrolling. New config: `[context_menu.<id>]` (`enabled`, `mode`,
+  `builtin`, `max_rows`, `trigger`; `mouse.right_click` stays as an alias) with
+  `[[context_menu.<id>.items]]` of kinds `action`, `send`, `spawn` (always into a visible pane:
+  tab, any split side or window, `close_on_success`), `ctl`, `submenu`, `separator`/`header` and
+  `include` of `[[menu_groups.<name>.items]]`; `when` predicates on pane, click, mux and OSC 133
+  facts (`mt_proto::when`); 16 placeholders including `{path:line}`; per-menu validation with
+  line:column diagnostics and last-valid-config fallback. Safety: placeholders fill one argv
+  element, `send` values are shell-quoted, values are stripped of controls, capped at 4 KiB and
+  refused with newlines unless `multiline`; `confirm = true|"auto"` with `[menu_security]
+  dangerous` / `confirm_panes`; spawned programs get `MT_*` variables and the ctl socket only with
+  `spawn.ctl = true`; every invocation emits a `menu.invoked` event. Split placement: `Split(dir)`
+  action, `ctl pane split --direction left|right|up|down` (optional `direction` in `pane.split`,
+  no protocol bump). `ctl menu list|show|invoke|check|icons` (IPC `menu.list|show|invoke`, headless
+  too, `--dry-run`, exit 8 without `--force` for confirmed items), `InvokeMenuItem` for keys and
+  palette rows for configured items, `sh --readonly` support, and a generated "Context menus"
+  reference page. Accessibility labels were dropped (GPUI 0.2.2 has no accessibility API).
 - **M11.01 — Workspace designer.** `DesignWorkspace` (palette "Design Workspace…", switcher "Edit
   workspace…", and "Save current layout as workspace…") opens a modal that edits declared
   workspaces visually and writes only `[[workspaces]]` and `startup_workspace` back to

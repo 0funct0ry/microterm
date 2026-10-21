@@ -73,6 +73,8 @@ struct PendingCall {
 pub struct PaneRuntime {
     exits: HashMap<Id, ExitRecord>,
     keep: HashSet<Id>,
+    /// Kept open unless the process exits with status 0 (menu `spawn`).
+    keep_on_failure: HashSet<Id>,
     capture: HashSet<Id>,
     calls: Vec<PendingCall>,
 }
@@ -142,6 +144,16 @@ impl PaneRuntime {
         }
     }
 
+    /// A context-menu `spawn` pane stays open after exit, unless `close_on_success` and the
+    /// process exits 0 (SPEC §10.9.2).
+    pub fn mark_menu_spawn(&mut self, pane: Id, close_on_success: bool) {
+        if close_on_success {
+            self.keep_on_failure.insert(pane);
+        } else {
+            self.keep.insert(pane);
+        }
+    }
+
     /// Records that the process of `pane` ended. Returns whether the host must keep the tab
     /// open (`run --keep`); the notice is already printed into it.
     pub fn on_exit(&mut self, pane: Id, term: Option<&Terminal>, status: Option<i32>) -> bool {
@@ -159,7 +171,8 @@ impl PaneRuntime {
                 at_ms: now_ms(),
             },
         );
-        let keep = self.keep.contains(&pane);
+        let keep =
+            self.keep.contains(&pane) || (self.keep_on_failure.remove(&pane) && status != Some(0));
         if keep {
             if let Some(t) = term {
                 let notice = match (status, signal) {

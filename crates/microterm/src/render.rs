@@ -23,7 +23,6 @@ pub struct RenderOpts {
 
 impl RenderOpts {
     /// The plain forms: no colour, no layout.
-    #[cfg(test)]
     pub const PLAIN: RenderOpts = RenderOpts {
         width: 80,
         color: false,

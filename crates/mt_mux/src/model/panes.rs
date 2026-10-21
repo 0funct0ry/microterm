@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::tree::{clamp_ratio, Dir, Rect};
+use crate::tree::{clamp_ratio, Dir, Placement, Rect};
 
 /// What [`Mux::close_pane`] removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,31 @@ impl Mux {
         domain: Option<DomainId>,
         cwd: Option<PathBuf>,
     ) -> Result<Id, Error> {
+        self.split_pane_placed(pane, axis, Placement::After, new_share, domain, cwd)
+    }
+
+    /// Like [`Mux::split_pane`], with the new pane on the `dir` side of `pane`: `Left`/`Up`
+    /// put it first (SPEC §17.1, M11.1). It still takes `new_share` and focus.
+    pub fn split_pane_toward(
+        &mut self,
+        pane: Id,
+        dir: Dir,
+        new_share: f32,
+        domain: Option<DomainId>,
+        cwd: Option<PathBuf>,
+    ) -> Result<Id, Error> {
+        self.split_pane_placed(pane, dir.axis(), dir.placement(), new_share, domain, cwd)
+    }
+
+    fn split_pane_placed(
+        &mut self,
+        pane: Id,
+        axis: Axis,
+        placement: Placement,
+        new_share: f32,
+        domain: Option<DomainId>,
+        cwd: Option<PathBuf>,
+    ) -> Result<Id, Error> {
         let (window, index) = self.tab_at(pane)?;
         let (parent_domain, parent_cwd) = {
             let p = self.pane(pane).ok_or(Error::NoPane(pane))?;
@@ -58,8 +83,11 @@ impl Mux {
         let new = Pane::new(new_id, domain, cwd.or(parent_cwd));
         let tab = &mut self.window_mut(window)?.tabs[index];
         let tab_id = tab.id;
-        let ratio = clamp_ratio(1.0 - new_share);
-        tab.tree.split_leaf(pane, axis, ratio, new);
+        let ratio = match placement {
+            Placement::Before => clamp_ratio(new_share),
+            Placement::After => clamp_ratio(1.0 - new_share),
+        };
+        tab.tree.split_leaf_at(pane, axis, ratio, new, placement);
         tab.zoomed = None;
         tab.active_pane = new_id;
         self.window_mut(window)?.active = index;
@@ -422,6 +450,31 @@ mod tests {
         );
         let _ = tab;
         assert!(matches!(m.focus_pane(5000), Err(Error::NoPane(5000))));
+    }
+
+    #[test]
+    fn split_toward_left_and_up_puts_the_new_pane_first_and_focuses_it() {
+        let (mut m, w, tab, p1) = setup();
+        let left = m.split_pane_toward(p1, Dir::Left, 0.3, None, None).unwrap();
+        let t = tab_of(&m, w, tab);
+        assert_eq!(order(&t), vec![left, p1]);
+        assert_eq!(t.active_pane, left);
+        let PaneTree::Split { ratio, axis, .. } = t.tree else {
+            panic!()
+        };
+        assert_eq!(axis, Axis::Horizontal);
+        assert!(
+            (ratio - 0.3).abs() < 1e-5,
+            "the new pane (a) takes its share"
+        );
+        let up = m.split_pane_toward(p1, Dir::Up, 0.5, None, None).unwrap();
+        assert_eq!(order(&tab_of(&m, w, tab)), vec![left, up, p1]);
+        assert_eq!(m.focus_direction(up, Dir::Down).unwrap(), Some(p1));
+        assert_eq!(m.focus_direction(p1, Dir::Left).unwrap(), Some(left));
+        let right = m
+            .split_pane_toward(p1, Dir::Right, 0.5, None, None)
+            .unwrap();
+        assert_eq!(order(&tab_of(&m, w, tab)), vec![left, up, p1, right]);
     }
 
     #[test]

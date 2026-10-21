@@ -14,6 +14,7 @@ thiserror.workspace = true
 notify.workspace = true
 async-channel.workspace = true
 mt_patterns = { path = "../mt_patterns" }
+mt_proto = { path = "../mt_proto" }
 
 [dev-dependencies]
 proptest = "1"

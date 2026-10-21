@@ -41,6 +41,10 @@ pub struct Config {
     pub launch: Vec<LaunchProfile>,
     pub workspaces: Vec<WorkspaceDef>,
     pub ssh_domains: Vec<SshDomain>,
+    /// `[context_menu.<id>]`, keyed by registry id (SPEC §10.9).
+    pub context_menu: BTreeMap<String, crate::menu::MenuConfig>,
+    pub menu_groups: BTreeMap<String, crate::menu::MenuGroup>,
+    pub menu_security: crate::menu::MenuSecurity,
 }
 
 impl Default for Config {
@@ -79,6 +83,9 @@ impl Default for Config {
             launch: Vec::new(),
             workspaces: Vec::new(),
             ssh_domains: Vec::new(),
+            context_menu: BTreeMap::new(),
+            menu_groups: BTreeMap::new(),
+            menu_security: crate::menu::MenuSecurity::default(),
         }
     }
 }

@@ -136,7 +136,8 @@ the per-user socket, no listener of its own.
   `… Close anyway? [y/N]` and retries with `--force` if you agree; scripts and `-c` never prompt, and
   `[sh] confirm_prompts = false` turns the question off. This is the one intended difference from `ctl`.
 - `--readonly` rejects anything that changes state before it reaches the instance (`list`, `get`,
-  `get-text`, `wait`, `status get` and `events` are allowed), and disables `!` host commands.
+  `get-text`, `wait`, `status get`, `events`, `menu list|show|check|icons` and `menu invoke --dry-run`
+  are allowed), and disables `!` host commands.
 - `send-text` and `record --input` print a one-line warning the first time they are used in a session.
 
 ## Configuration

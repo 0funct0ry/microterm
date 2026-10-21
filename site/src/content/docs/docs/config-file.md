@@ -88,9 +88,21 @@ that implements its feature.
 from 1) or `"Disable"` to remove a default binding. User bindings win over defaults on the same
 keystroke. An unknown action name is skipped and shown in the banner.
 
+## Context menus
+
+`[context_menu.<menu>]` tables add items to the right-click menus (`viewport`, `tab`), prune or
+reorder the built-ins and set the trigger; `[[menu_groups.<name>.items]]` are reusable groups and
+`[menu_security]` lists what always needs confirmation. Menu changes apply the next time a menu
+opens. See [Context menus](/docs/context-menus/) and the
+[menu reference](/docs/reference/context-menus/).
+
 ## Errors
 
 - **Syntax and type errors** are errors. microterm keeps the last valid config.
 - **Unknown keys** are warnings: the config still applies and the banner suggests the nearest
   key, for example `microterm.toml:12:5 — unknown key "fnt" (did you mean "font"?)`.
 - **Out-of-range values** (`window.opacity = 2`, an unknown theme name) are errors.
+- **Context-menu mistakes** (an unknown menu id, a placeholder or `when` key the menu does not
+  have, an unparsable `ctl` string, an unknown action or icon, more than 64 items) are errors with
+  the item's path, for example `context_menu.tab.items[2]: placeholder {selection} is not
+  available in menu "tab"`.

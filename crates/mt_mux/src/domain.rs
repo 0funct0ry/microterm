@@ -25,6 +25,10 @@ pub struct SpawnSpec {
     /// Set for a pane created by a split: the pane it was split from, with the axis and the
     /// new pane's share (remote domains record it on their daemon).
     pub split_from: Option<SplitOrigin>,
+    /// Extra environment for the process (context-menu `spawn`: `MT_*`).
+    pub env: Vec<(String, String)>,
+    /// Withhold the ctl socket and `MICROTERM_*` ids (context-menu `spawn` without `ctl`).
+    pub no_ctl: bool,
 }
 
 /// Where a split pane came from (see [`SpawnSpec::split_from`]).

@@ -6,6 +6,7 @@ pub mod edit;
 pub mod editor;
 pub mod keys;
 pub mod load;
+pub mod menu;
 pub mod schema;
 pub mod template;
 pub mod watch;

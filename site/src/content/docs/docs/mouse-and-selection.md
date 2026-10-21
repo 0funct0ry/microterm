@@ -53,9 +53,13 @@ hide_while_typing = true
 scroll_multiplier = 3
 ```
 
-The context menu offers Copy, Paste, Select all, Open link, Copy link, Search for selection and
-Clear scrollback. Entries that do not apply (no selection, no link under the pointer) are
-dimmed.
+The context menu belongs to the pane under the pointer (focus does not move) and offers Copy,
+Paste, Select all, Open link, Copy link, Search for selection, Clear scrollback and a **Panes**
+group (zoom, swap, rotate, split in four directions, close). Entries that do not apply (no
+selection, no link under the pointer) are dimmed. When a program captures the mouse, hold Shift to
+get the menu. You can add your own items, prune these, or open the menu from the keyboard: see
+[Context menus](/docs/context-menus/). `right_click` is the same setting as
+`context_menu.viewport.trigger`.
 
 ## Pointer shapes
 

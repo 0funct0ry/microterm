@@ -49,12 +49,14 @@ export default defineConfig({
             { label: 'Hot reload', slug: 'docs/hot-reload' },
             { label: 'Themes', slug: 'docs/themes' },
             { label: 'Fonts', slug: 'docs/fonts' },
+            { label: 'Context menus', slug: 'docs/context-menus' },
           ],
         },
         {
           label: 'Reference',
           items: [
             { label: 'Actions', slug: 'docs/reference/actions' },
+            { label: 'Context menus', slug: 'docs/reference/context-menus' },
             { label: 'Agent skill', slug: 'docs/reference/agent-skill' },
             { label: 'Terminal API (VT) support', slug: 'docs/reference/terminal-api' },
             { label: 'Environment variables', slug: 'docs/reference/environment-variables' },

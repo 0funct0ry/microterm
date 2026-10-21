@@ -14,6 +14,8 @@ pub mod ipc_ops;
 pub mod ipc_pending;
 pub mod keychips;
 pub mod ls_fonts;
+pub mod menu;
+mod menu_view;
 pub mod metrics;
 pub mod mock;
 pub mod mode_overlays;

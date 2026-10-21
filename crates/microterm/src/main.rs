@@ -5,6 +5,7 @@ mod ctl_cmd;
 mod headless;
 mod ipc;
 mod mcp;
+mod menu_hooks;
 mod output;
 mod render;
 #[cfg(feature = "sh")]
@@ -21,6 +22,7 @@ use microterm::ctl;
 use crate::cli::{Cli, Command};
 
 fn main() {
+    menu_hooks::install();
     // Usage errors exit 1 (SPEC §12.1); `--help` / `--version` still exit 0.
     let mut cli = Cli::try_parse().unwrap_or_else(|err| {
         let _ = err.print();

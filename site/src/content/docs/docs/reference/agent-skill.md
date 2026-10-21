@@ -96,6 +96,11 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl skill uninstall` — Remove exactly what `install` wrote
 - `microterm ctl skill show` — Print the rendered skill without writing anything
 - `microterm ctl mcp` — Run an MCP server on stdio that exposes ctl as tools
+- `microterm ctl menu list` — List every menu with its facts, placeholders, allowed kinds and items
+- `microterm ctl menu show` — Show a menu's rows for a pane, with `when` evaluated (no click facts)
+- `microterm ctl menu invoke` — Run a menu item on a pane as if it was chosen
+- `microterm ctl menu icons` — List the icon names an item can use (`icon = "…"`); needs no running instance
+- `microterm ctl menu check` — Validate the menu config of a config file; needs no running instance
 
 Run `microterm ctl <resource> <verb> --help` for flags.
 

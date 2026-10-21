@@ -195,6 +195,14 @@ pub enum MuxEvent {
         pane: Id,
         exit_code: Option<i32>,
     },
+    /// A context-menu item with a side effect ran (SPEC §10.9.5, audit).
+    MenuInvoked {
+        pane: Id,
+        menu: String,
+        item: String,
+        kind: String,
+        summary: String,
+    },
     TabAdded {
         window: Id,
         tab: Id,
@@ -976,6 +984,24 @@ impl Mux {
 
     pub fn notify_command_finished(&mut self, pane: Id, exit_code: Option<i32>) {
         self.emit(MuxEvent::CommandFinished { pane, exit_code });
+    }
+
+    /// Records a context-menu invocation for `ctl events` (SPEC §10.9.5).
+    pub fn notify_menu_invoked(
+        &mut self,
+        pane: Id,
+        menu: &str,
+        item: &str,
+        kind: &str,
+        summary: &str,
+    ) {
+        self.emit(MuxEvent::MenuInvoked {
+            pane,
+            menu: menu.into(),
+            item: item.into(),
+            kind: kind.into(),
+            summary: summary.into(),
+        });
     }
 
     /// `(window id, tab index)` of the tab with id `tab`.

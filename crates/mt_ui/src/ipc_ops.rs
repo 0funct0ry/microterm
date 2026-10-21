@@ -45,6 +45,19 @@ pub fn event_of(e: &MuxEvent) -> Event {
         },
         MuxEvent::PaneExited { pane, status } => Event::PaneExited { pane, status },
         MuxEvent::CommandFinished { pane, exit_code } => Event::CommandFinished { pane, exit_code },
+        MuxEvent::MenuInvoked {
+            pane,
+            ref menu,
+            ref item,
+            ref kind,
+            ref summary,
+        } => Event::MenuInvoked {
+            pane,
+            menu: menu.clone(),
+            item: item.clone(),
+            kind: kind.clone(),
+            summary: summary.clone(),
+        },
         MuxEvent::TabAdded { window, tab } => Event::TabAdded { window, tab },
         MuxEvent::TabRemoved { window, tab } => Event::TabRemoved { window, tab },
         MuxEvent::TabMoved {
@@ -102,6 +115,20 @@ pub fn expand_tilde(path: &str) -> std::path::PathBuf {
 /// The `MICROTERM_*` variables exported into every **local** pane (SPEC §6.1, §12.3): the
 /// pane's own ids, so a process inside can address itself, and the IPC socket. SSH-domain
 /// panes get none of them (SPEC §12.6 S7).
+/// Blanks the ctl variables for a process that must not reach the socket (a menu `spawn`
+/// without `ctl = true`): an empty `MICROTERM_UNIX_SOCKET` also stops ctl's socket discovery.
+pub fn no_ctl_env() -> Vec<(String, String)> {
+    [
+        "MICROTERM_UNIX_SOCKET",
+        "MICROTERM_PANE",
+        "MICROTERM_TAB",
+        "MICROTERM_WINDOW",
+    ]
+    .into_iter()
+    .map(|k| (k.to_string(), String::new()))
+    .collect()
+}
+
 pub fn pane_env(pane: Id, tab: Id, window: Id, socket: Option<&Path>) -> Vec<(String, String)> {
     let mut env = vec![
         ("MICROTERM_PANE".to_string(), pane.to_string()),
@@ -188,32 +215,48 @@ pub fn resolve_panes(rows: &Rows, t: &Target, verb: Verb) -> Result<Vec<Id>, Rpc
     ctl::resolve(t, &rows.panes, rows.focused_pane, verb)
 }
 
+/// A `pane.split` the model has applied: the new pane and where it came from.
+pub struct SplitDone {
+    pub result: mt_proto::PaneSplitResult,
+    /// The pane that was split (resolved from `--pane`, `--match` or the caller's env).
+    pub parent: Id,
+    pub axis: mt_mux::Axis,
+    /// The new pane's share in permille.
+    pub permille: u16,
+}
+
 /// `pane.split`, model half: validates, resolves the target and adds the pane. The host then
 /// starts a terminal for the returned pane (and closes it again if that fails).
 pub fn split_model(
     mux: &mut Mux,
     rows: &Rows,
     p: &mt_proto::PaneSplitParams,
-) -> Result<mt_proto::PaneSplitResult, RpcError> {
+) -> Result<SplitDone, RpcError> {
     let percent = p.percent.unwrap_or(50);
     if !(1..=99).contains(&percent) {
         return Err(RpcError::bad_request("--percent must be between 1 and 99"));
     }
     let pane = resolve_panes(rows, &p.target, Verb::Acting { all_allowed: false })?[0];
-    let axis = match p.axis {
-        mt_proto::SplitAxis::Horizontal => mt_mux::Axis::Horizontal,
-        mt_proto::SplitAxis::Vertical => mt_mux::Axis::Vertical,
+    let dir = match (p.direction, p.axis) {
+        (Some(d), _) => mt_mux::Dir::from(d),
+        (None, mt_proto::SplitAxis::Horizontal) => mt_mux::Dir::Right,
+        (None, mt_proto::SplitAxis::Vertical) => mt_mux::Dir::Down,
     };
     let cwd = p.cwd.as_deref().map(expand_tilde);
-    let new = mux.split_pane(pane, axis, f32::from(percent) / 100.0, None, cwd)?;
+    let new = mux.split_pane_toward(pane, dir, f32::from(percent) / 100.0, None, cwd)?;
     let (window, index) = mux
         .locate_pane(new)
         .ok_or_else(|| RpcError::internal("lost pane"))?;
     let tab = mux.window(window).map_or(0, |w| w.tabs[index].id);
-    Ok(mt_proto::PaneSplitResult {
-        pane: new,
-        tab,
-        window,
+    Ok(SplitDone {
+        result: mt_proto::PaneSplitResult {
+            pane: new,
+            tab,
+            window,
+        },
+        parent: pane,
+        axis: dir.axis(),
+        permille: u16::from(percent) * 10,
     })
 }
 

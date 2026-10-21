@@ -1833,6 +1833,55 @@ fn skill_install_show_uninstall_end_to_end() {
 }
 
 #[test]
+fn panes_split_toward_left_and_up_put_the_new_pane_first() {
+    let mt = Instance::start();
+    let (_tab, first, _window) = mt.spawn_ids("sleep 60", &["--title", "dir"]);
+    let split = |pane: &str, dir: &str| {
+        let out = mt.ctl(&[
+            "pane",
+            "split",
+            "--pane",
+            pane,
+            "--direction",
+            dir,
+            "--percent",
+            "30",
+            "--",
+            "sleep",
+            "60",
+        ]);
+        parse_ids(&out).1
+    };
+    let left = split(&first, "left");
+    let text = mt.ctl(&["list"]);
+    assert!(text.contains(&format!("[{left} |30 {first}]")), "{text}");
+    assert_eq!(
+        mt.json(&["pane", "get"])["id"].to_string(),
+        left,
+        "new pane focused"
+    );
+    let up = split(&first, "up");
+    let text = mt.ctl(&["list"]);
+    assert!(
+        text.contains(&format!("[{left} |30 ({up} /30 {first})]")),
+        "{text}"
+    );
+    assert_eq!(
+        mt.ctl_code(&[
+            "pane",
+            "split",
+            "--pane",
+            &first,
+            "--direction",
+            "up",
+            "--vertical"
+        ]),
+        1,
+        "--direction and --vertical are exclusive"
+    );
+}
+
+#[test]
 fn panes_split_focus_zoom_resize_swap_rotate_and_close() {
     let mt = Instance::start();
     let (tab, left, window) = mt.spawn_ids("sleep 60", &["--title", "dev"]);
@@ -1962,4 +2011,260 @@ fn panes_split_focus_zoom_resize_swap_rotate_and_close() {
         1,
         "--horizontal or --vertical is required"
     );
+}
+
+const MENU_CONFIG: &str = r#"
+[[context_menu.viewport.items]]
+id = "env"
+label = "Show env"
+spawn = { command = ["sh", "-c", "echo pane=$MT_PANE item=$MT_ITEM sock=[$MICROTERM_UNIX_SOCKET] arg=$1; sleep 60", "sh", "{title}"], where = "split-left" }
+
+[[context_menu.viewport.items]]
+id = "ctlenv"
+label = "With ctl"
+spawn = { command = ["sh", "-c", "echo sock=[$MICROTERM_UNIX_SOCKET]; sleep 60"], where = "tab", ctl = true }
+
+[[context_menu.viewport.items]]
+id = "hello"
+label = "Say hello"
+send = "echo hello-{pane}\n"
+
+[[context_menu.viewport.items]]
+id = "careful"
+label = "Careful"
+confirm = true
+send = "echo careful\n"
+
+[[context_menu.viewport.items]]
+id = "status"
+label = "Set status"
+ctl = "pane status set --state waiting from-menu"
+
+[[context_menu.tab.items]]
+id = "dup"
+label = "Duplicate"
+spawn = { command = ["sh"] }
+"#;
+
+#[test]
+fn menu_invoke_builtins_headlessly() {
+    let mt = Instance::start();
+    let (tab, pane, _) = mt.spawn_ids("sleep 60", &["--title", "m"]);
+    // Rotate needs two panes: hidden by `when`, so exit 1.
+    let (code, err) = mt.ctl_err(&["menu", "invoke", "viewport/rotate", "--pane", &pane]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("not available"), "{err}");
+    let out = mt.ctl(&["menu", "invoke", "viewport/split_up", "--pane", &pane]);
+    assert!(out.contains("ran viewport/split_up on pane"), "{out}");
+    let text = mt.ctl(&["list"]);
+    assert!(
+        text.contains(&format!(" / {pane}]")),
+        "new pane above: {text}"
+    );
+    mt.ctl(&["menu", "invoke", "viewport/zoom", "--pane", &pane]);
+    let zoomed = mt.json(&["pane", "get", "--pane", &pane]);
+    assert_eq!(zoomed["zoomed"], true, "{zoomed}");
+    mt.ctl(&["menu", "invoke", "viewport/zoom", "--pane", &pane]);
+    // GUI-only built-ins fail on a headless instance; unknown items exit 3; no target exits 1.
+    assert_eq!(
+        mt.ctl_code(&["menu", "invoke", "viewport/copy", "--pane", &pane]),
+        1
+    );
+    assert_eq!(
+        mt.ctl_code(&["menu", "invoke", "viewport/nope", "--pane", &pane]),
+        3
+    );
+    assert_eq!(
+        mt.ctl_code(&["menu", "invoke", "nomenu/zoom", "--pane", &pane]),
+        3
+    );
+    assert_eq!(mt.ctl_code(&["menu", "invoke", "viewport/zoom"]), 1);
+    // Dry run describes and does nothing.
+    let d = mt.json(&[
+        "menu",
+        "invoke",
+        "viewport/close_pane",
+        "--pane",
+        &pane,
+        "--dry-run",
+    ]);
+    assert_eq!(d["builtin"], "ClosePane");
+    assert_eq!(d["pane"].to_string(), pane);
+    assert!(mt.ctl(&["list"]).contains(&pane));
+    let list = mt.json(&["menu", "list"]);
+    assert_eq!(list[0]["id"], "viewport");
+    assert_eq!(list[1]["id"], "tab");
+    let show = mt.ctl(&["menu", "show", "viewport", "--pane", &pane]);
+    assert!(show.contains("rotate\tRotate"), "two panes now: {show}");
+    assert!(show.contains("copy\tCopy\t(disabled)"), "{show}");
+    let _ = tab;
+}
+
+#[test]
+fn menu_invoke_config_items_spawn_send_ctl_and_confirm() {
+    let mt = Instance::start_with(Some(MENU_CONFIG));
+    let pane = mt.spawn_sh("echo ready; exec sh", &["--title", "work"]);
+    mt.wait_text(&pane, "ready");
+
+    // spawn: argv placeholders stay one element, MT_* arrive, no ctl socket by default.
+    let d = mt.json(&[
+        "menu",
+        "invoke",
+        "viewport/env",
+        "--pane",
+        &pane,
+        "--dry-run",
+    ]);
+    assert_eq!(d["where"], "split-left");
+    assert_eq!(d["argv"][4], "work");
+    let r = mt.json(&["menu", "invoke", "viewport/env", "--pane", &pane]);
+    let new = r["pane"].to_string();
+    let t = mt.wait_text(&new, "pane=");
+    assert!(
+        t.contains(&format!("pane={pane} item=env sock=[] arg=work")),
+        "{t}"
+    );
+    assert!(
+        mt.ctl(&["list"]).contains(&format!("[{new} | {pane}]")),
+        "split left"
+    );
+
+    let r = mt.json(&["menu", "invoke", "viewport/ctlenv", "--pane", &pane]);
+    let t = mt.wait_text(&r["pane"].to_string(), "sock=");
+    assert!(t.contains("sock=[/"), "ctl = true exports the socket: {t}");
+
+    // send, and the audit event.
+    mt.ctl(&["menu", "invoke", "viewport/hello", "--pane", &pane]);
+    mt.wait_text(&pane, &format!("hello-{pane}"));
+
+    // confirm = true: exit 8 without --force.
+    let (code, err) = mt.ctl_err(&["menu", "invoke", "viewport/careful", "--pane", &pane]);
+    assert_eq!(code, 8, "{err}");
+    assert!(err.contains("--force"), "{err}");
+    mt.ctl(&[
+        "menu",
+        "invoke",
+        "viewport/careful",
+        "--pane",
+        &pane,
+        "--force",
+    ]);
+    mt.wait_text(&pane, "careful");
+
+    // ctl items run asynchronously as the pane.
+    mt.ctl(&["menu", "invoke", "viewport/status", "--pane", &pane]);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let s = mt.json(&["pane", "get", "--pane", &pane]);
+        if s["status"]["state"] == "waiting" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "status never set: {s}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Tab menu items are addressable too.
+    assert_eq!(
+        mt.json(&["menu", "invoke", "tab/dup", "--pane", &pane, "--dry-run"])["where"],
+        "tab"
+    );
+}
+
+#[test]
+fn menu_events_are_audited() {
+    let mt = Instance::start_with(Some(MENU_CONFIG));
+    let pane = mt.spawn_sh("exec sh", &[]);
+    let mut events = std::process::Command::new(assert_cmd::cargo::cargo_bin("microterm"))
+        .args(["ctl", "events", "--type", "menu.invoked"])
+        .envs(Instance::env(&mt.home))
+        .env_remove("MICROTERM_UNIX_SOCKET")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    mt.ctl(&["menu", "invoke", "viewport/hello", "--pane", &pane]);
+    let mut line = String::new();
+    BufReader::new(events.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let _ = events.kill();
+    let _ = events.wait();
+    let v: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(v["type"], "menu.invoked");
+    assert_eq!(v["item"], "hello");
+    assert_eq!(v["kind"], "send");
+    assert!(
+        v["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("send echo hello-"),
+        "{v}"
+    );
+}
+
+#[test]
+fn menu_check_reports_menu_diagnostics_without_an_instance() {
+    let dir = format!("/tmp/mtc-{}", std::process::id());
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = format!("{dir}/good.toml");
+    std::fs::write(&good, MENU_CONFIG).unwrap();
+    let out = Command::cargo_bin("microterm")
+        .unwrap()
+        .args(["ctl", "menu", "check", "--config", &good])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("menus OK"));
+    let bad = format!("{dir}/bad.toml");
+    std::fs::write(
+        &bad,
+        "[context_menu.viewprot]\nmode = \"append\"\n\n[[context_menu.tab.items]]\nlabel = \"x\"\nctl = \"pane zom\"\n",
+    )
+    .unwrap();
+    let out = Command::cargo_bin("microterm")
+        .unwrap()
+        .args(["ctl", "menu", "check", "--config", &bad])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("bad.toml:1:15 — context_menu.viewprot: unknown menu \"viewprot\" (did you mean \"viewport\"?)"), "{err}");
+    assert!(
+        err.contains("bad.toml:6:1 — context_menu.tab.items[0]: ctl \"pane zom\""),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn menu_icons_lists_names_without_an_instance() {
+    let out = Command::cargo_bin("microterm")
+        .unwrap()
+        .args(["ctl", "menu", "icons"])
+        .env_remove("MICROTERM_UNIX_SOCKET")
+        .env("XDG_RUNTIME_DIR", "/nonexistent")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines.contains(&"git-branch") && lines.contains(&"search"),
+        "{text}"
+    );
+    let out = Command::cargo_bin("microterm")
+        .unwrap()
+        .args(["ctl", "menu", "icons", "--json"])
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), lines.len());
 }

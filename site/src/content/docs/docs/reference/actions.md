@@ -40,6 +40,8 @@ action = "Disable"   # unbind a default
 |---|---|---|---|
 | `SplitHorizontal` | **Split pane right** — Split the focused pane into two side by side | `⌘D` | `Ctrl+Shift+D` |
 | `SplitVertical` | **Split pane down** — Split the focused pane into two, one above the other | `⌘⇧D` | `Ctrl+Shift+E` |
+| `Split(left)` | **Split pane left** — Split the focused pane; the new pane goes on the left | — | — |
+| `Split(up)` | **Split pane up** — Split the focused pane; the new pane goes above | — | — |
 | `ClosePane` | **Close pane** — Close the focused pane; the last pane of a tab closes the tab | — | — |
 | `TogglePaneZoom` | **Toggle pane zoom** — Show the focused pane full-size, or restore the layout | — | — |
 | `RotatePanes` | **Rotate panes** — Rotate the positions of the panes in the tab | — | — |
@@ -55,6 +57,7 @@ action = "Disable"   # unbind a default
 | `ResizePane(right,5)` | **Resize pane right** — Move the focused pane's right border by 5 cells | — | — |
 | `ResizePane(up,5)` | **Resize pane up** — Move the focused pane's up border by 5 cells | — | — |
 | `ResizePane(down,5)` | **Resize pane down** — Move the focused pane's down border by 5 cells | — | — |
+| `Split` | **Split pane** — Split the focused pane toward `left`, `right`, `up` or `down`; the new pane takes focus | — | — |
 
 ## Workspaces
 
@@ -113,6 +116,14 @@ action = "Disable"   # unbind a default
 |---|---|---|---|
 | `ReloadConfig` | **Reload config** — Re-read the config file | `⌘⇧R` | `Ctrl+Shift+R` |
 | `OpenConfig` | **Open config** — Open the config file in your editor | `⌘,` | `Ctrl+,` |
+
+## Menus
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `ShowContextMenu(viewport)` | **Show context menu** — Open the viewport context menu at the cursor; navigate with the arrow keys, Enter and Esc, type to filter | — | — |
+| `ShowContextMenu` | **Show context menu** — Open the named context menu (`viewport`, `tab`) for the focused pane or the active tab | — | — |
+| `InvokeMenuItem` | **Invoke menu item** — Run a context-menu item, `"menu/item"` (for example `"viewport/zoom"`), against the focused pane | — | — |
 
 ## Misc
 

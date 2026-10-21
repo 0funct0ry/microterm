@@ -23,6 +23,7 @@ pub const MAX_LINE: usize = 1024 * 1024;
 pub mod mux;
 pub mod selector;
 pub mod tools;
+pub mod when;
 
 pub use selector::{Resource, Selector};
 
@@ -273,12 +274,16 @@ pub enum Direction {
 }
 
 /// `pane split`: the new pane inherits the target's domain and cwd unless `cwd` or `command`
-/// say otherwise. `percent` is the new pane's share (default 50).
+/// say otherwise. `percent` is the new pane's share (default 50). `direction` (M11.1) says on
+/// which side of the target the new pane goes; when set it overrides `axis`, which senders still
+/// fill in (`left`/`right` = horizontal) so older servers split along the right axis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneSplitParams {
     #[serde(flatten)]
     pub target: Target,
     pub axis: SplitAxis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -562,6 +567,25 @@ fn one() -> f64 {
     1.0
 }
 
+/// `menu.show`: the rows of `menu` for a pane (SPEC §10.9.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuShowParams {
+    #[serde(flatten)]
+    pub target: Target,
+    pub menu: String,
+}
+
+/// `menu.invoke`: run `item` (`MENU/ITEM`) on a pane. `target.force` accepts a confirmation;
+/// `dry_run` only resolves and expands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuInvokeParams {
+    #[serde(flatten)]
+    pub target: Target,
+    pub item: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dry_run: bool,
+}
+
 /// Every IPC request (SPEC §12.2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -615,6 +639,9 @@ pub enum Request {
     ReplayStart(ReplayParams),
     ConfigReload,
     Subscribe(SubscribeParams),
+    MenuList,
+    MenuShow(MenuShowParams),
+    MenuInvoke(MenuInvokeParams),
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -656,6 +683,9 @@ pub const METHODS: &[&str] = &[
     "replay.start",
     "config.reload",
     "subscribe",
+    "menu.list",
+    "menu.show",
+    "menu.invoke",
 ];
 
 impl Request {
@@ -697,6 +727,9 @@ impl Request {
             Request::RecordStop { .. } => "record.stop",
             Request::ReplayStart(_) => "replay.start",
             Request::ConfigReload => "config.reload",
+            Request::MenuList => "menu.list",
+            Request::MenuShow(_) => "menu.show",
+            Request::MenuInvoke(_) => "menu.invoke",
             Request::Subscribe(_) => "subscribe",
         }
     }
@@ -711,7 +744,12 @@ impl Request {
     pub fn params(&self) -> Value {
         let to = |v: &dyn erased::Ser| v.to_value();
         match self {
-            Request::MuxList | Request::WorkspaceList | Request::ConfigReload => json!({}),
+            Request::MuxList
+            | Request::WorkspaceList
+            | Request::ConfigReload
+            | Request::MenuList => json!({}),
+            Request::MenuShow(p) => to(p),
+            Request::MenuInvoke(p) => to(p),
             Request::Subscribe(p) => to(p),
             Request::WorkspaceCreate { name } | Request::WorkspaceSwitch { name } => {
                 json!({ "name": name })
@@ -830,6 +868,9 @@ impl Request {
             "replay.start" => Request::ReplayStart(p(method, params)?),
             "config.reload" => Request::ConfigReload,
             "subscribe" => Request::Subscribe(p(method, params)?),
+            "menu.list" => Request::MenuList,
+            "menu.show" => Request::MenuShow(p(method, params)?),
+            "menu.invoke" => Request::MenuInvoke(p(method, params)?),
             other => return Err(RpcError::bad_request(format!("unknown method {other:?}"))),
         })
     }
@@ -1201,6 +1242,14 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// A context-menu item with a side effect ran (SPEC §10.9.5); `summary` is truncated.
+    MenuInvoked {
+        pane: u64,
+        menu: String,
+        item: String,
+        kind: String,
+        summary: String,
+    },
     /// First line of a `subscribe` with `snapshot`: the whole tree (the `mux.list` result).
     Snapshot {
         tree: Value,
@@ -1241,6 +1290,7 @@ impl Event {
             Event::WorkspaceSwitched { .. } => "workspace.switched",
             Event::WorkspaceRemoved { .. } => "workspace.removed",
             Event::DomainStateChanged { .. } => "domain.state_changed",
+            Event::MenuInvoked { .. } => "menu.invoked",
             Event::Snapshot { .. } => "snapshot",
         }
     }
@@ -1256,7 +1306,8 @@ impl Event {
             | Event::StatusChanged { pane }
             | Event::Notification { pane, .. }
             | Event::PaneExited { pane, .. }
-            | Event::CommandFinished { pane, .. } => Subject::Pane(*pane),
+            | Event::CommandFinished { pane, .. }
+            | Event::MenuInvoked { pane, .. } => Subject::Pane(*pane),
             Event::TabAdded { tab, .. }
             | Event::TabRemoved { tab, .. }
             | Event::TabMoved { tab, .. }
@@ -1574,6 +1625,7 @@ mod tests {
             Request::PaneSplit(PaneSplitParams {
                 target: Target::pane(2),
                 axis: SplitAxis::Vertical,
+                direction: Some(Direction::Up),
                 percent: Some(30),
                 cwd: Some("/tmp".into()),
                 command: Some(vec!["htop".into()]),
@@ -1610,6 +1662,19 @@ mod tests {
                 expr: Some("title:x*".into()),
                 snapshot: true,
             }),
+            Request::MenuList,
+            Request::MenuShow(MenuShowParams {
+                target: Target::pane(2),
+                menu: "viewport".into(),
+            }),
+            Request::MenuInvoke(MenuInvokeParams {
+                target: Target {
+                    force: true,
+                    ..Target::pane(3)
+                },
+                item: "viewport/zoom".into(),
+                dry_run: true,
+            }),
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -1628,7 +1693,8 @@ mod tests {
              tab.focus tab.rename tab.close pane.list pane.get pane.send_text pane.get_text \
              pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
              pane.close pane.split pane.focus pane.zoom pane.resize pane.swap pane.rotate \
-             record.start record.stop replay.start config.reload subscribe"
+             record.start record.stop replay.start config.reload subscribe menu.list menu.show \
+             menu.invoke"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(

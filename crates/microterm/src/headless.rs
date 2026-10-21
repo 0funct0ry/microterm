@@ -42,6 +42,9 @@ struct Host {
     osc_notifications: bool,
     vt: mt_term::VtConfig,
     runtime: PaneRuntime,
+    /// The config file, re-read by `config.reload` (menus read it on every call).
+    path: PathBuf,
+    cfg: Arc<mt_config::Config>,
 }
 
 /// The headless mux as pending `pane.run` / `pane.wait` calls see it.
@@ -99,6 +102,8 @@ pub fn run(config: Option<PathBuf>) -> i32 {
         osc_notifications: cfg.terminal.osc_notifications,
         vt: mt_ui::app::vt_config(&cfg),
         runtime: PaneRuntime::default(),
+        cfg: Arc::new(cfg.clone()),
+        path,
     };
     host.mux
         .subscribe(move |e| hub.publish(ipc_ops::event_of(e)));
@@ -265,6 +270,131 @@ impl Host {
             .ok_or_else(|| RpcError::not_found(format!("pane {pane} does not exist")))
     }
 
+    /// `menu.invoke` without a GUI: built-ins that have a request, `send`, `spawn` and `ctl`.
+    fn menu_invoke(&mut self, p: &mt_proto::MenuInvokeParams) -> Reply {
+        use mt_ui::menu::{Plan, Prepared};
+        let rows = self.rows();
+        let panes = self.panes.clone();
+        let cfg = self.cfg.clone();
+        let (inv, facts) =
+            match mt_ui::menu::prepare_invoke(&cfg, &rows, p, &|id| panes.get(&id).cloned())? {
+                Prepared::DryRun(v) => return Ok(v),
+                Prepared::Run(b) => *b,
+            };
+        let mut done = mt_ui::menu::describe(&inv);
+        done["executed"] = json!(true);
+        let gui_only = || {
+            RpcError::bad_request(format!(
+                "{}/{} needs the GUI (this instance is headless)",
+                inv.menu, inv.item
+            ))
+        };
+        match &inv.plan {
+            Plan::Builtin(b) => {
+                let req = b.request(&facts, p.target.force).ok_or_else(gui_only)?;
+                self.handle(req)?;
+            }
+            Plan::Action(_) => return Err(gui_only()),
+            Plan::Send { text } => {
+                let term = self.terminal(inv.pane)?;
+                mt_ui::menu::audit(&mut self.mux, &inv);
+                term.write(text.as_bytes().to_vec());
+            }
+            Plan::Spawn { .. } => {
+                mt_ui::menu::audit(&mut self.mux, &inv);
+                done["pane"] = json!(self.spawn_menu(&inv)?);
+            }
+            Plan::Ctl { argv } => {
+                let runner = mt_ui::menu::ctl_runner()
+                    .ok_or_else(|| RpcError::internal("no ctl runner installed"))?;
+                mt_ui::menu::audit(&mut self.mux, &inv);
+                let (argv, pane, socket) = (argv.clone(), inv.pane, self.socket.clone());
+                std::thread::spawn(move || {
+                    if let Err(e) = runner(argv, pane, Some(socket)) {
+                        eprintln!("microterm: menu ctl item failed: {e}");
+                    }
+                });
+                done["async"] = json!(true);
+            }
+        }
+        Ok(done)
+    }
+
+    /// A menu `spawn` pane next to (or in a new tab or window beside) `inv.pane`.
+    fn spawn_menu(&mut self, inv: &mt_ui::menu::Invocation) -> Result<Id, RpcError> {
+        use mt_config::menu::SpawnWhere;
+        let mt_ui::menu::Plan::Spawn {
+            argv,
+            cwd,
+            title,
+            place,
+            close_on_success,
+            ctl,
+            env,
+        } = &inv.plan
+        else {
+            return Err(RpcError::internal("not a spawn"));
+        };
+        let err = |e: mt_mux::Error| RpcError::internal(e.to_string());
+        let (window, _) = self
+            .mux
+            .locate_pane(inv.pane)
+            .ok_or_else(|| RpcError::not_found(format!("pane {} does not exist", inv.pane)))?;
+        let cwd = cwd
+            .as_deref()
+            .map(ipc_ops::expand_tilde)
+            .or_else(|| self.mux.pane(inv.pane).and_then(|p| p.cwd.clone()));
+        let dir = match place {
+            SpawnWhere::SplitLeft => Some(mt_mux::Dir::Left),
+            SpawnWhere::SplitRight => Some(mt_mux::Dir::Right),
+            SpawnWhere::SplitUp => Some(mt_mux::Dir::Up),
+            SpawnWhere::SplitDown => Some(mt_mux::Dir::Down),
+            SpawnWhere::Tab | SpawnWhere::Window => None,
+        };
+        let local = mt_mux::LOCAL_DOMAIN_ID;
+        let (pane, tab, window) = match dir {
+            Some(d) => {
+                let new = self
+                    .mux
+                    .split_pane_toward(inv.pane, d, 0.5, Some(local), cwd.clone())
+                    .map_err(err)?;
+                let (w, i) = self
+                    .mux
+                    .locate_pane(new)
+                    .ok_or_else(|| RpcError::internal("lost pane"))?;
+                let tab = self.mux.window(w).map_or(0, |w| w.tabs[i].id);
+                (new, tab, w)
+            }
+            None => {
+                let w = if *place == SpawnWhere::Window {
+                    let ws = self.mux.active_workspace().id;
+                    self.mux.spawn_window(Some(ws))
+                } else {
+                    window
+                };
+                let (tab, pane) = self
+                    .mux
+                    .spawn_tab_in(w, local, cwd.clone(), title.clone())
+                    .map_err(err)?;
+                (pane, tab, w)
+            }
+        };
+        let spec = SpawnSpec {
+            cwd,
+            command: Some(argv.clone()),
+            title: title.clone(),
+            env: env.clone(),
+            no_ctl: !ctl,
+            ..Default::default()
+        };
+        if let Err(e) = self.start_terminal((pane, tab, window), spec, (120, 34)) {
+            let _ = self.mux.close_pane(pane);
+            return Err(e);
+        }
+        self.runtime.mark_menu_spawn(pane, *close_on_success);
+        Ok(pane)
+    }
+
     /// Snapshot of the mux with each pane's live terminal facts.
     fn rows(&self) -> Rows {
         self.mux.rows(&|id| {
@@ -280,7 +410,12 @@ impl Host {
     ) -> Result<(), RpcError> {
         let (pane, tab, window) = ids;
         let mut env = self.env.clone();
-        env.extend(ipc_ops::pane_env(pane, tab, window, Some(&self.socket)));
+        if spec.no_ctl {
+            env.extend(ipc_ops::no_ctl_env());
+        } else {
+            env.extend(ipc_ops::pane_env(pane, tab, window, Some(&self.socket)));
+        }
+        env.extend(spec.env);
         let opts = SpawnOptions {
             shell: self.shell.clone(),
             command: spec.command,
@@ -348,7 +483,7 @@ impl Host {
 
     fn split(&mut self, p: &mt_proto::PaneSplitParams) -> Reply {
         let rows = self.rows();
-        let done = ipc_ops::split_model(&mut self.mux, &rows, p)?;
+        let done = ipc_ops::split_model(&mut self.mux, &rows, p)?.result;
         let spec = SpawnSpec {
             cwd: self.mux.pane(done.pane).and_then(|pane| pane.cwd.clone()),
             command: p.command.clone().filter(|c| !c.is_empty()),
@@ -501,7 +636,20 @@ impl Host {
                 })
             }
             // There is no config file watcher to poke without a GUI.
-            Request::ConfigReload | Request::Subscribe(_) => ok(),
+            Request::ConfigReload => {
+                // Only menus read the config after start-up; a broken file keeps the old one.
+                if let Ok(l) = mt_config::load::load(&self.path) {
+                    self.cfg = Arc::new(l.config);
+                }
+                ok()
+            }
+            Request::Subscribe(_) => ok(),
+            Request::MenuList => Ok(mt_ui::menu::list_json(&self.cfg)),
+            Request::MenuShow(p) => {
+                let panes = self.panes.clone();
+                mt_ui::menu::show(&self.cfg, &self.rows(), &p, &|id| panes.get(&id).cloned())
+            }
+            Request::MenuInvoke(p) => self.menu_invoke(&p),
             Request::PaneStatusSet(p) => {
                 let rows = self.rows();
                 ipc_ops::status_set(

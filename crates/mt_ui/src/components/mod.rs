@@ -14,7 +14,7 @@ mod toast;
 mod tooltip;
 
 pub use button::{Button, ButtonStyle, IconButton};
-pub use context_menu::{ContextMenu, ContextMenuItem};
+pub use context_menu::ContextMenu;
 pub use icon::Icon;
 pub use keybinding::KeyBinding;
 pub use list::{ListItem, Picker, PickerRow};

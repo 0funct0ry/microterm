@@ -15,12 +15,10 @@ use mt_term::{
     CellFlags, MouseButton as TButton, MouseEvent, MouseEventKind, ScrollCmd, SelectionKind,
 };
 
-use crate::actions::ACTIONS;
 use crate::app::AppWindow;
-use crate::components::{ContextMenu, ContextMenuItem, ToastKind};
+use crate::components::ToastKind;
 use crate::overlay_stack::OverlayKind;
 use crate::platform::Platform;
-use crate::settings::Settings;
 use crate::theme::Theme;
 
 /// A hyperlink under the pointer. Columns are `start..end` on `row`.
@@ -40,14 +38,6 @@ pub enum Drag {
     Report(TButton),
 }
 
-/// State of the viewport context menu.
-#[derive(Clone, Debug)]
-pub struct ViewportMenu {
-    pub position: Point<Pixels>,
-    pub link: Option<String>,
-    pub has_selection: bool,
-}
-
 #[derive(Default)]
 pub struct MouseState {
     pub drag: Option<Drag>,
@@ -55,7 +45,6 @@ pub struct MouseState {
     pub pointer: Option<Point<Pixels>>,
     pub pointer_hidden: bool,
     pub mods: Modifiers,
-    pub menu: Option<ViewportMenu>,
     pub link_cache: LinkCache,
     /// Last cell (and pixel, for 1016) reported, to drop duplicate motion reports.
     last_report: Option<(usize, usize, usize, usize)>,
@@ -209,7 +198,20 @@ impl AppWindow {
     /// The hyperlink at a cell: an explicit OSC 8 link, else an implicit rule match on the
     /// row text (cached by row hash).
     pub(crate) fn link_at(&mut self, row: usize, col: usize) -> Option<HoverLink> {
-        let snap = self.live()?.snapshot.clone();
+        let pane = self.focused_pane()?;
+        self.link_in(pane, row, col)
+    }
+
+    /// [`Self::link_at`] in any pane of the active tab.
+    pub(crate) fn link_in(&mut self, pane: u64, row: usize, col: usize) -> Option<HoverLink> {
+        let snap = self
+            .tabs
+            .get(self.active_tab)?
+            .pane_view(pane)?
+            .session
+            .as_ref()?
+            .snapshot
+            .clone();
         if row >= snap.rows || col >= snap.cols {
             return None;
         }
@@ -290,7 +292,7 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.overlays.is_empty() || self.mouse.menu.is_some() || self.tab_menu.is_some() {
+        if !self.overlays.is_empty() || self.open_menu.is_some() {
             return;
         }
         let Some(hit) = self.grid_hit(ev.position) else {
@@ -319,20 +321,11 @@ impl AppWindow {
         match ev.button {
             MouseButton::Left => self.left_down(ev, &hit, cx),
             MouseButton::Middle => self.paste_primary(window, cx),
-            MouseButton::Right => match self.cfg.mouse.right_click {
-                mt_config::RightClick::ContextMenu => {
-                    let link = self.link_at(hit.row, hit.col).map(|l| l.target);
-                    let has_selection = self.live().is_some_and(|s| s.term.has_selection());
-                    self.mouse.menu = Some(ViewportMenu {
-                        position: ev.position,
-                        link,
-                        has_selection,
-                    });
-                    cx.notify();
+            MouseButton::Right => {
+                if let Some(pane) = self.focused_pane() {
+                    self.pane_right_click(pane, ev.position, &ev.modifiers, window, cx);
                 }
-                mt_config::RightClick::Paste => self.paste(window, cx),
-                mt_config::RightClick::None => {}
-            },
+            }
             _ => {}
         }
     }
@@ -423,8 +416,7 @@ impl AppWindow {
                     }
                     return;
                 }
-                if !self.overlays.is_empty() || self.mouse.menu.is_some() || self.tab_menu.is_some()
-                {
+                if !self.overlays.is_empty() || self.open_menu.is_some() {
                     return;
                 }
                 let inside = hit.overshoot == 0;
@@ -559,52 +551,6 @@ impl AppWindow {
         true
     }
 
-    /// The viewport context menu (SPEC §10.2). Entry order matches `viewport_menu_select`.
-    pub(crate) fn viewport_menu(
-        &self,
-        menu: ViewportMenu,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let chip = |name: &str| {
-            ACTIONS
-                .iter()
-                .find(|a| a.name == name)
-                .and_then(|a| cx.global::<Settings>().chip(a))
-                .unwrap_or_default()
-        };
-        let has_link = menu.link.is_some();
-        ContextMenu::new("viewport-menu", menu.position)
-            .items(vec![
-                ContextMenuItem::new("Copy")
-                    .chip(chip("Copy"))
-                    .enabled(menu.has_selection),
-                ContextMenuItem::new("Paste").chip(chip("Paste")),
-                ContextMenuItem::new("Select all").chip(chip("SelectAll")),
-                ContextMenuItem::new("Open link").enabled(has_link),
-                ContextMenuItem::new("Copy link").enabled(has_link),
-                ContextMenuItem::new("Search for selection").enabled(menu.has_selection),
-                ContextMenuItem::new("Clear scrollback").chip(chip("ClearScrollback")),
-            ])
-            .on_dismiss({
-                let entity = cx.entity();
-                move |_, app| {
-                    entity.update(app, |this, cx| {
-                        this.mouse.menu = None;
-                        cx.notify();
-                    });
-                }
-            })
-            .on_select({
-                let entity = cx.entity();
-                move |i, window, app| {
-                    entity.update(app, |this, cx| {
-                        this.mouse.menu = None;
-                        this.viewport_menu_select(i, &menu, window, cx);
-                    });
-                }
-            })
-    }
-
     /// Tooltip showing where a hovered link really goes (SPEC §6.3).
     pub(crate) fn link_tooltip(&self, t: &Theme) -> Option<impl IntoElement> {
         let link = self.mouse.hover.as_ref().filter(|l| l.show_target)?;
@@ -707,35 +653,6 @@ impl AppWindow {
         };
         self.search.query = text.lines().next().unwrap_or("").to_string();
         self.open_overlay(OverlayKind::Search, window, cx);
-    }
-
-    /// Runs a context-menu entry. Indices follow `view::viewport_menu`.
-    pub(crate) fn viewport_menu_select(
-        &mut self,
-        index: usize,
-        menu: &ViewportMenu,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match index {
-            0 => {
-                self.copy_selection(cx);
-            }
-            1 => self.paste(window, cx),
-            2 => self.select_all(cx),
-            3 => {
-                if let Some(l) = &menu.link {
-                    self.open_link(&l.clone(), cx);
-                }
-            }
-            4 => {
-                if let Some(l) = &menu.link {
-                    self.copy_link(&l.clone(), cx);
-                }
-            }
-            5 => self.search_selection(window, cx),
-            _ => self.clear_scrollback(cx),
-        }
     }
 }
 

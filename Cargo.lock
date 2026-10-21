@@ -4231,6 +4231,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel 2.5.0",
  "mt_patterns",
+ "mt_proto",
  "notify",
  "proptest",
  "serde",

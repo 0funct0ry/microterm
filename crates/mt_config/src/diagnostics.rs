@@ -101,6 +101,23 @@ pub fn parse_str(src: &str) -> Result<Loaded, Vec<Diagnostic>> {
 
     let mut errors = Vec::new();
     validate(src, &doc, &config, &mut errors);
+    for issue in crate::menu::validate(&config) {
+        let d = Diagnostic::at(
+            src,
+            if issue.warning {
+                Severity::Warning
+            } else {
+                Severity::Error
+            },
+            menu_span(&doc, &issue.loc),
+            issue.message,
+        );
+        if issue.warning {
+            warnings.push(d);
+        } else {
+            errors.push(d);
+        }
+    }
     if errors.is_empty() {
         warnings.sort_by_key(|d| (d.line, d.col));
         Ok(Loaded { config, warnings })
@@ -120,7 +137,64 @@ enum K {
     Table(&'static [(&'static str, K)]),
     /// Array of tables (`[[keys]]`) or array of inline tables.
     Array(&'static [(&'static str, K)]),
+    /// A table whose keys are names (`[context_menu.<id>]`), each a table of these keys.
+    /// The names themselves are checked by semantic validation.
+    Map(&'static [(&'static str, K)]),
 }
+
+const SPAWN_ITEM: &[(&str, K)] = &[
+    ("command", K::Leaf),
+    ("cwd", K::Leaf),
+    ("title", K::Leaf),
+    ("where", K::Leaf),
+    ("close_on_success", K::Leaf),
+    ("ctl", K::Leaf),
+];
+
+const MENU_SUBITEM: &[(&str, K)] = &[
+    ("id", K::Leaf),
+    ("label", K::Leaf),
+    ("icon", K::Leaf),
+    ("when", K::Leaf),
+    ("when_false", K::Leaf),
+    ("confirm", K::Leaf),
+    ("action", K::Leaf),
+    ("send", K::Leaf),
+    ("quote", K::Leaf),
+    ("multiline", K::Leaf),
+    ("spawn", K::Table(SPAWN_ITEM)),
+    ("ctl", K::Leaf),
+    ("submenu", K::Leaf),
+    ("type", K::Leaf),
+    ("include", K::Leaf),
+];
+
+const MENU_ITEM: &[(&str, K)] = &[
+    ("id", K::Leaf),
+    ("label", K::Leaf),
+    ("icon", K::Leaf),
+    ("when", K::Leaf),
+    ("when_false", K::Leaf),
+    ("confirm", K::Leaf),
+    ("action", K::Leaf),
+    ("send", K::Leaf),
+    ("quote", K::Leaf),
+    ("multiline", K::Leaf),
+    ("spawn", K::Table(SPAWN_ITEM)),
+    ("ctl", K::Leaf),
+    ("submenu", K::Array(MENU_SUBITEM)),
+    ("type", K::Leaf),
+    ("include", K::Leaf),
+];
+
+const MENU_CONFIG: &[(&str, K)] = &[
+    ("enabled", K::Leaf),
+    ("mode", K::Leaf),
+    ("builtin", K::Leaf),
+    ("max_rows", K::Leaf),
+    ("trigger", K::Leaf),
+    ("items", K::Array(MENU_ITEM)),
+];
 
 // Declared split trees nest `MAX_SPLIT_DEPTH` levels; the static key table is unrolled to match.
 const PANE_L4: &[(&str, K)] = &[("cwd", K::Leaf), ("command", K::Leaf)];
@@ -312,6 +386,12 @@ const ROOT: &[(&str, K)] = &[
             ("confirm_prompts", K::Leaf),
         ]),
     ),
+    ("context_menu", K::Map(MENU_CONFIG)),
+    ("menu_groups", K::Map(&[("items", K::Array(MENU_ITEM))])),
+    (
+        "menu_security",
+        K::Table(&[("dangerous", K::Leaf), ("confirm_panes", K::Leaf)]),
+    ),
 ];
 
 fn suggest<'a>(unknown: &str, known: &'a [(&'static str, K)]) -> Option<&'a str> {
@@ -373,12 +453,51 @@ fn check_unknown(
                     check_unknown(src, t, children, &full, out);
                 }
             }
+            Some((_, K::Map(children))) => {
+                if let Some(map) = item.as_table_like() {
+                    for (name, entry) in map.iter() {
+                        for t in tables_in(entry) {
+                            check_unknown(src, t, children, &format!("{full}.{name}"), out);
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Semantic validation
+
+/// The source span of a menu issue: the field if named, else the item's first key, else the
+/// menu's own key.
+fn menu_span(doc: &ImDocument<&str>, loc: &crate::menu::Loc) -> Option<Range<usize>> {
+    let path: Vec<&str> = loc.table.iter().map(String::as_str).collect();
+    let (parent, last) = path.split_at(path.len().saturating_sub(1));
+    let key_span = |t: &dyn TableLike, key: &str| {
+        t.get_key_value(key)
+            .and_then(|(k, v)| k.span().or_else(|| v.span()))
+    };
+    let first_key = |t: &dyn TableLike| t.iter().next().and_then(|(k, _)| key_span(t, k));
+    let table = item_at(doc, &path);
+    let Some(i) = loc.item else {
+        let own = item_at(doc, parent)
+            .and_then(|p| p.as_table_like())
+            .and_then(|p| key_span(p, last.first()?));
+        return match (loc.field, table.and_then(|t| t.as_table_like())) {
+            (Some(f), Some(t)) => t.get(f).and_then(|v| v.span()).or(own),
+            _ => own,
+        };
+    };
+    let items = table?.as_table_like()?.get("items")?;
+    let mut t = *tables_in(items).get(i)?;
+    if let Some(j) = loc.sub {
+        t = *tables_in(t.get("submenu")?).get(j)?;
+    }
+    loc.field
+        .and_then(|f| key_span(t, f))
+        .or_else(|| first_key(t))
+}
 
 fn item_at<'a>(doc: &'a ImDocument<&str>, path: &[&str]) -> Option<&'a Item> {
     let mut cur: &Item = doc.as_item();

@@ -1456,3 +1456,212 @@ fn design_workspace_opens_asks_before_discarding_and_returns_focus(cx: &mut Test
     assert_eq!(top(&view, cx), None);
     assert!(viewport_focused(&view, cx));
 }
+
+// ------------------------------------------------------------------ context menus (M11.1)
+
+fn open_menu_rows(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |t, _| {
+        t.open_menu
+            .as_ref()
+            .map(|m| m.nav.rows.iter().map(|r| r.id.clone()).collect())
+            .unwrap_or_default()
+    })
+}
+
+fn right_click(view: &Entity<AppWindow>, cx: &mut VisualTestContext, pane: u64) -> bool {
+    view.update_in(cx, |this, window, cx| {
+        this.pane_right_click(
+            pane,
+            gpui::point(gpui::px(40.), gpui::px(80.)),
+            &gpui::Modifiers::default(),
+            window,
+            cx,
+        )
+    })
+}
+
+#[gpui::test]
+fn right_click_targets_the_clicked_pane_without_moving_focus(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let first = focused(&view, cx);
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    let second = focused(&view, cx);
+    assert!(right_click(&view, cx, first));
+    assert_eq!(
+        focused(&view, cx),
+        second,
+        "right-click does not move focus"
+    );
+    let target = view.read_with(cx, |t, _| t.open_menu.as_ref().unwrap().facts.pane);
+    assert_eq!(target, first);
+    let rows = open_menu_rows(&view, cx);
+    for id in [
+        "panes",
+        "zoom",
+        "swap",
+        "rotate",
+        "split_left",
+        "split_up",
+        "close_pane",
+    ] {
+        assert!(rows.iter().any(|r| r == id), "{id} in {rows:?}");
+    }
+
+    // Type to filter, Enter runs: the new pane goes left of the clicked one and takes focus.
+    cx.simulate_keystrokes("s p l i t space l e");
+    let filter = view.read_with(cx, |t, _| t.open_menu.as_ref().unwrap().nav.filter.clone());
+    assert_eq!(filter, "split le");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |t, _| t.open_menu.is_none()));
+    assert_eq!(pane_ids(&view, cx).len(), 3);
+    let new = focused(&view, cx);
+    let order = cx.update(|_, cx| {
+        let h = crate::mux_host::host(cx);
+        let (w, i) = h.mux.locate_pane(first).unwrap();
+        let tab = &h.mux.window(w).unwrap().tabs[i];
+        tab.tree.panes().iter().map(|p| p.id).collect::<Vec<_>>()
+    });
+    assert_eq!(order, vec![new, first, second], "left of the clicked pane");
+}
+
+#[gpui::test]
+fn menus_open_from_the_keyboard_and_close_with_escape(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowContextMenu("viewport".into()));
+    assert!(view.read_with(cx, |t, _| t.open_menu.is_some()));
+    cx.simulate_keystrokes("down down");
+    let hl = view.read_with(cx, |t, _| t.open_menu.as_ref().unwrap().nav.highlight);
+    assert_eq!(
+        hl,
+        Some(2),
+        "Copy is disabled without a selection: Paste, then Select all"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |t, _| t.open_menu.is_none()));
+    assert!(viewport_focused(&view, cx));
+    // Zoom from the keyboard, through the menu.
+    cx.dispatch_action(SplitHorizontal);
+    cx.run_until_parked();
+    cx.dispatch_action(InvokeMenuItem("viewport/zoom".into()));
+    cx.run_until_parked();
+    let pane = focused(&view, cx);
+    let zoomed = cx.update(|_, cx| {
+        let h = crate::mux_host::host(cx);
+        h.mux
+            .locate_pane(pane)
+            .and_then(|(w, i)| h.mux.window(w).map(|w| w.tabs[i].zoomed))
+            .flatten()
+    });
+    assert!(zoomed.is_some(), "the focused pane is zoomed");
+}
+
+#[gpui::test]
+fn configured_items_appear_in_tab_and_viewport_menus_and_the_palette(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "menus",
+        r#"
+[context_menu.viewport]
+builtin = ["paste"]
+
+[[context_menu.viewport.items]]
+id = "hi"
+label = "Say hi"
+send = "echo hi\n"
+
+[[context_menu.tab.items]]
+id = "dup"
+label = "Duplicate tab"
+spawn = { command = ["sh"] }
+"#,
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    let tab = view.read_with(cx, |t, _| t.tabs[0].id);
+    view.update(cx, |this, cx| {
+        this.open_tab_menu(tab, gpui::point(gpui::px(10.), gpui::px(10.)), cx)
+    });
+    assert_eq!(
+        open_menu_rows(&view, cx),
+        ["close", "close_others", "rename", "dup"]
+    );
+    cx.simulate_keystrokes("escape");
+    let pane = focused(&view, cx);
+    assert!(right_click(&view, cx, pane));
+    assert_eq!(open_menu_rows(&view, cx), ["paste", "config-sep", "hi"]);
+    cx.simulate_keystrokes("escape");
+    cx.dispatch_action(ShowCommandPalette);
+    view.update(cx, |t, _| {
+        t.picker
+            .as_mut()
+            .unwrap()
+            .state
+            .set_query("Viewport menu: Say hi")
+    });
+    assert!(picker_labels(&view, cx).contains(&"Viewport menu: Say hi".to_string()));
+}
+
+#[gpui::test]
+fn items_that_need_confirmation_open_the_dialog(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "menu_confirm",
+        "[[context_menu.viewport.items]]\nid = \"rm\"\nlabel = \"Clean\"\nsend = \"rm -rf build\\n\"\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    cx.dispatch_action(InvokeMenuItem("viewport/rm".into()));
+    assert_eq!(top(&view, cx), Some(OverlayKind::MenuConfirm));
+    let reason = view.read_with(cx, |t, _| {
+        t.menu_confirm.as_ref().unwrap().inv.confirm.clone()
+    });
+    assert_eq!(
+        reason.as_deref(),
+        Some("matches the dangerous pattern \"rm -rf\"")
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None);
+    assert!(view.read_with(cx, |t, _| t.menu_confirm.is_none()));
+}
+
+#[gpui::test]
+fn a_bad_menu_config_keeps_the_previous_menus(cx: &mut TestAppContext) {
+    use crate::settings::{reload, ReloadOutcome};
+    let f = temp_config(
+        "menu_reload",
+        "[[context_menu.viewport.items]]\nid = \"a\"\nlabel = \"A\"\nsend = \"a\"\n",
+    );
+    let app = cx.clone();
+    let (view, vcx) = setup_with_config(cx, f.clone());
+    let pane = focused(&view, vcx);
+    assert!(right_click(&view, vcx, pane));
+    std::fs::write(&f, "[context_menu.viewprot]\nmode = \"append\"\n").unwrap();
+    assert_eq!(app.update(reload), ReloadOutcome::Rejected);
+    let banner = view
+        .read_with(vcx, |t, _| t.config_error.clone())
+        .expect("banner");
+    assert!(
+        banner.contains("unknown menu \"viewprot\" (did you mean \"viewport\"?)"),
+        "{banner}"
+    );
+    assert!(view.read_with(vcx, |t, _| t.cfg.context_menu.contains_key("viewport")));
+    std::fs::write(
+        &f,
+        "[[context_menu.tab.items]]\nlabel = \"x\"\nsend = \"{selection}\"\n",
+    )
+    .unwrap();
+    assert_eq!(app.update(reload), ReloadOutcome::Rejected);
+    let banner = view.read_with(vcx, |t, _| t.config_error.clone()).unwrap();
+    assert!(
+        banner.contains("placeholder {selection} is not available in menu \"tab\""),
+        "{banner}"
+    );
+    // A valid change applies and closes the open menu.
+    std::fs::write(
+        &f,
+        "[[context_menu.viewport.items]]\nid = \"b\"\nlabel = \"B\"\nsend = \"b\"\n",
+    )
+    .unwrap();
+    assert!(matches!(app.update(reload), ReloadOutcome::Applied(_)));
+    assert!(view.read_with(vcx, |t, _| t.open_menu.is_none()));
+    assert!(right_click(&view, vcx, pane));
+    assert!(open_menu_rows(&view, vcx).contains(&"b".to_string()));
+}

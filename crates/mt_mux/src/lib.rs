@@ -21,4 +21,4 @@ pub use model::{
 };
 pub use status::{sanitize, NotifyLimiter, Status, StatusSource, NOTIFY_BURST};
 pub use title::{format_title, should_confirm_close, ConfirmClose, TitleParts};
-pub use tree::{Dir, Rect, SplitRect};
+pub use tree::{Dir, Placement, Rect, SplitRect};

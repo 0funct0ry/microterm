@@ -431,6 +431,76 @@ mod mouse {
     }
 
     #[gpui::test]
+    fn a_selection_item_from_the_config_shows_only_with_a_selection(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("mt_live_menu_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("microterm.toml");
+        std::fs::write(
+            &f,
+            r#"
+[[context_menu.viewport.items]]
+id    = "git_log_s"
+label = "git log -S selection"
+icon  = "search"
+when  = "selection"
+spawn = { command = ["git", "-C", "{cwd}", "log", "-S", "{selection}", "--oneline"], where = "split-right" }
+"#,
+        )
+        .unwrap();
+        cx.update(|cx| cx.set_global(crate::settings::Settings::load(f)));
+        let (view, cx) = setup(cx);
+        run(&view, cx, "echo needle-text");
+        let rows = wait_for(&view, cx, |r| r.starts_with("needle-text"));
+        let row = row_of(&rows, "needle-text");
+        let rows_of_menu = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |this, _| {
+                this.open_menu
+                    .as_ref()
+                    .map(|m| {
+                        m.nav
+                            .rows
+                            .iter()
+                            .map(|r| (r.id.clone(), r.enabled))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+        };
+        let right = |view: &Entity<AppWindow>, cx: &mut VisualTestContext, pos| {
+            view.update_in(cx, |this, window, cx| {
+                this.open_menu = None;
+                this.mouse_down(
+                    &MouseDownEvent {
+                        button: MouseButton::Right,
+                        position: pos,
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        };
+        // No selection: hidden.
+        let pos = cell_pos(&view, cx, row, 2);
+        right(&view, cx, pos);
+        let items = rows_of_menu(&view, cx);
+        assert!(!items.is_empty(), "the menu opened");
+        assert!(!items.iter().any(|(id, _)| id == "git_log_s"), "{items:?}");
+        // Double-click selects a word; right-click on it shows the item, enabled.
+        view.update(cx, |this, _| this.open_menu = None);
+        down(&view, cx, pos, 2, Modifiers::default());
+        up(&view, cx, pos);
+        right(&view, cx, pos);
+        let items = rows_of_menu(&view, cx);
+        assert!(
+            items.iter().any(|(id, on)| id == "git_log_s" && *on),
+            "{items:?}"
+        );
+    }
+
+    #[gpui::test]
     fn right_click_opens_context_menu(cx: &mut TestAppContext) {
         let (view, cx) = setup(cx);
         let pos = cell_pos(&view, cx, 0, 0);
@@ -447,11 +517,17 @@ mod mouse {
                 cx,
             );
         });
-        let menu = view
-            .read_with(cx, |this, _| this.mouse.menu.clone())
-            .expect("menu");
-        assert!(!menu.has_selection);
-        assert!(menu.link.is_none());
+        let (menu, selection, link) = view.read_with(cx, |this, _| {
+            let m = this.open_menu.as_ref().expect("menu");
+            (
+                m.menu,
+                m.facts.values.get("selection").map(str::to_string),
+                m.facts.values.get("link").map(str::to_string),
+            )
+        });
+        assert_eq!(menu, "viewport");
+        assert!(selection.is_none());
+        assert!(link.is_none());
     }
 }
 

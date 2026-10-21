@@ -78,32 +78,43 @@ impl AppWindow {
         self.after_pane_focus_change(window, cx);
     }
 
-    /// SplitHorizontal / SplitVertical: the new pane starts like a new tab would (its cwd per
-    /// `new_tab_cwd`) in the same domain, and takes focus.
-    pub(crate) fn split_focused(
+    /// SplitHorizontal / SplitVertical / Split(dir) on the focused pane.
+    pub(crate) fn split_focused(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pane) = self.focused_pane() {
+            self.split_at(pane, dir, None, window, cx);
+        }
+    }
+
+    /// Splits `pane` toward `dir`. Without a `spec` the new pane starts like a new tab would
+    /// (its cwd per `new_tab_cwd`) in the same domain. The new pane takes focus.
+    pub(crate) fn split_at(
         &mut self,
-        axis: Axis,
+        pane: u64,
+        dir: Dir,
+        spec: Option<SpawnSpec>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
+    ) -> Option<u64> {
         self.leave_tab(cx);
-        let cwd = self.new_tab_cwd(cx);
-        let host = mux_host::host(cx);
-        let domain = host
-            .mux
-            .pane_domain(pane)
-            .unwrap_or(mt_mux::LOCAL_DOMAIN_ID);
-        let spec = SpawnSpec {
-            domain,
-            cwd,
-            ..Default::default()
+        let spec = match spec {
+            Some(spec) => spec,
+            None => {
+                let cwd = self.new_tab_cwd(cx);
+                let domain = mux_host::host(cx)
+                    .mux
+                    .pane_domain(pane)
+                    .unwrap_or(mt_mux::LOCAL_DOMAIN_ID);
+                SpawnSpec {
+                    domain,
+                    cwd,
+                    ..Default::default()
+                }
+            }
         };
-        host.split_pane(pane, axis, 0.5, spec);
+        let new = mux_host::host(cx).split_pane(pane, dir, 0.5, spec);
         self.reconcile(window, cx);
         self.after_pane_focus_change(window, cx);
+        new
     }
 
     /// ClosePane: asks first when `confirm_close` says so; a tab's last pane closes the tab.
@@ -112,22 +123,28 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pane) = self.focused_pane() else {
+        if let Some(pane) = self.focused_pane() {
+            self.request_close_pane(pane, window, cx);
+        }
+    }
+
+    /// Closes `pane` (of the active tab), asking first when `confirm_close` says so.
+    pub(crate) fn request_close_pane(
+        &mut self,
+        pane: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.iter().find(|t| t.pane_view(pane).is_some()) else {
             return;
         };
-        let single = self
-            .tabs
-            .get(self.active_tab)
-            .is_some_and(|t| t.panes.len() <= 1);
-        if single {
-            let id = self.tabs[self.active_tab].id;
+        if tab.panes.len() <= 1 {
+            let id = tab.id;
             self.request_close_tab(id, window, cx);
             return;
         }
-        let busy = self
-            .tabs
-            .get(self.active_tab)
-            .and_then(|t| t.pane_view(pane))
+        let busy = tab
+            .pane_view(pane)
             .and_then(|v| v.session.as_ref())
             .is_some_and(|s| s.term.foreground_process().is_some());
         if mt_mux::should_confirm_close(self.confirm_policy(), busy) {
@@ -186,25 +203,50 @@ impl AppWindow {
     }
 
     pub(crate) fn toggle_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
+        if let Some(pane) = self.focused_pane() {
+            self.toggle_zoom_of(pane, window, cx);
+        }
+    }
+
+    pub(crate) fn toggle_zoom_of(
+        &mut self,
+        pane: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let _ = mux_host::host(cx).mux.toggle_zoom(pane);
         self.reconcile(window, cx);
     }
 
     pub(crate) fn swap_focused(&mut self, dir: Dir, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
+        if let Some(pane) = self.focused_pane() {
+            self.swap_pane_of(pane, dir, window, cx);
+        }
+    }
+
+    pub(crate) fn swap_pane_of(
+        &mut self,
+        pane: u64,
+        dir: Dir,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let _ = mux_host::host(cx).mux.swap_pane(pane, dir);
         self.reconcile(window, cx);
     }
 
     pub(crate) fn rotate_panes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
+        if let Some(pane) = self.focused_pane() {
+            self.rotate_panes_of(pane, window, cx);
+        }
+    }
+
+    pub(crate) fn rotate_panes_of(
+        &mut self,
+        pane: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let _ = mux_host::host(cx).mux.rotate_panes(pane);
         self.reconcile(window, cx);
     }
@@ -254,8 +296,7 @@ impl AppWindow {
             .try_global::<Settings>()
             .is_some_and(|s| s.config.mouse.focus_follows_mouse);
         let busy = !self.overlays.is_empty()
-            || self.mouse.menu.is_some()
-            || self.tab_menu.is_some()
+            || self.open_menu.is_some()
             || self.mouse.drag.is_some()
             || self.divider_drag.is_some();
         if !enabled || busy || self.focused_pane() == Some(pane) {

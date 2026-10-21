@@ -18,7 +18,6 @@ use crate::{
     mock::{Line, SpanStyle, Underline},
     overlay_stack::OverlayKind,
     platform::Platform,
-    settings,
     terminal_view::{paint_terminal, TerminalPaint},
     theme::Theme,
 };
@@ -78,11 +77,8 @@ impl Render for AppWindow {
                 el.child(resize_hud(&t, cols, rows))
             });
 
-        if let Some((position, tab_id)) = self.tab_menu {
-            root = root.child(self.tab_context_menu(position, tab_id, cx));
-        }
-        if let Some(menu) = self.mouse.menu.clone() {
-            root = root.child(self.viewport_menu(menu, cx));
+        if let Some(menu) = self.render_open_menu(cx) {
+            root = root.child(menu);
         }
         if let Some(tip) = self.link_tooltip(&t) {
             root = root.child(tip);
@@ -95,6 +91,9 @@ impl Render for AppWindow {
         }
         if self.close_confirm.is_some() {
             root = root.child(self.close_modal(&t, cx));
+        }
+        if let Some(m) = self.menu_confirm_modal(&t, cx) {
+            root = root.child(m);
         }
         if let Some(prompt) = &self.prompt {
             root = root.child(self.prompt_modal(&t, prompt, cx));
@@ -114,11 +113,20 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &SpawnTab, w, cx| this.on_action_spawn_tab(w, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, w, cx| this.on_action_close_tab(w, cx)))
             .on_action(cx.listener(|this, _: &SplitHorizontal, w, cx| {
-                this.split_focused(mt_mux::Axis::Horizontal, w, cx)
+                this.split_focused(mt_mux::Dir::Right, w, cx)
             }))
             .on_action(cx.listener(|this, _: &SplitVertical, w, cx| {
-                this.split_focused(mt_mux::Axis::Vertical, w, cx)
+                this.split_focused(mt_mux::Dir::Down, w, cx)
             }))
+            .on_action(cx.listener(|this, a: &Split, w, cx| this.split_focused(a.0, w, cx)))
+            .on_action(
+                cx.listener(|this, a: &ShowContextMenu, _, cx| this.show_context_menu(&a.0, cx)),
+            )
+            .on_action(
+                cx.listener(|this, a: &InvokeMenuItem, w, cx| {
+                    this.invoke_menu_address(&a.0, w, cx)
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &ClosePane, w, cx| this.request_close_focused_pane(w, cx)),
             )
@@ -470,8 +478,7 @@ impl AppWindow {
                         cx.listener(move |this, _, w, cx| this.request_close_tab(id, w, cx)),
                     )
                     .on_right_click(cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                        this.tab_menu = Some((e.position, id));
-                        cx.notify();
+                        this.open_tab_menu(id, e.position, cx);
                     })),
             );
         }
@@ -483,52 +490,6 @@ impl AppWindow {
                     cx.listener(|this, _, w, cx| this.open_overlay(OverlayKind::Launcher, w, cx)),
                 ),
         )
-    }
-
-    fn tab_context_menu(
-        &self,
-        position: gpui::Point<gpui::Pixels>,
-        tab_id: u64,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let close_chip = ACTIONS
-            .iter()
-            .find(|a| a.name == "CloseTab")
-            .and_then(|a| cx.global::<settings::Settings>().chip(a))
-            .unwrap_or_default();
-        ContextMenu::new("tab-menu", position)
-            .items(vec![
-                ContextMenuItem::new("Close tab").chip(close_chip),
-                ContextMenuItem::new("Close other tabs"),
-                ContextMenuItem::new("Rename…"),
-            ])
-            .on_dismiss({
-                let entity = cx.entity();
-                move |_, app| {
-                    entity.update(app, |this, cx| {
-                        this.tab_menu = None;
-                        cx.notify();
-                    });
-                }
-            })
-            .on_select({
-                let entity = cx.entity();
-                move |i, window, app| {
-                    entity.update(app, |this, cx| {
-                        this.tab_menu = None;
-                        match i {
-                            0 => this.request_close_tab(tab_id, window, cx),
-                            1 => this.close_other_tabs(tab_id, window, cx),
-                            _ => {
-                                if let Some(index) = this.tabs.iter().position(|t| t.id == tab_id) {
-                                    this.activate_tab(index, cx);
-                                }
-                                this.begin_rename(cx);
-                            }
-                        }
-                    });
-                }
-            })
     }
 
     // ------------------------------------------------------------------ viewport
@@ -782,6 +743,39 @@ impl AppWindow {
                             if is_focus {
                                 window.set_cursor_style(pointer, &hitbox);
                                 Self::register_mouse(&entity, hitbox.clone(), window);
+                            }
+                            if !is_focus {
+                                // Right-click on another pane opens its menu without moving
+                                // focus (SPEC §10.9.1); the focused pane does it in `mouse_down`.
+                                let (e, hb) = (entity.clone(), hitbox.clone());
+                                window.on_mouse_event(
+                                    move |ev: &gpui::MouseDownEvent, phase, window, cx| {
+                                        if phase == gpui::DispatchPhase::Bubble
+                                            && ev.button == MouseButton::Right
+                                            && hb.is_hovered(window)
+                                        {
+                                            e.update(cx, |this, cx| {
+                                                let reporting = this
+                                                    .tabs
+                                                    .get(this.active_tab)
+                                                    .and_then(|t| t.pane_view(pane))
+                                                    .and_then(|v| v.session.as_ref())
+                                                    .is_some_and(|s| {
+                                                        s.snapshot.modes.mouse_reporting
+                                                    });
+                                                if !reporting || ev.modifiers.shift {
+                                                    this.pane_right_click(
+                                                        pane,
+                                                        ev.position,
+                                                        &ev.modifiers,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            });
+                                        }
+                                    },
+                                );
                             }
                             if multi {
                                 let (e, hb) = (entity.clone(), hitbox);

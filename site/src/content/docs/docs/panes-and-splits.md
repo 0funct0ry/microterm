@@ -24,6 +24,7 @@ under `[[keys]]` (see the [action reference](/docs/reference/actions/)):
 
 | Action | What it does |
 |---|---|
+| `Split` | Split toward any side: `{ Split = "left" }` puts the new pane left of the focused one (`"up"` above). "Split pane left" and "Split pane up" are in the palette. |
 | `ClosePane` | Close the focused pane. The last pane of a tab closes the tab. |
 | `TogglePaneZoom` | Show the focused pane full-size; again to restore. Moving focus to another pane, or splitting, leaves zoom. |
 | `ResizePane` | Move the focused pane's border: `{ ResizePane = { direction = "left", cells = 5 } }`. |
@@ -45,6 +46,9 @@ runs a program asks first.
 
 ## Mouse
 
+- **Right-click** any pane for its [context menu](/docs/context-menus/): the **Panes** group
+  zooms, swaps, rotates, splits (left, right, up or down) and closes *that* pane, without first
+  moving focus to it. A split's new pane takes focus.
 - **Click** a pane to focus it. The first click only focuses; it is not sent to the program.
 - **Drag a divider** (a 1 px line with a 6 px grab area) to resize the two sides of the split.
 - The **wheel** scrolls the pane under the pointer without changing focus.
@@ -113,6 +117,8 @@ splits included.
 
 ```sh
 microterm ctl pane split --horizontal                  # split the pane you are in
+microterm ctl pane split --pane 3 --direction left     # new pane left of pane 3 (or up/right/down)
+microterm ctl menu invoke viewport/split_up --pane 3   # the same through the context menu
 eval "$(microterm ctl pane split --vertical --percent 30 -- htop)"   # sets tab= pane= window=
 microterm ctl pane focus --direction left
 microterm ctl pane zoom

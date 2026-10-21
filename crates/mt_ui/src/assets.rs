@@ -14,23 +14,44 @@ macro_rules! embed {
 const FILES: &[(&str, &[u8])] = embed![
     "icons/arrow-down.svg",
     "icons/arrow-up.svg",
+    "icons/book-open.svg",
+    "icons/bug.svg",
     "icons/case-sensitive.svg",
     "icons/check.svg",
     "icons/chevron-down.svg",
+    "icons/chevron-right.svg",
     "icons/circle-x.svg",
+    "icons/clipboard.svg",
+    "icons/code.svg",
+    "icons/columns-2.svg",
     "icons/copy.svg",
+    "icons/eye.svg",
+    "icons/file-text.svg",
+    "icons/file.svg",
+    "icons/folder-open.svg",
     "icons/folder.svg",
+    "icons/git-branch.svg",
+    "icons/git-commit-horizontal.svg",
+    "icons/git-pull-request.svg",
+    "icons/globe.svg",
     "icons/info.svg",
     "icons/layers.svg",
+    "icons/link.svg",
     "icons/maximize-2.svg",
     "icons/minus.svg",
     "icons/palette.svg",
+    "icons/pencil.svg",
+    "icons/play.svg",
     "icons/plus.svg",
     "icons/refresh-cw.svg",
     "icons/regex.svg",
+    "icons/rotate-cw.svg",
+    "icons/rows-2.svg",
     "icons/search.svg",
+    "icons/server.svg",
     "icons/square.svg",
     "icons/terminal.svg",
+    "icons/trash-2.svg",
     "icons/triangle-alert.svg",
     "icons/wifi-off.svg",
     "icons/x.svg",
@@ -139,50 +160,149 @@ fn register_fallback_fonts_with_coretext() {
 pub enum IconName {
     ArrowDown,
     ArrowUp,
+    BookOpen,
+    Bug,
     CaseSensitive,
     Check,
     ChevronDown,
+    ChevronRight,
     CircleX,
+    Clipboard,
+    Code,
+    Columns2,
     Copy,
+    Eye,
+    File,
+    FileText,
     Folder,
+    FolderOpen,
+    GitBranch,
+    GitCommitHorizontal,
+    GitPullRequest,
+    Globe,
     Info,
     Layers,
+    Link,
     Maximize,
     Minus,
     Palette,
+    Pencil,
+    Play,
     Plus,
     RefreshCw,
     Regex,
+    RotateCw,
+    Rows2,
     Search,
+    Server,
     Square,
     Terminal,
+    Trash2,
     TriangleAlert,
     WifiOff,
     X,
 }
 
 impl IconName {
+    /// Every icon, in file order.
+    pub const ALL: &'static [IconName] = &[
+        Self::ArrowDown,
+        Self::ArrowUp,
+        Self::BookOpen,
+        Self::Bug,
+        Self::CaseSensitive,
+        Self::Check,
+        Self::ChevronDown,
+        Self::ChevronRight,
+        Self::CircleX,
+        Self::Clipboard,
+        Self::Code,
+        Self::Columns2,
+        Self::Copy,
+        Self::Eye,
+        Self::File,
+        Self::FileText,
+        Self::Folder,
+        Self::FolderOpen,
+        Self::GitBranch,
+        Self::GitCommitHorizontal,
+        Self::GitPullRequest,
+        Self::Globe,
+        Self::Info,
+        Self::Layers,
+        Self::Link,
+        Self::Maximize,
+        Self::Minus,
+        Self::Palette,
+        Self::Pencil,
+        Self::Play,
+        Self::Plus,
+        Self::RefreshCw,
+        Self::Regex,
+        Self::RotateCw,
+        Self::Rows2,
+        Self::Search,
+        Self::Server,
+        Self::Square,
+        Self::Terminal,
+        Self::Trash2,
+        Self::TriangleAlert,
+        Self::WifiOff,
+        Self::X,
+    ];
+
+    /// The icon a config names by its Lucide file name (`icon = "maximize-2"`).
+    pub fn from_name(name: &str) -> Option<IconName> {
+        Self::ALL.iter().copied().find(|i| {
+            i.path()
+                .strip_prefix("icons/")
+                .and_then(|p| p.strip_suffix(".svg"))
+                == Some(name)
+        })
+    }
+
     pub fn path(self) -> &'static str {
         match self {
             Self::ArrowDown => "icons/arrow-down.svg",
             Self::ArrowUp => "icons/arrow-up.svg",
+            Self::BookOpen => "icons/book-open.svg",
+            Self::Bug => "icons/bug.svg",
             Self::CaseSensitive => "icons/case-sensitive.svg",
             Self::Check => "icons/check.svg",
             Self::ChevronDown => "icons/chevron-down.svg",
+            Self::ChevronRight => "icons/chevron-right.svg",
             Self::CircleX => "icons/circle-x.svg",
+            Self::Clipboard => "icons/clipboard.svg",
+            Self::Code => "icons/code.svg",
+            Self::Columns2 => "icons/columns-2.svg",
             Self::Copy => "icons/copy.svg",
+            Self::Eye => "icons/eye.svg",
+            Self::File => "icons/file.svg",
+            Self::FileText => "icons/file-text.svg",
             Self::Folder => "icons/folder.svg",
+            Self::FolderOpen => "icons/folder-open.svg",
+            Self::GitBranch => "icons/git-branch.svg",
+            Self::GitCommitHorizontal => "icons/git-commit-horizontal.svg",
+            Self::GitPullRequest => "icons/git-pull-request.svg",
+            Self::Globe => "icons/globe.svg",
             Self::Info => "icons/info.svg",
             Self::Layers => "icons/layers.svg",
+            Self::Link => "icons/link.svg",
             Self::Maximize => "icons/maximize-2.svg",
             Self::Minus => "icons/minus.svg",
             Self::Palette => "icons/palette.svg",
+            Self::Pencil => "icons/pencil.svg",
+            Self::Play => "icons/play.svg",
             Self::Plus => "icons/plus.svg",
             Self::RefreshCw => "icons/refresh-cw.svg",
             Self::Regex => "icons/regex.svg",
+            Self::RotateCw => "icons/rotate-cw.svg",
+            Self::Rows2 => "icons/rows-2.svg",
             Self::Search => "icons/search.svg",
+            Self::Server => "icons/server.svg",
             Self::Square => "icons/square.svg",
             Self::Terminal => "icons/terminal.svg",
+            Self::Trash2 => "icons/trash-2.svg",
             Self::TriangleAlert => "icons/triangle-alert.svg",
             Self::WifiOff => "icons/wifi-off.svg",
             Self::X => "icons/x.svg",
@@ -196,37 +316,23 @@ mod tests {
 
     #[test]
     fn every_icon_is_embedded() {
-        let all = [
-            IconName::ArrowDown,
-            IconName::ArrowUp,
-            IconName::CaseSensitive,
-            IconName::Check,
-            IconName::ChevronDown,
-            IconName::CircleX,
-            IconName::Copy,
-            IconName::Folder,
-            IconName::Info,
-            IconName::Layers,
-            IconName::Maximize,
-            IconName::Minus,
-            IconName::Palette,
-            IconName::Plus,
-            IconName::RefreshCw,
-            IconName::Regex,
-            IconName::Search,
-            IconName::Square,
-            IconName::Terminal,
-            IconName::TriangleAlert,
-            IconName::WifiOff,
-            IconName::X,
-        ];
-        for icon in all {
+        let all = IconName::ALL;
+        for &icon in all {
             let bytes = Assets.load(icon.path()).unwrap();
             assert!(
                 bytes.is_some_and(|b| b.starts_with(b"<!--") || b.starts_with(b"<svg")),
                 "{icon:?}"
             );
         }
+    }
+
+    #[test]
+    fn config_icon_names_match_the_bundle() {
+        for name in mt_config::menu::ICON_NAMES {
+            assert!(IconName::from_name(name).is_some(), "{name}");
+        }
+        assert_eq!(IconName::ALL.len(), mt_config::menu::ICON_NAMES.len());
+        assert_eq!(IconName::from_name("maximize-2"), Some(IconName::Maximize));
     }
 
     #[test]

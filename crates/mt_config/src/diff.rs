@@ -18,6 +18,8 @@ pub enum Effect {
     NewPanesOnly,
     /// Needs an app restart; the banner says so.
     RestartRequired,
+    /// Context menus: resolved at the next open; an open menu closes (SPEC §10.9.2).
+    Menus,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,6 +101,13 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
         old.keys != new.keys || old.copy_mode != new.copy_mode,
         "keys",
         &[Keymap],
+    );
+    d.mark(
+        old.context_menu != new.context_menu
+            || old.menu_groups != new.menu_groups
+            || old.menu_security != new.menu_security,
+        "context_menu",
+        &[Menus],
     );
     d.mark(
         old.quick_select != new.quick_select
