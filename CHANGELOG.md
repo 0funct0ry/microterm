@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **M11.01 — Workspace designer.** `DesignWorkspace` (palette "Design Workspace…", switcher "Edit
+  workspace…", and "Save current layout as workspace…") opens a modal that edits declared
+  workspaces visually and writes only `[[workspaces]]` and `startup_workspace` back to
+  `microterm.toml` in the nested array-of-tables form (rest of the file byte-identical, stale and
+  unparsable files refused, `.bak`, atomic write, self-write reload is a no-op). `cwd` on a tab or
+  split is inherited by descendant leaves, `command` accepts a string or an array, and workspace
+  validation is shared and reports tree paths.
 - **M11 — Splits and focus follows mouse.** A tab holds a tree of panes (`PaneTree::Split`
   from M5 is now live): `SplitHorizontal` / `SplitVertical` (`⌘D` / `⌘⇧D`, `Ctrl+Shift+D` /
   `Ctrl+Shift+E`), `ActivatePaneDirection` (`⌘⌥←↑→↓`, `Ctrl+Alt+←↑→↓`), `ClosePane`,

@@ -380,3 +380,36 @@ fn nested_pane_keys_are_checked_for_typos() {
         l.warnings
     );
 }
+
+#[test]
+fn command_accepts_string_or_array_and_cwd_inherits_via_split_nodes() {
+    let c = parse_str(
+        "[[workspaces]]\nname = \"a\"\n[[workspaces.tabs]]\ncwd = \"~/x\"\nsplit = \"vertical\"\n\
+         [[workspaces.tabs.panes]]\ncommand = \"cargo watch -x 'test all'\"\n\
+         [[workspaces.tabs.panes]]\ncommand = [\"htop\"]\n",
+    )
+    .expect("valid")
+    .config;
+    let t = &c.workspaces[0].tabs[0];
+    assert_eq!(t.panes[0].command, vec!["cargo", "watch", "-x", "test all"]);
+    assert_eq!(t.panes[1].command, vec!["htop"]);
+}
+
+#[test]
+fn workspace_issues_are_path_addressed() {
+    use mt_config::{validate_workspaces, SplitKind, WorkspaceDef, WorkspacePane, WorkspaceTab};
+    let tab = WorkspaceTab {
+        title: None,
+        cwd: None,
+        command: vec![],
+        split: Some(SplitKind::Horizontal),
+        percent: Some(100),
+        panes: vec![WorkspacePane::default(), WorkspacePane::default()],
+    };
+    let w = [WorkspaceDef {
+        name: "a".into(),
+        tabs: vec![tab],
+    }];
+    let issues = validate_workspaces(&w, "default");
+    assert_eq!(issues[0].path, "workspaces[0].tabs[0]");
+}

@@ -180,6 +180,27 @@ pub enum ReloadOutcome {
 /// Re-reads the config file and applies it to every window, or keeps the previous config and
 /// shows the banner. Never call this from inside an `AppWindow` update (defer it).
 pub fn reload(cx: &mut App) -> ReloadOutcome {
+    let outcome = reload_inner(cx);
+    let mut last = LAST_APPLIED.lock().unwrap();
+    *last = match outcome {
+        ReloadOutcome::Rejected => None,
+        _ => std::fs::read_to_string(&cx.global::<Settings>().path)
+            .ok()
+            .map(|t| mt_config::edit::content_hash(&t)),
+    };
+    outcome
+}
+
+/// Hash of the file text the active config was built from; a reload of identical text (the
+/// watcher firing for the designer's own write, SPEC §8.5) is a no-op.
+static LAST_APPLIED: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+fn reload_inner(cx: &mut App) -> ReloadOutcome {
+    if let Ok(text) = std::fs::read_to_string(&cx.global::<Settings>().path) {
+        if *LAST_APPLIED.lock().unwrap() == Some(mt_config::edit::content_hash(&text)) {
+            return ReloadOutcome::Unchanged;
+        }
+    }
     let (path, old_cfg, old_registry, platform) = {
         let s = cx.global::<Settings>();
         (

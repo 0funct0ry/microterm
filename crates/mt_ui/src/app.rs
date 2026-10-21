@@ -153,6 +153,8 @@ pub enum Target {
     ConnectHost,
     Workspace(String),
     CreateWorkspace,
+    /// Opens the workspace designer on the active workspace.
+    EditWorkspace,
     Theme(usize),
     /// Index into this window's tabs.
     Tab(usize),
@@ -228,6 +230,11 @@ pub struct AppWindow {
     pub(crate) renaming: Option<(u64, String)>,
     pub(crate) close_confirm: Option<CloseTarget>,
     pub(crate) prompt: Option<NamePrompt>,
+    pub(crate) designer: Option<crate::designer::Designer>,
+    /// Where each designer text field's text was painted, for mouse hit-testing.
+    pub(crate) designer_layout: crate::designer_view::FieldLayouts,
+    /// The designer field a left-button drag is selecting in.
+    pub(crate) designer_drag: Option<crate::designer::Field>,
     last_window_title: String,
     size_epoch: u64,
     pub(crate) overlays: OverlayStack,
@@ -352,6 +359,9 @@ impl AppWindow {
             renaming: None,
             close_confirm: None,
             prompt: None,
+            designer: None,
+            designer_layout: Default::default(),
+            designer_drag: None,
             last_window_title: String::new(),
             size_epoch: 0,
             overlays: OverlayStack::default(),
@@ -1169,6 +1179,7 @@ impl AppWindow {
             OverlayKind::PasteConfirm
             | OverlayKind::CloseConfirm
             | OverlayKind::NamePrompt
+            | OverlayKind::WorkspaceDesigner
             | OverlayKind::SshPrompt => {}
         }
     }
@@ -1181,6 +1192,9 @@ impl AppWindow {
         }
         if self.overlays.top() == Some(OverlayKind::CopyMode) {
             self.copy_escape(window, cx);
+            return;
+        }
+        if self.overlays.top() == Some(OverlayKind::WorkspaceDesigner) && self.designer_escape(cx) {
             return;
         }
         if let Some(kind) = self.overlays.dismiss_top() {
@@ -1232,6 +1246,7 @@ impl AppWindow {
             OverlayKind::PasteConfirm => self.paste_confirm = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
+            OverlayKind::WorkspaceDesigner => self.designer = None,
         }
     }
 
@@ -1280,6 +1295,9 @@ impl AppWindow {
                 let mut create = Entry::new(Target::CreateWorkspace, "workspace:create");
                 create.icon = Some(IconName::Plus);
                 items.push(("Create workspace…".to_string(), create));
+                let mut edit = Entry::new(Target::EditWorkspace, "workspace:edit");
+                edit.icon = Some(IconName::Layers);
+                items.push(("Edit workspace…".to_string(), edit));
                 let mut state = PickerState::new(items);
                 state.select(active);
                 PickerData {
@@ -1580,6 +1598,10 @@ impl AppWindow {
             Target::Workspace(name) => self.switch_workspace_named(name, false, cx),
             Target::CreateWorkspace => {
                 self.begin_prompt(PromptKind::CreateWorkspace, String::new(), window, cx)
+            }
+            Target::EditWorkspace => {
+                let name = mux_host::host(cx).mux.active_workspace().name.clone();
+                self.open_designer(Some(name), None, window, cx)
             }
             Target::Theme(i) => {
                 let registry = cx.global::<Settings>().registry.clone();
@@ -2332,6 +2354,7 @@ impl AppWindow {
                 }
             }
             Some(OverlayKind::NamePrompt) => self.prompt_key(ev, window, cx),
+            Some(OverlayKind::WorkspaceDesigner) => self.designer_key(ev, window, cx),
             None => {}
         }
     }

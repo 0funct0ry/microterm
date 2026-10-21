@@ -7,6 +7,8 @@ pub mod assets;
 mod builtin_glyphs;
 pub mod components;
 pub mod copy_mode;
+pub mod designer;
+mod designer_view;
 mod gpu_check;
 pub mod ipc_ops;
 pub mod ipc_pending;

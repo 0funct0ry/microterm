@@ -79,20 +79,51 @@ startup_workspace = "api"
 
 [[workspaces]]
 name = "api"
-tabs = [
-  { title = "server", cwd = "~/src/api", command = ["cargo", "run"] },
-  { title = "logs",   cwd = "~/src/api" },
-]
+
+[[workspaces.tabs]]
+title = "server"
+cwd = "~/src/api"
+command = ["cargo", "run"]
+
+[[workspaces.tabs]]
+title = "logs"
+cwd = "~/src/api"
 
 [[workspaces]]
 name = "infra"
-tabs = [{ title = "ssh", command = ["ssh", "prod"] }]
+
+[[workspaces.tabs]]
+title = "ssh"
+command = "ssh prod"      # a string is split like a shell would; an array is canonical
 ```
 
+The nested array-of-tables form above is the recommended spelling (inline `tabs = [ … ]` still
+works). `cwd` on a tab or a split node is inherited by every descendant pane that does not set its
+own.
 Declared workspaces appear in the switcher at once and start their tabs the first time you switch
 to them. `microterm --workspace infra` starts straight in a workspace (it is created if it is not
 declared). `--cwd DIR` and `-e CMD…` apply to the first tab. Tabs can start as
 [split panes](/docs/panes-and-splits/#declared-splits).
+
+### Workspace designer
+
+Instead of typing nested TOML, run **Design Workspace…** from the command palette (or
+**Edit workspace…** in the workspace switcher). The modal lists your workspaces (★ marks the
+startup workspace; New, Duplicate and Delete edit the list), the selected workspace's name and tab
+strip, a split canvas with Split right / Split down / Close pane / Swap and a depth counter, and
+an inspector for the selected pane's `cwd` and `command`. Arrow keys nudge the selected pane's
+divider in steps of 5. **TOML preview** shows exactly what Save will change. Each control maps
+one-to-one onto the `[[workspaces]]` config, and the inspector's path label is the TOML path.
+
+**Save to config** rewrites only `[[workspaces]]` and `startup_workspace`, in the nested form;
+the rest of `microterm.toml` and any untouched workspace stay byte-identical. Comments inside a
+workspace that was rewritten are lost, and the previous file is kept as `microterm.toml.bak`. If
+the file changed on disk while the designer was open, or does not parse, Save refuses. Save is
+disabled while the layout is invalid. New workspaces appear in the switcher at once; edits to an
+existing workspace apply when its windows are next created. Running workspaces are never torn down.
+
+**Save current layout as workspace…** opens the designer seeded from the active tab's pane tree
+(cwds and split ratios; commands are left empty).
 
 ## One instance
 

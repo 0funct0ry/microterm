@@ -418,45 +418,71 @@ fn validate_tabs_and_workspaces(c: &Config, err: &mut impl FnMut(&[&str], String
             "new_tab_cwd must be \"inherit\", \"home\" or an absolute path".into(),
         );
     }
-    for w in &c.workspaces {
-        for (i, tab) in w.tabs.iter().enumerate() {
-            let mut fail = |msg: String| {
-                err(
-                    &["workspaces"],
-                    format!("workspace \"{}\" tab {}: {msg}", w.name, i + 1),
-                )
+    for issue in validate_workspaces(&c.workspaces, &c.startup_workspace) {
+        let key = if issue.path == "startup_workspace" {
+            "startup_workspace"
+        } else {
+            "workspaces"
+        };
+        err(&[key], format!("{}: {}", issue.path, issue.message));
+    }
+}
+
+/// One problem in a declared-workspace tree, addressed like `workspaces[0].tabs[1].panes[0]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceIssue {
+    pub path: String,
+    pub message: String,
+}
+
+/// The single workspace validator, shared by config load and the workspace designer.
+pub fn validate_workspaces(
+    workspaces: &[crate::WorkspaceDef],
+    startup: &str,
+) -> Vec<WorkspaceIssue> {
+    let mut out = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for (wi, w) in workspaces.iter().enumerate() {
+        let wpath = format!("workspaces[{wi}]");
+        if w.name.trim().is_empty() {
+            out.push(WorkspaceIssue {
+                path: wpath.clone(),
+                message: "workspace name must not be empty".into(),
+            });
+        } else if seen.contains(&w.name.as_str()) {
+            out.push(WorkspaceIssue {
+                path: wpath.clone(),
+                message: format!("workspace \"{}\" is defined more than once", w.name),
+            });
+        }
+        seen.push(&w.name);
+        for (ti, tab) in w.tabs.iter().enumerate() {
+            let tpath = format!("{wpath}.tabs[{ti}]");
+            let mut fail = |path: &str, msg: String| {
+                out.push(WorkspaceIssue {
+                    path: path.to_string(),
+                    message: msg,
+                })
             };
             if tab.split.is_none() {
                 if tab.percent.is_some() || !tab.panes.is_empty() {
-                    fail("`percent` and `panes` need `split`".into());
+                    fail(&tpath, "`percent` and `panes` need `split`".into());
                 }
             } else {
-                validate_split(tab.split, tab.percent, &tab.panes, 1, &mut fail);
-                if !tab.command.is_empty() || tab.cwd.is_some() {
-                    fail("a split tab takes `cwd` and `command` on its panes".into());
+                validate_split(tab.split, tab.percent, &tab.panes, 1, &tpath, &mut fail);
+                if !tab.command.is_empty() {
+                    fail(&tpath, "a split tab takes `command` on its panes".into());
                 }
             }
         }
     }
-    let mut seen: Vec<&str> = Vec::new();
-    for w in &c.workspaces {
-        if w.name.trim().is_empty() {
-            err(&["workspaces"], "workspace name must not be empty".into());
-        } else if seen.contains(&w.name.as_str()) {
-            err(
-                &["workspaces"],
-                format!("workspace \"{}\" is defined more than once", w.name),
-            );
-        }
-        seen.push(&w.name);
+    if startup != "default" && !seen.contains(&startup) {
+        out.push(WorkspaceIssue {
+            path: "startup_workspace".into(),
+            message: format!("startup_workspace \"{startup}\" is not defined in [[workspaces]]"),
+        });
     }
-    let start = c.startup_workspace.as_str();
-    if start != "default" && !seen.contains(&start) {
-        err(
-            &["startup_workspace"],
-            format!("startup_workspace \"{start}\" is not defined in [[workspaces]]"),
-        );
-    }
+    out
 }
 
 fn validate_split(
@@ -464,36 +490,38 @@ fn validate_split(
     percent: Option<u8>,
     panes: &[crate::WorkspacePane],
     depth: usize,
-    fail: &mut impl FnMut(String),
+    path: &str,
+    fail: &mut impl FnMut(&str, String),
 ) {
     if split.is_none() {
         return;
     }
     if depth > crate::MAX_SPLIT_DEPTH {
-        fail(format!(
-            "splits nest at most {} deep",
-            crate::MAX_SPLIT_DEPTH
-        ));
+        fail(
+            path,
+            format!("splits nest at most {} deep", crate::MAX_SPLIT_DEPTH),
+        );
         return;
     }
     if panes.len() != 2 {
-        fail(format!(
-            "a split needs exactly 2 `panes`, found {}",
-            panes.len()
-        ));
+        fail(
+            path,
+            format!("a split needs exactly 2 `panes`, found {}", panes.len()),
+        );
         return;
     }
     if percent.is_some_and(|p| !(1..=99).contains(&p)) {
-        fail("`percent` must be between 1 and 99".into());
+        fail(path, "`percent` must be between 1 and 99".into());
     }
-    for p in panes {
+    for (i, p) in panes.iter().enumerate() {
+        let ppath = format!("{path}.panes[{i}]");
         if p.split.is_none() && (p.percent.is_some() || !p.panes.is_empty()) {
-            fail("`percent` and `panes` need `split`".into());
+            fail(&ppath, "`percent` and `panes` need `split`".into());
         }
-        if p.split.is_some() && (!p.command.is_empty() || p.cwd.is_some()) {
-            fail("a split takes `cwd` and `command` on its panes".into());
+        if p.split.is_some() && !p.command.is_empty() {
+            fail(&ppath, "a split takes `command` on its panes".into());
         }
-        validate_split(p.split, p.percent, &p.panes, depth + 1, fail);
+        validate_split(p.split, p.percent, &p.panes, depth + 1, &ppath, fail);
     }
 }
 

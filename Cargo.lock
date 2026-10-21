@@ -4232,6 +4232,7 @@ dependencies = [
  "async-channel 2.5.0",
  "mt_patterns",
  "notify",
+ "proptest",
  "serde",
  "strsim",
  "thiserror 2.0.21",

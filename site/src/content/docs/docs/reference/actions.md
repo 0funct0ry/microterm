@@ -62,6 +62,8 @@ action = "Disable"   # unbind a default
 |---|---|---|---|
 | `CreateWorkspace` | **Create workspace** — Create a workspace and switch to it | — | — |
 | `RenameWorkspace` | **Rename workspace** — Rename the active workspace | — | — |
+| `DesignWorkspace` | **Design Workspace…** — Edit declared workspaces visually and save them to the config | — | — |
+| `SaveLayoutAsWorkspace` | **Save current layout as workspace…** — Open the workspace designer seeded from the active tab's pane layout | — | — |
 | `ShowWorkspaceSwitcher` | **Switch workspace** — Pick or create a workspace | `⌘⌥W` | `Ctrl+Alt+W` |
 | `SwitchWorkspaceRelative(1)` | **Next workspace** — Switch to the next workspace | `⌘⌥]` | `Ctrl+Alt+]` |
 | `SwitchWorkspaceRelative(-1)` | **Previous workspace** — Switch to the previous workspace | `⌘⌥[` | `Ctrl+Alt+[` |

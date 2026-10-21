@@ -14,6 +14,7 @@ pub enum OverlayKind {
     PasteConfirm,
     CloseConfirm,
     NamePrompt,
+    WorkspaceDesigner,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -36,7 +37,9 @@ impl OverlayKind {
             Self::QuickSelect | Self::CopyMode => Class::Mode,
             Self::Search => Class::Search,
             Self::PasteConfirm => Class::Paste,
-            Self::CloseConfirm | Self::NamePrompt | Self::SshPrompt => Class::Dialog,
+            Self::CloseConfirm | Self::NamePrompt | Self::SshPrompt | Self::WorkspaceDesigner => {
+                Class::Dialog
+            }
         }
     }
 }

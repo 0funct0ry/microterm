@@ -28,6 +28,8 @@ actions!(
         RenameTab,
         CreateWorkspace,
         RenameWorkspace,
+        DesignWorkspace,
+        SaveLayoutAsWorkspace,
         ToggleFullscreen,
         Copy,
         Paste,
@@ -282,6 +284,22 @@ pub static ACTIONS: &[ActionDef] = &[
         &[],
         &[],
         RenameWorkspace
+    ),
+    def!(
+        "DesignWorkspace",
+        "Design Workspace…",
+        "Edit declared workspaces visually and save them to the config",
+        &[],
+        &[],
+        DesignWorkspace
+    ),
+    def!(
+        "SaveLayoutAsWorkspace",
+        "Save current layout as workspace…",
+        "Open the workspace designer seeded from the active tab's pane layout",
+        &[],
+        &[],
+        SaveLayoutAsWorkspace
     ),
     def!(
         "SplitHorizontal",
@@ -739,7 +757,9 @@ impl ActionDef {
             | "SwitchWorkspace"
             | "SwitchWorkspaceRelative"
             | "CreateWorkspace"
-            | "RenameWorkspace" => "Workspaces",
+            | "RenameWorkspace"
+            | "DesignWorkspace"
+            | "SaveLayoutAsWorkspace" => "Workspaces",
             "Copy" | "Paste" | "PastePrimary" | "SelectAll" | "ClearScrollback"
             | "ScrollByPage" | "ScrollByLine" | "ScrollToTop" | "ScrollToBottom"
             | "ScrollToPrompt" => "Clipboard & scroll",
@@ -1225,6 +1245,8 @@ mod tests {
             "SwitchWorkspaceRelative(1)",
             "CreateWorkspace",
             "RenameWorkspace",
+            "DesignWorkspace",
+            "SaveLayoutAsWorkspace",
             "Copy",
             "Paste",
             "PastePrimary",

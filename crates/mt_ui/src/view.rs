@@ -1,5 +1,6 @@
 //! Rendering for [`AppWindow`]: title bar, tab bar, viewport and every overlay.
 
+use crate::designer_view::Clip;
 use gpui::{
     canvas, div, font, prelude::*, px, relative, AnyElement, ClickEvent, Context, Decorations,
     FontStyle, FontWeight, Hsla, KeyContext, MouseButton, SharedString, StrikethroughStyle,
@@ -98,6 +99,11 @@ impl Render for AppWindow {
         if let Some(prompt) = &self.prompt {
             root = root.child(self.prompt_modal(&t, prompt, cx));
         }
+        if self.designer.is_some() {
+            if let Some(m) = self.designer_modal(&t, cx) {
+                root = root.child(m);
+            }
+        }
         if let Some(req) = self.ssh_prompts.front() {
             root = root.child(self.ssh_prompt_modal(&t, req, cx));
         }
@@ -144,6 +150,14 @@ impl Render for AppWindow {
             .on_action(
                 cx.listener(|this, _: &RenameWorkspace, w, cx| this.begin_rename_workspace(w, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &DesignWorkspace, w, cx| {
+                    this.open_designer(None, None, w, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &SaveLayoutAsWorkspace, w, cx| {
+                this.save_layout_as_workspace(w, cx)
+            }))
             .on_action(cx.listener(|this, a: &SpawnTabInDomain, w, cx| {
                 if a.0 == "local" {
                     this.on_action_spawn_tab(w, cx)
@@ -161,14 +175,29 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &SpawnWindow, _, cx| this.on_action_spawn_window(cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
+                if this.designer_clipboard(Clip::Copy, cx) {
+                    return;
+                }
                 if !this.copy_selection(cx) {
                     this.toast(ToastKind::Info, "Nothing selected", cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                if !this.designer_clipboard(Clip::SelectAll, cx) {
+                    this.select_all(cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &SearchSelection, w, cx| this.search_selection(w, cx)))
-            .on_action(cx.listener(|this, _: &Paste, w, cx| this.paste(w, cx)))
-            .on_action(cx.listener(|this, _: &PastePrimary, w, cx| this.paste_primary(w, cx)))
+            .on_action(cx.listener(|this, _: &Paste, w, cx| {
+                if !this.designer_clipboard(Clip::Paste, cx) {
+                    this.paste(w, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PastePrimary, w, cx| {
+                if !this.designer_clipboard(Clip::Paste, cx) {
+                    this.paste_primary(w, cx)
+                }
+            }))
             .on_action(cx.listener(|this, a: &SendString, _, cx| this.send_string(&a.0, cx)))
             .on_action(cx.listener(|this, a: &SpawnCommand, w, cx| {
                 let spec =
@@ -1533,7 +1562,7 @@ impl AppWindow {
     }
 }
 
-trait DismissExt {
+pub(crate) trait DismissExt {
     fn listener_for_dismiss(&mut self) -> Box<dyn Fn(&mut Window, &mut gpui::App)>;
 }
 

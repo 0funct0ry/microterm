@@ -77,17 +77,34 @@ split itself, up to four levels deep. `percent` is the share of the **first** pa
 ```toml
 [[workspaces]]
 name = "api"
-tabs = [
-  { title = "dev", split = "horizontal", percent = 60, panes = [
-      { cwd = "~/src/api", command = ["nvim"] },
-      { split = "vertical", panes = [
-          { command = ["cargo", "watch", "-x", "run"] },
-          { command = ["htop"] },
-      ] },
-  ] },
-  { title = "shell", cwd = "~/src/api" },
-]
+
+[[workspaces.tabs]]
+title = "dev"
+split = "horizontal"
+percent = 60
+
+[[workspaces.tabs.panes]]
+cwd = "~/src/api"
+command = "nvim"
+
+[[workspaces.tabs.panes]]
+split = "vertical"
+
+[[workspaces.tabs.panes.panes]]
+command = ["cargo", "watch", "-x", "run"]
+
+[[workspaces.tabs.panes.panes]]
+command = ["htop"]
+
+[[workspaces.tabs]]
+title = "shell"
+cwd = "~/src/api"
 ```
+
+This nested array-of-tables form is the recommended spelling. `cwd` set on a tab or a split is
+inherited by its descendant leaves unless a leaf sets its own; `command` is a string (shell-split)
+or an array and belongs on leaves. You can also build layouts visually with the
+[workspace designer](/docs/tabs-and-workspaces/#workspace-designer).
 
 The first leaf starts focused. `--cwd` and `-e` on the command line replace the first tab,
 splits included.

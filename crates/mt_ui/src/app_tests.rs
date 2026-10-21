@@ -341,7 +341,10 @@ fn workspace_switcher_lists_real_workspaces(cx: &mut TestAppContext) {
             .map(|m| picker.state.label(m).to_string())
             .collect()
     });
-    assert_eq!(labels, ["default", "infra", "Create workspace…"]);
+    assert_eq!(
+        labels,
+        ["default", "infra", "Create workspace…", "Edit workspace…"]
+    );
 }
 
 #[gpui::test]
@@ -1429,4 +1432,27 @@ fn divider_drag_changes_the_ratio(cx: &mut TestAppContext) {
     });
     assert!((ratio - 0.25).abs() < 1e-4);
     assert!(view.read_with(cx, |t, _| t.divider_drag.is_none()));
+}
+
+#[gpui::test]
+fn design_workspace_opens_asks_before_discarding_and_returns_focus(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(actions::DesignWorkspace);
+    assert_eq!(top(&view, cx), Some(OverlayKind::WorkspaceDesigner));
+    assert!(overlay_focused(&view, cx));
+    // Clean designer: Esc closes at once and focus returns to the viewport.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None);
+    assert!(viewport_focused(&view, cx));
+    // Dirty designer: the first Esc asks, the second discards.
+    cx.dispatch_action(actions::DesignWorkspace);
+    view.update(cx, |this, _| {
+        this.designer.as_mut().unwrap().new_workspace()
+    });
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), Some(OverlayKind::WorkspaceDesigner));
+    assert!(view.read_with(cx, |t, _| t.designer.as_ref().unwrap().confirm_discard));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None);
+    assert!(viewport_focused(&view, cx));
 }

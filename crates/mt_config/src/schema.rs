@@ -781,7 +781,7 @@ pub struct WorkspaceTab {
     pub title: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "command_string_or_array")]
     pub command: Vec<String>,
     /// Makes the tab a split of the two `panes` instead of a single pane (SPEC §17.1).
     #[serde(default)]
@@ -808,7 +808,7 @@ pub enum SplitKind {
 pub struct WorkspacePane {
     #[serde(default)]
     pub cwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "command_string_or_array")]
     pub command: Vec<String>,
     #[serde(default)]
     pub split: Option<SplitKind>,
@@ -844,4 +844,82 @@ pub struct SshDomain {
     pub remote_dir: Option<String>,
     #[serde(default)]
     pub connect_timeout_s: Option<u32>,
+}
+
+/// Splits a command string into argv with POSIX-ish quoting (single, double, backslash).
+pub fn split_command(s: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut has = false;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            '\'' => {
+                has = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => cur.push(c),
+                        None => return Err("unterminated single quote".into()),
+                    }
+                }
+            }
+            '"' => {
+                has = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some(c @ ('"' | '\\' | '$' | '`')) => cur.push(c),
+                            Some(c) => {
+                                cur.push('\\');
+                                cur.push(c);
+                            }
+                            None => return Err("unterminated double quote".into()),
+                        },
+                        Some(c) => cur.push(c),
+                        None => return Err("unterminated double quote".into()),
+                    }
+                }
+            }
+            '\\' => {
+                has = true;
+                match chars.next() {
+                    Some(c) => cur.push(c),
+                    None => cur.push('\\'),
+                }
+            }
+            c => {
+                has = true;
+                cur.push(c);
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
+/// `command` accepts a string (shell-split) or an array of strings; the array is canonical.
+fn command_string_or_array<'de, D>(d: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Cmd {
+        Str(String),
+        Arr(Vec<String>),
+    }
+    match Cmd::deserialize(d)? {
+        Cmd::Arr(v) => Ok(v),
+        Cmd::Str(s) => split_command(&s).map_err(serde::de::Error::custom),
+    }
 }

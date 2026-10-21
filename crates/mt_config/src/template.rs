@@ -108,8 +108,13 @@ modifier = "cmd"                 # "cmd" | "ctrl" | "none"
 
 # [[workspaces]]                 # declarative startup workspaces
 # name = "api"
-# tabs = [ { title = "server", cwd = "~/src/api", command = ["cargo", "watch", "-x", "run"] },
-#          { title = "shell",  cwd = "~/src/api" } ]
+# [[workspaces.tabs]]
+# title = "server"
+# cwd = "~/src/api"
+# command = ["cargo", "watch", "-x", "run"]
+# [[workspaces.tabs]]
+# title = "shell"
+# cwd = "~/src/api"
 
 # [[ssh_domains]]
 # name = "prod"

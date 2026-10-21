@@ -203,12 +203,28 @@ fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec
                 percent: t.percent,
                 panes: t.panes.clone(),
             };
+            let node = inherit_cwd(&node, None);
             let first_leaf = realise_split(host, pane, &node);
             let _ = host.mux.focus_pane(first_leaf);
         }
     }
     // Declared tabs open in order with the first one active.
     let _ = host.mux.activate_tab(window, 0);
+}
+
+/// Pushes a split node's `cwd` down to descendant leaves that do not set their own.
+fn inherit_cwd(
+    node: &mt_config::schema::WorkspacePane,
+    inherited: Option<&str>,
+) -> mt_config::schema::WorkspacePane {
+    let own = node.cwd.as_deref().or(inherited);
+    let mut out = node.clone();
+    if node.split.is_some() {
+        out.panes = node.panes.iter().map(|p| inherit_cwd(p, own)).collect();
+    } else {
+        out.cwd = own.map(str::to_string);
+    }
+    out
 }
 
 /// Builds a declared split tree (`[[workspaces]]` tabs, SPEC §17.1) inside `pane`, which becomes
@@ -1853,5 +1869,34 @@ tabs = [
         let b2 = two_tabs(cx).1;
         cx.update(|cx| on_osc_notify(cx, b2.pane, "ignored"));
         assert_eq!(log.lock().unwrap().len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod inherit_tests {
+    use super::*;
+    use mt_config::schema::{SplitKind, WorkspacePane};
+
+    #[test]
+    fn leaves_inherit_nearest_cwd() {
+        let leaf = |cwd: Option<&str>| WorkspacePane {
+            cwd: cwd.map(Into::into),
+            ..Default::default()
+        };
+        let inner = WorkspacePane {
+            split: Some(SplitKind::Vertical),
+            cwd: Some("/b".into()),
+            panes: vec![leaf(None), leaf(Some("/c"))],
+            ..Default::default()
+        };
+        let root = WorkspacePane {
+            split: Some(SplitKind::Horizontal),
+            panes: vec![leaf(None), inner],
+            ..Default::default()
+        };
+        let out = inherit_cwd(&root, Some("/a"));
+        assert_eq!(out.panes[0].cwd.as_deref(), Some("/a"));
+        assert_eq!(out.panes[1].panes[0].cwd.as_deref(), Some("/b"));
+        assert_eq!(out.panes[1].panes[1].cwd.as_deref(), Some("/c"));
     }
 }
