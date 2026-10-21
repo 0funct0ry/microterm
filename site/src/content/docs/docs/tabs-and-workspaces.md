@@ -187,6 +187,12 @@ existing workspace apply when its windows are next created. Running workspaces a
 **Save current layout as workspace…** opens the designer seeded from the active tab's pane tree
 (cwds and split ratios; commands are left empty).
 
+## Detach and attach
+
+**Shell ▸ Detach Workspace** (action `DetachWorkspace`) parks the active workspace, with its shells
+running, and shows another one. **Shell ▸ Attach ▸ name** (`AttachWorkspace`) brings a detached
+workspace back. See [Menu bar](/docs/menu-bar/).
+
 ## One instance
 
 Running `microterm` while it is already running opens a new window in the running instance

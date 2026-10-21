@@ -197,6 +197,13 @@ impl AppWindow {
 
     /// The hyperlink at a cell: an explicit OSC 8 link, else an implicit rule match on the
     /// row text (cached by row hash).
+    /// The link under the last pointer position, if any (the menu bar's Open Link row).
+    pub(crate) fn link_under_pointer(&mut self) -> Option<HoverLink> {
+        let pos = self.mouse.pointer?;
+        let hit = self.grid_hit(pos)?;
+        self.link_at(hit.row, hit.col)
+    }
+
     pub(crate) fn link_at(&mut self, row: usize, col: usize) -> Option<HoverLink> {
         let pane = self.focused_pane()?;
         self.link_in(pane, row, col)

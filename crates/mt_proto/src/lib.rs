@@ -656,6 +656,7 @@ pub enum Request {
     ConfigReload,
     Subscribe(SubscribeParams),
     MenuList,
+    MenuBarList,
     MenuShow(MenuShowParams),
     MenuInvoke(MenuInvokeParams),
 }
@@ -701,6 +702,7 @@ pub const METHODS: &[&str] = &[
     "config.reload",
     "subscribe",
     "menu.list",
+    "menubar.list",
     "menu.show",
     "menu.invoke",
 ];
@@ -746,6 +748,7 @@ impl Request {
             Request::ReplayStart(_) => "replay.start",
             Request::ConfigReload => "config.reload",
             Request::MenuList => "menu.list",
+            Request::MenuBarList => "menubar.list",
             Request::MenuShow(_) => "menu.show",
             Request::MenuInvoke(_) => "menu.invoke",
             Request::Subscribe(_) => "subscribe",
@@ -765,7 +768,8 @@ impl Request {
             Request::MuxList
             | Request::WorkspaceList
             | Request::ConfigReload
-            | Request::MenuList => json!({}),
+            | Request::MenuList
+            | Request::MenuBarList => json!({}),
             Request::MenuShow(p) => to(p),
             Request::MenuInvoke(p) => to(p),
             Request::Subscribe(p) => to(p),
@@ -889,6 +893,7 @@ impl Request {
             "config.reload" => Request::ConfigReload,
             "subscribe" => Request::Subscribe(p(method, params)?),
             "menu.list" => Request::MenuList,
+            "menubar.list" => Request::MenuBarList,
             "menu.show" => Request::MenuShow(p(method, params)?),
             "menu.invoke" => Request::MenuInvoke(p(method, params)?),
             other => return Err(RpcError::bad_request(format!("unknown method {other:?}"))),
@@ -1712,6 +1717,7 @@ mod tests {
                 snapshot: true,
             }),
             Request::MenuList,
+            Request::MenuBarList,
             Request::MenuShow(MenuShowParams {
                 target: Target::pane(2),
                 menu: "viewport".into(),
@@ -1763,7 +1769,7 @@ mod tests {
              tab.focus tab.rename tab.close tab.set_color pane.list pane.get pane.send_text pane.get_text \
              pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
              pane.close pane.split pane.focus pane.zoom pane.resize pane.swap pane.rotate \
-             record.start record.stop replay.start config.reload subscribe menu.list menu.show \
+             record.start record.stop replay.start config.reload subscribe menu.list menubar.list menu.show \
              menu.invoke"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {

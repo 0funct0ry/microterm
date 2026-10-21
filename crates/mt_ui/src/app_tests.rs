@@ -1907,3 +1907,27 @@ fn the_palette_sets_and_clears_the_active_tab_color(cx: &mut TestAppContext) {
     });
     assert!(matches!(swatch, Some(Some(Some(_)))));
 }
+
+#[gpui::test]
+fn menu_bar_rows_dispatch_their_actions(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    let probe = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+        view.update(cx, |this, _| this.menu_probe())
+    };
+    assert_eq!(probe(&view, cx).0, 1);
+    for (key, panes, tabs) in [
+        ("SplitHorizontal", 2, 1),
+        ("Split(left)", 3, 1),
+        ("ClosePane", 2, 1),
+        ("SpawnTab", 1, 2),
+        ("ActivateTab(1)", 2, 2),
+        ("ResetTerminal", 2, 2),
+        ("ClearScrollback", 2, 2),
+    ] {
+        let action = crate::menu_bar::build_action(key).unwrap();
+        cx.update(|window, cx| window.dispatch_action(action, cx));
+        cx.run_until_parked();
+        let (p, t, _, _) = probe(&view, cx);
+        assert_eq!((p, t), (panes, tabs), "after {key}");
+    }
+}

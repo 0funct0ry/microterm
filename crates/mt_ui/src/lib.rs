@@ -15,6 +15,7 @@ pub mod ipc_pending;
 pub mod keychips;
 pub mod ls_fonts;
 pub mod menu;
+pub mod menu_bar;
 mod menu_view;
 pub mod metrics;
 pub mod mock;
@@ -101,6 +102,7 @@ pub fn run(opts: RunOptions) {
                 name: "microterm".into(),
                 items: vec![gpui::MenuItem::action("Quit microterm", Quit)],
             }]);
+            menu_bar::install_app_actions(cx);
             cx.on_window_closed(|cx| {
                 // Closing the last window of a workspace falls back to one that still has
                 // windows (their shells were parked) before quitting.
@@ -111,6 +113,7 @@ pub fn run(opts: RunOptions) {
             .detach();
             start_config_watcher(&path, cx);
             mux_host::ensure(cx);
+            menu_bar::install(cx);
             if let Some(ipc) = &opts.ipc {
                 mux_host::install_ipc(cx, ipc.socket.clone(), ipc.hub.clone());
             }

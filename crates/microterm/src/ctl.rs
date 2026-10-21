@@ -155,6 +155,23 @@ EXAMPLES:
     /// Context menus: list, show, invoke, check (SPEC §10.9).
     #[command(subcommand)]
     Menu(MenuCmd),
+
+    /// The macOS main menu bar: list the resolved menus (SPEC §10.7).
+    #[command(subcommand, name = "menu-bar")]
+    MenuBar(MenuBarCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MenuBarCmd {
+    /// List every menu row: path, action, enabled state and shortcut chip.
+    ///
+    /// The GUI computes the rows from its live state; a headless server has no menu bar and
+    /// prints nothing.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl menu-bar list
+  microterm ctl menu-bar list --json | jq '.items[] | select(.enabled | not)'")]
+    List,
 }
 
 #[derive(Subcommand, Debug)]

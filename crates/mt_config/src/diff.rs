@@ -78,6 +78,7 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
     d.mark(old.panes != new.panes, "panes", &[Repaint]);
     d.mark(old.clipboard != new.clipboard, "clipboard", &[Repaint]);
     d.mark(old.paste != new.paste, "paste", &[Repaint]);
+    d.mark(old.menu_bar != new.menu_bar, "menu_bar", &[Repaint]);
     d.mark(old.bell != new.bell, "bell", &[Repaint]);
     d.mark(
         old.confirm_close != new.confirm_close,

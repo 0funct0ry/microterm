@@ -102,6 +102,7 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl menu invoke` — Run a menu item on a pane as if it was chosen
 - `microterm ctl menu icons` — List the icon names an item can use (`icon = "…"`); needs no running instance
 - `microterm ctl menu check` — Validate the menu config of a config file; needs no running instance
+- `microterm ctl menu-bar list` — List every menu row: path, action, enabled state and shortcut chip
 
 Run `microterm ctl <resource> <verb> --help` for flags.
 

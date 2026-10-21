@@ -545,6 +545,27 @@ impl Terminal {
             .history_cleared(&term);
     }
 
+    /// Resets modes, charsets, cursor style, text attributes, scroll region, tab stops and
+    /// program colour overrides, like RIS, but keeps the screen and the scrollback (RIS would
+    /// clear both). The cursor stays where it is.
+    pub fn reset(&self) {
+        let mut term = self.term.lock();
+        let mut seq = String::from("\x1b7\x1b[3g");
+        for col in (8..alacritty_terminal::grid::Dimensions::columns(&*term)).step_by(8) {
+            seq.push_str(&format!("\x1b[1;{}H\x1bH", col + 1));
+        }
+        seq.push_str("\x1b8");
+        // Charsets, SGR, scroll region, insert/newline modes, DECSET defaults, cursor style
+        // and visibility, keypad, kitty keyboard flags, hyperlink.
+        seq.push_str(
+            "\x0f\x1b(B\x1b)B\x1b[0m\x1b[r\x1b[4l\x1b[20l\x1b[?1l\x1b[?6l\x1b[?7h\x1b[?25h\
+             \x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\
+             \x1b[?1007l\x1b[?2004l\x1b[?1049l\x1b[?47l\x1b>\x1b[0 q\x1b[<99u\x1b]8;;\x1b\\",
+        );
+        crate::vt::inject_str(&mut term, &seq);
+        crate::vt::reset(&mut term, &self.shared);
+    }
+
     /// Applies the `[terminal]` settings (new output only).
     pub fn set_vt_config(&self, cfg: crate::vt::VtConfig) {
         self.shared.vt.lock().unwrap().cfg = cfg;
@@ -1030,6 +1051,24 @@ mod tests {
                 return rows;
             }
         }
+    }
+
+    #[test]
+    fn reset_clears_modes_and_keeps_scrollback() {
+        let (t, rx) = spawn_sh(
+            "i=0; while [ $i -lt 20 ]; do echo line$i; i=$((i+1)); done; \
+             printf '\\033[?2004h\\033[?1h\\033[3 q'; echo ready",
+        );
+        wait_for(&t, &rx, "ready");
+        std::thread::sleep(Duration::from_millis(100));
+        t.drain_events();
+        assert!(t.modes().bracketed_paste && t.modes().app_cursor);
+        let hist = t.history_size();
+        assert!(hist > 0);
+        t.reset();
+        let m = t.modes();
+        assert!(!m.bracketed_paste && !m.app_cursor && !m.alt_screen);
+        assert_eq!(t.history_size(), hist, "scrollback is kept");
     }
 
     #[test]

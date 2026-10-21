@@ -31,6 +31,12 @@ action = "Disable"   # unbind a default
 | `CloseWindow` | **Close window** — Close the window and all its tabs | — | — |
 | `SpawnWindow` | **New window** — Open a new window | `⌘N` | `Ctrl+Shift+N` |
 | `ToggleFullscreen` | **Toggle fullscreen** — Enter or leave fullscreen | — | — |
+| `Minimize` | **Minimize** — Minimize the window | `⌘M` | — |
+| `ZoomWindow` | **Zoom** — Zoom the window | — | — |
+| `HideApp` | **Hide microterm** — Hide the application | `⌘H` | — |
+| `HideOthers` | **Hide others** — Hide every other application | `⌘⌥H` | — |
+| `ShowAllApps` | **Show all** — Show every hidden application | — | — |
+| `BringAllToFront` | **Bring all to front** — Raise every microterm window | — | — |
 | `ActivateTab` | **Go to tab** — Activate tab N (counting from 1); bound to ⌘1–⌘9 on macOS and Alt+1–Alt+9 on Linux | — | — |
 | `SpawnTabInDomain` | **New tab in domain** — Open a tab in the named domain (`local`, or an SSH domain once M10 lands) | — | — |
 
@@ -70,6 +76,8 @@ action = "Disable"   # unbind a default
 | `ShowWorkspaceSwitcher` | **Switch workspace** — Pick or create a workspace | `⌘⌥W` | `Ctrl+Alt+W` |
 | `SwitchWorkspaceRelative(1)` | **Next workspace** — Switch to the next workspace | `⌘⌥]` | `Ctrl+Alt+]` |
 | `SwitchWorkspaceRelative(-1)` | **Previous workspace** — Switch to the previous workspace | `⌘⌥[` | `Ctrl+Alt+[` |
+| `DetachWorkspace` | **Detach workspace** — Park the active workspace (its shells keep running) and switch to another | — | — |
+| `AttachWorkspace` | **Attach workspace** — Show a parked workspace by name | — | — |
 | `SwitchWorkspace` | **Switch to workspace** — Switch to the workspace with the given name | — | — |
 
 ## Clipboard & scroll
@@ -89,6 +97,8 @@ action = "Disable"   # unbind a default
 | `ScrollToPrompt(1)` | **Scroll to next prompt** — Jump to the next shell prompt (needs OSC 133 shell integration) | — | — |
 | `ScrollToTop` | **Scroll to top** — Jump to the oldest scrollback line | `⇧Home` | `Shift+Home` |
 | `ScrollToBottom` | **Scroll to bottom** — Jump back to the live screen | `⇧End` | `Shift+End` |
+| `ResetTerminal` | **Reset terminal** — Reset modes, charsets, cursor and tab stops of the focused pane (scrollback is kept) | — | — |
+| `OpenLinkAtMouse` | **Open link at mouse cursor** — Open the hyperlink under the last pointer position | — | — |
 
 ## Modes
 
@@ -116,6 +126,11 @@ action = "Disable"   # unbind a default
 |---|---|---|---|
 | `ReloadConfig` | **Reload config** — Re-read the config file | `⌘⇧R` | `Ctrl+Shift+R` |
 | `OpenConfig` | **Open config** — Open the config file in your editor | `⌘,` | `Ctrl+,` |
+| `ShowAbout` | **About microterm** — Show the version and licence | — | — |
+| `OpenDocs` | **Documentation** — Open the microterm documentation in the browser | — | — |
+| `OpenReleaseNotes` | **Release notes** — Open the release notes in the browser | — | — |
+| `ReportIssue` | **Report an issue** — Open the issue tracker in the browser | — | — |
+| `ShowConfigFolder` | **Show config folder** — Reveal the config folder in the file manager | — | — |
 
 ## Menus
 

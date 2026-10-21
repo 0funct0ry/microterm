@@ -399,6 +399,7 @@ const ROOT: &[(&str, K)] = &[
             ("confirm_prompts", K::Leaf),
         ]),
     ),
+    ("menu_bar", K::Table(&[("enabled", K::Leaf)])),
     ("context_menu", K::Map(MENU_CONFIG)),
     ("menu_groups", K::Map(&[("items", K::Array(MENU_ITEM))])),
     (

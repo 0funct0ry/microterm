@@ -17,7 +17,8 @@ use super::live::Shared;
 use super::session::{parse_meta, Meta, Session, Switch, META_HELP, META_WORDS};
 use crate::client::Client;
 use crate::ctl::{
-    CtlAction, CtlArgs, MenuCmd, PaneCmd, SkillCmd, StatusCmd, TabCmd, WindowCmd, WorkspaceCmd,
+    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, SkillCmd, StatusCmd, TabCmd, WindowCmd,
+    WorkspaceCmd,
 };
 use crate::ctl_cmd::{self, Ctx};
 use crate::output::{Body, CtlError, Output};
@@ -82,6 +83,7 @@ pub fn readonly_allows(a: &CtlAction) -> bool {
                     | PaneCmd::Status(StatusCmd::Get(_)),
             )
             | CtlAction::Skill(SkillCmd::Show(_))
+            | CtlAction::MenuBar(MenuBarCmd::List)
             | CtlAction::Menu(
                 MenuCmd::List
                     | MenuCmd::Show { .. }
@@ -978,6 +980,7 @@ mod tests {
             "tab list",
             "pane status get 3",
             "menu list",
+            "menu-bar list",
             "menu show viewport",
             "menu invoke viewport/zoom --pane 3 --dry-run",
         ] {

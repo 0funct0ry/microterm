@@ -142,6 +142,9 @@ color = "auto"                   # "auto" | "always" | "never" (NO_COLOR is alwa
 history_send_text = false        # keep lines containing `send-text` in the history
 confirm_prompts = true           # offer `Close 3 panes? [y/N]` when a close needs confirmation
 
+[menu_bar]                       # the macOS main menu bar
+enabled = true                   # false keeps only the microterm menu (with Quit)
+
 # Context menus (`viewport`, `tab`): add items, prune built-ins, change triggers.
 # [context_menu.viewport]
 # mode = "append"                # "append" | "prepend" | "replace"

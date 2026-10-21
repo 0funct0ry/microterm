@@ -23,8 +23,8 @@ use serde_json::Value;
 use crate::cli::RecordArgs;
 use crate::client::{Client, ClientError};
 use crate::ctl::{
-    CtlAction, CtlArgs, MenuCmd, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget, WindowCmd,
-    WindowTarget, WorkspaceCmd,
+    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget,
+    WindowCmd, WindowTarget, WorkspaceCmd,
 };
 use crate::output::{Body, ColKind, Column, CtlError, Output, Table};
 use crate::render::{render, render_error, RenderOpts};
@@ -941,6 +941,40 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                     ],
                     rows,
                     "menu",
+                ))
+            })
+        }
+        CtlAction::MenuBar(MenuBarCmd::List) => {
+            let v = call(Request::MenuBarList)?;
+            result(v, &|v| {
+                let rows = v["items"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|m| {
+                        let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+                        vec![
+                            s("path"),
+                            m["action"].as_str().unwrap_or("-").to_string(),
+                            if m["enabled"].as_bool().unwrap_or(false) {
+                                "enabled".into()
+                            } else {
+                                "disabled".into()
+                            },
+                            s("chip"),
+                        ]
+                    })
+                    .collect();
+                Ok(table(
+                    vec![
+                        Column::new("ITEM", ColKind::Text),
+                        Column::new("ACTION", ColKind::Text),
+                        Column::new("STATE", ColKind::Text),
+                        Column::low("SHORTCUT", ColKind::Text, 1),
+                    ],
+                    rows,
+                    "menu row",
                 ))
             })
         }

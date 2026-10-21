@@ -44,6 +44,10 @@ action = { ResizePane = { direction = "left", cells = 3 } }
 `confirm_close` applies to `ClosePane` like it does to `CloseTab`: with `"process"`, a pane that
 runs a program asks first.
 
+The **Shell** and **Window** menus of the [menu bar](/docs/menu-bar/) offer Split Right / Down /
+Left / Up, Close Pane, Focus Pane ▸, Swap Pane ▸ and Rotate Panes with live shortcuts; they grey
+out when the tab has one pane.
+
 ## Mouse
 
 - **Right-click** any pane for its [context menu](/docs/context-menus/): the **Panes** group

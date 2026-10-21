@@ -47,6 +47,8 @@ pub struct MuxHost {
     pub(crate) domain_colored: std::collections::HashSet<Id>,
     /// The manual color last sent to each remote tab's daemon.
     pub(crate) remote_colors: HashMap<Id, Option<mt_mux::TabColor>>,
+    /// Workspaces the user detached (shells running, windows closed) and has not attached again.
+    pub(crate) detached: Vec<Id>,
 }
 
 impl Global for MuxHost {}
@@ -67,6 +69,7 @@ impl MuxHost {
             rules: None,
             domain_colored: Default::default(),
             remote_colors: HashMap::new(),
+            detached: Vec::new(),
         }
     }
 
@@ -308,7 +311,9 @@ pub fn show_workspace(
             h.mux.create_workspace(name).map_err(|e| e.to_string())?;
         }
         h.mux.switch_workspace(name).map_err(|e| e.to_string())?;
-        h.mux.workspace_by_name(name).expect("just ensured").id
+        let id = h.mux.workspace_by_name(name).expect("just ensured").id;
+        h.detached.retain(|d| *d != id);
+        id
     };
     ensure_workspace_windows(cx, target, first);
 
@@ -345,6 +350,56 @@ pub fn show_workspace(
             .ok();
     }
     Ok(())
+}
+
+/// Names of the detached workspaces that still exist, in detach order.
+pub fn detached_names(cx: &mut App) -> Vec<String> {
+    let h = host(cx);
+    h.detached
+        .iter()
+        .filter_map(|id| h.mux.workspaces().iter().find(|w| w.id == *id))
+        .map(|w| w.name.clone())
+        .collect()
+}
+
+/// Number of workspaces.
+pub fn workspace_count(cx: &mut App) -> usize {
+    host(cx).mux.workspaces().len()
+}
+
+/// `DetachWorkspace`: parks the active workspace (its shells keep running) and shows another,
+/// preferring one that is not detached. Needs at least two workspaces.
+pub fn detach_active(cx: &mut App) -> Result<(), String> {
+    let (prev, next) = {
+        let h = host(cx);
+        let all = h.mux.workspaces();
+        if all.len() < 2 {
+            return Err("There is only one workspace; nothing to switch to".into());
+        }
+        let active = h.mux.active_workspace().id;
+        let pos = all.iter().position(|w| w.id == active).unwrap_or(0);
+        let others: Vec<&mt_mux::Workspace> = (1..all.len())
+            .map(|i| &all[(pos + i) % all.len()])
+            .collect();
+        let pick = others
+            .iter()
+            .find(|w| !h.detached.contains(&w.id))
+            .unwrap_or(&others[0]);
+        (active, pick.name.clone())
+    };
+    show_workspace(cx, &next, false, None)?;
+    let h = host(cx);
+    h.detached.retain(|d| *d != prev);
+    h.detached.push(prev);
+    Ok(())
+}
+
+/// `AttachWorkspace(name)`: shows a detached workspace.
+pub fn attach(cx: &mut App, name: &str) -> Result<(), String> {
+    if !detached_names(cx).iter().any(|n| n == name) {
+        return Err(format!("no detached workspace named \"{name}\""));
+    }
+    show_workspace(cx, name, false, None)
 }
 
 /// A new window in the active workspace with one tab.
@@ -1503,6 +1558,7 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         Request::MenuList => Ok(crate::menu::list_json(
             &cx.global::<Settings>().config.clone(),
         )),
+        Request::MenuBarList => Ok(crate::menu_bar::current(cx).json()),
         Request::MenuShow(p) => {
             let rows = rows(cx);
             let cfg = cx.global::<Settings>().config.clone();

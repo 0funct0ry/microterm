@@ -34,6 +34,7 @@ pub struct Config {
     pub gpu: Gpu,
     pub ctl: Ctl,
     pub sh: Sh,
+    pub menu_bar: MenuBar,
     pub notifications: Notifications,
     pub terminal: Terminal,
     pub hyperlink_rules: Vec<HyperlinkRule>,
@@ -76,6 +77,7 @@ impl Default for Config {
             gpu: Gpu::default(),
             ctl: Ctl::default(),
             sh: Sh::default(),
+            menu_bar: MenuBar::default(),
             notifications: Notifications::default(),
             terminal: Terminal::default(),
             hyperlink_rules: Vec::new(),
@@ -635,6 +637,19 @@ pub enum ShColor {
     Auto,
     Always,
     Never,
+}
+
+/// `[menu_bar]`: the macOS main menu (SPEC §10.7). `false` keeps only the microterm menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MenuBar {
+    pub enabled: bool,
+}
+
+impl Default for MenuBar {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// `[sh]`: the interactive control shell (SPEC §12.7, §8.3).

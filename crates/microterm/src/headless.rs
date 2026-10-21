@@ -651,6 +651,7 @@ impl Host {
             }
             Request::Subscribe(_) => ok(),
             Request::MenuList => Ok(mt_ui::menu::list_json(&self.cfg)),
+            Request::MenuBarList => Ok(json!({"menus": [], "items": []})),
             Request::MenuShow(p) => {
                 let panes = self.panes.clone();
                 mt_ui::menu::show(&self.cfg, &self.rows(), &p, &|id| panes.get(&id).cloned())

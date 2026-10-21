@@ -222,6 +222,25 @@ impl Render for AppWindow {
             // Needs OSC 133 prompt marks (M8); a no-op until a pane has them.
             .on_action(cx.listener(|_, _: &ScrollToPrompt, _, _| {}))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
+            .on_action(cx.listener(|this, _: &ResetTerminal, _, cx| this.reset_terminal(cx)))
+            .on_action(cx.listener(|this, _: &ShowAbout, _, cx| this.show_about(cx)))
+            .on_action(cx.listener(|this, _: &OpenLinkAtMouse, _, cx| this.open_link_at_mouse(cx)))
+            .on_action(cx.listener(|this, _: &DetachWorkspace, _, cx| this.detach_workspace(cx)))
+            .on_action(cx.listener(|this, a: &AttachWorkspace, _, cx| {
+                this.attach_workspace(a.0.clone(), cx)
+            }))
+            .on_action(cx.listener(|_, _: &Minimize, w, _| w.minimize_window()))
+            .on_action(cx.listener(|_, _: &ZoomWindow, w, _| w.zoom_window()))
+            .on_action(cx.listener(|this, _: &OpenDocs, _, cx| {
+                this.open_help(crate::menu_bar::help_urls().0, cx)
+            }))
+            .on_action(cx.listener(|this, _: &OpenReleaseNotes, _, cx| {
+                this.open_help(crate::menu_bar::help_urls().1, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReportIssue, _, cx| {
+                this.open_help(crate::menu_bar::help_urls().2, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowConfigFolder, _, cx| this.show_config_folder(cx)))
             .on_action(cx.listener(|this, a: &ScrollByPage, _, cx| {
                 let cmd = if a.0 < 0 {
                     ScrollCmd::PageUp

@@ -237,6 +237,10 @@ fn b64_nopad(s: &str) -> String {
     out
 }
 
+pub(crate) fn inject_str<T: EventListener>(term: &mut Term<T>, s: &str) {
+    inject(term, s);
+}
+
 fn inject<T: EventListener>(term: &mut Term<T>, s: &str) {
     let mut parser: Processor = Processor::default();
     parser.advance(term, s.as_bytes());

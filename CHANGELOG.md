@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **M11.4 — Main application menu.** On macOS microterm has a full menu bar (microterm, Shell,
+  Edit, View, Window, Help) with live shortcut chips that follow rebinds, rows that grey out when
+  they cannot apply, and a *New Tab in Domain* submenu with every `[[ssh_domains]]` entry. New
+  actions `ResetTerminal` (keeps scrollback), `ShowAbout`, `OpenLinkAtMouse`, `DetachWorkspace`,
+  `AttachWorkspace(name)` and the window/help rows (`Minimize`, `ZoomWindow`, `HideApp`,
+  `HideOthers`, `ShowAllApps`, `BringAllToFront`, `OpenDocs`, `OpenReleaseNotes`, `ReportIssue`,
+  `ShowConfigFolder`); `[menu_bar] enabled`; `ctl menu-bar list [--json]`.
 - **M11.3 — Tab colors.** Tabs can be colored: nine theme-resolved names (`blue`, `purple`, `pink`,
   `red`, `orange`, `yellow`, `green`, `teal`, `gray`) or `#rrggbb`. The tab right-click menu gets a
   "Tab Color" heading with a 2 × 5 swatch grid (hollow ring = Default, check on the current color,

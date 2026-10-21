@@ -106,6 +106,11 @@ impl Settings {
         self.chips.get(def.name).cloned()
     }
 
+    /// Every chip by action name (the main menu shows them).
+    pub fn chips(&self) -> &HashMap<&'static str, String> {
+        &self.chips
+    }
+
     /// The theme for the current OS appearance.
     pub fn theme(&self, os_dark: bool) -> Theme {
         let name = self.config.theme.name_for(os_dark);
@@ -280,6 +285,7 @@ fn reload_inner(cx: &mut App) -> ReloadOutcome {
         apply_theme(cx);
     }
     notify_windows(cx, &diff);
+    crate::menu_bar::refresh(cx);
     if diff.is_empty() && !registry_changed {
         ReloadOutcome::Unchanged
     } else {

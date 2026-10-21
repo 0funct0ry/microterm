@@ -53,6 +53,23 @@ actions!(
         ResetFontSize,
         ReloadConfig,
         OpenConfig,
+        // Main menu (M11.4).
+        ResetTerminal,
+        ShowAbout,
+        OpenLinkAtMouse,
+        DetachWorkspace,
+        Minimize,
+        ZoomWindow,
+        HideApp,
+        HideOthers,
+        ShowAllApps,
+        BringAllToFront,
+        OpenDocs,
+        OpenReleaseNotes,
+        ReportIssue,
+        ShowConfigFolder,
+        /// Placeholder behind a disabled menu row: no view handles it, so the OS greys the row.
+        MenuDisabled,
         DebugShowConfigError,
         DebugShowToast,
         // Overlay-internal; bound in the `Overlay` / `Picker` key contexts, not in the palette.
@@ -119,6 +136,11 @@ pub struct MoveTabRelative(pub isize);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct SwitchWorkspace(pub String);
+
+/// Shows a parked workspace (one detached earlier) by name.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct AttachWorkspace(pub String);
 
 /// New tab in a named domain. Only `local` exists until SSH domains arrive (M10).
 #[derive(Clone, PartialEq, Action)]
@@ -716,6 +738,124 @@ pub static ACTIONS: &[ActionDef] = &[
         OpenConfig
     ),
     def!(
+        "ResetTerminal",
+        "Reset terminal",
+        "Reset modes, charsets, cursor and tab stops of the focused pane (scrollback is kept)",
+        &[],
+        &[],
+        ResetTerminal
+    ),
+    def!(
+        "ShowAbout",
+        "About microterm",
+        "Show the version and licence",
+        &[],
+        &[],
+        ShowAbout
+    ),
+    def!(
+        "OpenLinkAtMouse",
+        "Open link at mouse cursor",
+        "Open the hyperlink under the last pointer position",
+        &[],
+        &[],
+        OpenLinkAtMouse
+    ),
+    def!(
+        "DetachWorkspace",
+        "Detach workspace",
+        "Park the active workspace (its shells keep running) and switch to another",
+        &[],
+        &[],
+        DetachWorkspace
+    ),
+    def!(
+        "Minimize",
+        "Minimize",
+        "Minimize the window",
+        &["cmd-m"],
+        &[],
+        Minimize
+    ),
+    def!(
+        "ZoomWindow",
+        "Zoom",
+        "Zoom the window",
+        &[],
+        &[],
+        ZoomWindow
+    ),
+    def!(
+        "HideApp",
+        "Hide microterm",
+        "Hide the application",
+        &["cmd-h"],
+        &[],
+        HideApp
+    ),
+    def!(
+        "HideOthers",
+        "Hide others",
+        "Hide every other application",
+        &["cmd-alt-h"],
+        &[],
+        HideOthers
+    ),
+    def!(
+        "ShowAllApps",
+        "Show all",
+        "Show every hidden application",
+        &[],
+        &[],
+        ShowAllApps
+    ),
+    def!(
+        "BringAllToFront",
+        "Bring all to front",
+        "Raise every microterm window",
+        &[],
+        &[],
+        BringAllToFront
+    ),
+    def!(
+        "OpenDocs",
+        "Documentation",
+        "Open the microterm documentation in the browser",
+        &[],
+        &[],
+        OpenDocs
+    ),
+    def!(
+        "OpenReleaseNotes",
+        "Release notes",
+        "Open the release notes in the browser",
+        &[],
+        &[],
+        OpenReleaseNotes
+    ),
+    def!(
+        "ReportIssue",
+        "Report an issue",
+        "Open the issue tracker in the browser",
+        &[],
+        &[],
+        ReportIssue
+    ),
+    def!(
+        "ShowConfigFolder",
+        "Show config folder",
+        "Reveal the config folder in the file manager",
+        &[],
+        &[],
+        ShowConfigFolder
+    ),
+    def!(
+        args "AttachWorkspace",
+        "Attach workspace",
+        "Show a parked workspace by name",
+        AttachWorkspace(String::new())
+    ),
+    def!(
         args "ActivateTab",
         "Go to tab",
         "Activate tab N (counting from 1); bound to ⌘1–⌘9 on macOS and Alt+1–Alt+9 on Linux",
@@ -832,6 +972,12 @@ impl ActionDef {
             | "RenameTab"
             | "SpawnWindow"
             | "CloseWindow"
+            | "Minimize"
+            | "ZoomWindow"
+            | "HideApp"
+            | "HideOthers"
+            | "ShowAllApps"
+            | "BringAllToFront"
             | "ToggleFullscreen" => "Tabs & windows",
             "SplitHorizontal"
             | "SplitVertical"
@@ -843,6 +989,8 @@ impl ActionDef {
             | "SwapPane"
             | "ResizePane" => "Panes",
             "ShowWorkspaceSwitcher"
+            | "DetachWorkspace"
+            | "AttachWorkspace"
             | "SwitchWorkspace"
             | "SwitchWorkspaceRelative"
             | "CreateWorkspace"
@@ -850,8 +998,8 @@ impl ActionDef {
             | "DesignWorkspace"
             | "SaveLayoutAsWorkspace" => "Workspaces",
             "Copy" | "Paste" | "PastePrimary" | "SelectAll" | "ClearScrollback"
-            | "ScrollByPage" | "ScrollByLine" | "ScrollToTop" | "ScrollToBottom"
-            | "ScrollToPrompt" => "Clipboard & scroll",
+            | "ResetTerminal" | "OpenLinkAtMouse" | "ScrollByPage" | "ScrollByLine"
+            | "ScrollToTop" | "ScrollToBottom" | "ScrollToPrompt" => "Clipboard & scroll",
             "ShowCommandPalette"
             | "ShowLauncher"
             | "ActivateQuickSelect"
@@ -861,7 +1009,8 @@ impl ActionDef {
             "IncreaseFontSize" | "DecreaseFontSize" | "ResetFontSize" | "SelectTheme" => {
                 "Fonts & look"
             }
-            "ReloadConfig" | "OpenConfig" => "Config",
+            "ReloadConfig" | "OpenConfig" | "ShowConfigFolder" | "ShowAbout" | "OpenDocs"
+            | "OpenReleaseNotes" | "ReportIssue" => "Config",
             "ShowContextMenu" | "InvokeMenuItem" => "Menus",
             "SetTabColor" | "SetTabColorInteractive" | "ClearTabColor" => "Tab colors",
             _ => "Misc",
@@ -938,6 +1087,9 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
             .map_err(|e| format!("ResizePane: {e}")),
         ("ResizePane", _) => {
             Err("ResizePane takes a table: { direction = \"left\", cells = 5 }".into())
+        }
+        ("AttachWorkspace", Some(ActionArg::Str(name))) => {
+            Ok(Box::new(AttachWorkspace(name.clone())))
         }
         ("SwitchWorkspace", Some(ActionArg::Str(name))) => {
             Ok(Box::new(SwitchWorkspace(name.clone())))
