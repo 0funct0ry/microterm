@@ -1026,7 +1026,12 @@ fn launcher_has_no_mock_rows_and_lists_real_ones(cx: &mut TestAppContext) {
     let labels = picker_labels(&view, cx);
     assert_eq!(
         labels,
-        ["New tab in local", "Connect to host…", "Workspace: default"]
+        [
+            "New tab in local",
+            "Connect to host…",
+            "Connect to serial port…",
+            "Workspace: default"
+        ]
     );
 }
 
@@ -1931,4 +1936,96 @@ fn menu_bar_rows_dispatch_their_actions(cx: &mut TestAppContext) {
         let (p, t, _, _) = probe(&view, cx);
         assert_eq!((p, t), (panes, tabs), "after {key}");
     }
+}
+
+#[gpui::test]
+fn launcher_lists_serial_ports_and_the_connect_row(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "serialports",
+        "[[serial_ports]]\nname = \"uno\"\nport = \"/dev/ttyACM0\"\nbaud = 9600\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    cx.dispatch_action(ShowLauncher);
+    let labels = picker_labels(&view, cx);
+    assert!(labels.contains(&"New tab in uno".to_string()), "{labels:?}");
+    assert!(labels.contains(&"Connect to serial port…".to_string()));
+}
+
+#[gpui::test]
+fn connect_serial_opens_the_port_picker(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ConnectSerial);
+    // Tests never see real devices; the free-form row is always there.
+    assert_eq!(picker_labels(&view, cx), ["Other port…"]);
+}
+
+#[gpui::test]
+fn serial_domains_resolve_and_block_input_until_connected(cx: &mut TestAppContext) {
+    let f = temp_config(
+        "serialdom",
+        "[[serial_ports]]\nname = \"uno\"\nport = \"/dev/ttyACM0\"\nbaud = 9600\ncolor = \"teal\"\n",
+    );
+    let (view, cx) = setup_with_config(cx, f);
+    let (named, adhoc) = cx.update(|_, cx| {
+        (
+            crate::ssh_host::resolve_domain(cx, "uno").unwrap(),
+            crate::ssh_host::resolve_domain(cx, "serial:/dev/ttyUSB1?baud=57600").unwrap(),
+        )
+    });
+    assert_ne!(named, adhoc);
+    cx.update(|_, cx| {
+        assert!(crate::ssh_host::resolve_domain(cx, "serial:/dev/x?baud=abc").is_err());
+        let h = crate::mux_host::host(cx);
+        assert_eq!(
+            h.mux.domain_kind(adhoc),
+            Some(mt_mux::DomainKind::Serial {
+                name: "/dev/ttyUSB1".into()
+            })
+        );
+    });
+    // A tab on the serial domain shows the serial card, and its keys go nowhere until connected.
+    view.update_in(cx, |t, window, cx| {
+        let spec = mt_mux::SpawnSpec {
+            domain: named,
+            ..Default::default()
+        };
+        t.spawn_tab(Some(spec), window, cx);
+    });
+    view.update(cx, |t, cx| {
+        let card = t.ssh_card(cx).expect("serial card");
+        assert!(card.serial);
+        assert!(t.ssh_blocks_input(cx));
+    });
+    cx.update(|_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_domain_state(named, mt_mux::DomainState::Connected)
+            .unwrap()
+    });
+    view.update(cx, |t, cx| assert!(!t.ssh_blocks_input(cx)));
+}
+
+#[test]
+fn serial_options_come_from_the_config_entry() {
+    let p = mt_config::SerialPort {
+        name: "uno".into(),
+        port: "/dev/ttyACM0".into(),
+        baud: Some(9600),
+        data_bits: Some("7".into()),
+        parity: Some("even".into()),
+        stop_bits: Some("2".into()),
+        flow: Some("hardware".into()),
+        local_echo: true,
+        line_ending: Some("crlf".into()),
+        color: None,
+    };
+    let o = crate::serial_host::opts_of(&p).unwrap();
+    assert_eq!(o.framing(), "9600 7E2");
+    assert!(o.local_echo);
+    assert_eq!(o.line_ending, mt_serial::LineEnding::Crlf);
+    let bad = mt_config::SerialPort {
+        parity: Some("mark".into()),
+        ..p
+    };
+    assert!(crate::serial_host::opts_of(&bad).is_err());
 }

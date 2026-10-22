@@ -75,6 +75,11 @@ actions!(
         SaveSelectionAsSnippet,
         SaveLastCommandAsSnippet,
         OpenSnippetsFile,
+        // Serial ports (M12).
+        ConnectSerial,
+        SerialSendBreak,
+        SerialToggleDtr,
+        SerialToggleRts,
         /// Placeholder behind a disabled menu row: no view handles it, so the OS greys the row.
         MenuDisabled,
         DebugShowConfigError,
@@ -159,7 +164,7 @@ pub struct SwitchWorkspace(pub String);
 #[action(namespace = microterm, no_json)]
 pub struct AttachWorkspace(pub String);
 
-/// New tab in a named domain. Only `local` exists until SSH domains arrive (M10).
+/// New tab in a named domain (`local`, an `[[ssh_domains]]` or `[[serial_ports]]` name).
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct SpawnTabInDomain(pub String);
@@ -191,7 +196,7 @@ pub struct SpawnCommand {
     pub title: Option<String>,
 }
 
-/// New tab on an SSH domain (arrives with M10).
+/// New tab on an SSH domain (an empty name asks for one).
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct ConnectSsh(pub String);
@@ -953,7 +958,7 @@ pub static ACTIONS: &[ActionDef] = &[
     def!(
         args "ConnectSsh",
         "Connect SSH",
-        "Open a tab on the named SSH domain (arrives with M10)",
+        "Open a tab on the named SSH domain",
         ConnectSsh(String::new())
     ),
     def!(
@@ -997,6 +1002,38 @@ pub static ACTIONS: &[ActionDef] = &[
         SaveLastCommandAsSnippet
     ),
     def!(
+        "ConnectSerial",
+        "Connect to serial port",
+        "Pick a serial port and open it in a new tab",
+        &[],
+        &[],
+        ConnectSerial
+    ),
+    def!(
+        "SerialSendBreak",
+        "Serial: send break",
+        "Send a break (250 ms) on the active tab's serial port",
+        &[],
+        &[],
+        SerialSendBreak
+    ),
+    def!(
+        "SerialToggleDtr",
+        "Serial: toggle DTR",
+        "Flip the DTR line of the active tab's serial port (resets most Arduino boards)",
+        &[],
+        &[],
+        SerialToggleDtr
+    ),
+    def!(
+        "SerialToggleRts",
+        "Serial: toggle RTS",
+        "Flip the RTS line of the active tab's serial port",
+        &[],
+        &[],
+        SerialToggleRts
+    ),
+    def!(
         "OpenSnippetsFile",
         "Open snippets file",
         "Open snippets.toml in your editor",
@@ -1026,6 +1063,7 @@ pub const CATEGORIES: &[&str] = &[
     "Menus",
     "Tab colors",
     "Snippets",
+    "Serial",
     "Misc",
     "Debug",
 ];
@@ -1092,6 +1130,7 @@ impl ActionDef {
             | "SaveLastCommandAsSnippet"
             | "OpenSnippetsFile"
             | "InsertSnippet" => "Snippets",
+            "ConnectSerial" | "SerialSendBreak" | "SerialToggleDtr" | "SerialToggleRts" => "Serial",
             _ => "Misc",
         }
     }
@@ -1644,6 +1683,10 @@ mod tests {
             "SendString",
             "SpawnCommand",
             "ConnectSsh",
+            "ConnectSerial",
+            "SerialSendBreak",
+            "SerialToggleDtr",
+            "SerialToggleRts",
         ] {
             assert!(ACTIONS.iter().any(|a| a.name == name), "{name} missing");
         }

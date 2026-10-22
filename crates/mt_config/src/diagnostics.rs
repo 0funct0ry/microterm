@@ -371,6 +371,21 @@ const ROOT: &[(&str, K)] = &[
         ]),
     ),
     (
+        "serial_ports",
+        K::Array(&[
+            ("name", K::Leaf),
+            ("port", K::Leaf),
+            ("baud", K::Leaf),
+            ("data_bits", K::Leaf),
+            ("parity", K::Leaf),
+            ("stop_bits", K::Leaf),
+            ("flow", K::Leaf),
+            ("local_echo", K::Leaf),
+            ("line_ending", K::Leaf),
+            ("color", K::Leaf),
+        ]),
+    ),
+    (
         "ssh_domains",
         K::Array(&[
             ("name", K::Leaf),
@@ -699,6 +714,53 @@ fn validate_tab_colors(c: &Config, err: &mut impl FnMut(&[&str], String)) {
     for (i, d) in c.ssh_domains.iter().enumerate() {
         if let Some(v) = &d.color {
             check(&format!("ssh_domains[{i}].color"), v, &["ssh_domains"], err);
+        }
+    }
+    for (i, p) in c.serial_ports.iter().enumerate() {
+        if let Some(v) = &p.color {
+            check(
+                &format!("serial_ports[{i}].color"),
+                v,
+                &["serial_ports"],
+                err,
+            );
+        }
+        validate_serial_port(i, p, err);
+    }
+}
+
+fn validate_serial_port(
+    i: usize,
+    p: &crate::schema::SerialPort,
+    err: &mut impl FnMut(&[&str], String),
+) {
+    let mut bad = |key: &str, what: &str, got: String| {
+        err(
+            &["serial_ports"],
+            format!("serial_ports[{i}].{key} must be {what}, got \"{got}\""),
+        )
+    };
+    if p.name.trim().is_empty() {
+        bad("name", "non-empty", p.name.clone());
+    }
+    if p.port.trim().is_empty() {
+        bad("port", "a device path", p.port.clone());
+    }
+    if p.baud == Some(0) {
+        bad("baud", "a positive number", "0".into());
+    }
+    let enums: [(&str, &Option<String>, &[&str]); 5] = [
+        ("data_bits", &p.data_bits, &["5", "6", "7", "8"]),
+        ("parity", &p.parity, &["none", "odd", "even"]),
+        ("stop_bits", &p.stop_bits, &["1", "2"]),
+        ("flow", &p.flow, &["none", "software", "hardware"]),
+        ("line_ending", &p.line_ending, &["cr", "lf", "crlf"]),
+    ];
+    for (key, value, allowed) in enums {
+        if let Some(v) = value {
+            if !allowed.contains(&v.to_ascii_lowercase().as_str()) {
+                bad(key, &format!("one of {}", allowed.join(", ")), v.clone());
+            }
         }
     }
 }

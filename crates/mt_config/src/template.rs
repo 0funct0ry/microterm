@@ -120,6 +120,11 @@ modifier = "cmd"                 # "cmd" | "ctrl" | "none"
 # name = "prod"
 # host = "prod.example.com"
 
+# [[serial_ports]]
+# name = "arduino"
+# port = "/dev/ttyUSB0"
+# baud = 115200
+
 [gpu]
 prefer = "high_performance"      # "high_performance" | "low_power" (restart required)
 

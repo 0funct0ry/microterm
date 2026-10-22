@@ -39,6 +39,8 @@ pub struct Cli {
 pub enum Command {
     /// Open an SSH tab.
     Ssh(SshArgs),
+    /// Open a serial port in a tab (`--list` shows the ports on this machine).
+    Serial(SerialArgs),
     /// Show which font renders each character.
     LsFonts {
         #[arg(long)]
@@ -156,6 +158,90 @@ impl SshArgs {
             (Some(d), _) => d.clone(),
             (None, Some(t)) => format!("ssh:{t}"),
             (None, None) => String::new(),
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct SerialArgs {
+    /// Device path, e.g. `/dev/ttyUSB0` or `/dev/cu.usbmodem1101`.
+    #[arg(required_unless_present_any = ["domain", "list"])]
+    pub port: Option<String>,
+    /// Use the `[[serial_ports]]` entry with this name instead of an ad-hoc port.
+    #[arg(long, value_name = "NAME", conflicts_with = "port")]
+    pub domain: Option<String>,
+    /// List serial ports (with USB VID:PID and product names) and exit.
+    #[arg(long)]
+    pub list: bool,
+    /// Baud rate.
+    #[arg(long, default_value_t = mt_serial::opts::DEFAULT_BAUD)]
+    pub baud: u32,
+    /// 5, 6, 7 or 8.
+    #[arg(long, default_value = "8")]
+    pub data_bits: String,
+    /// none, odd or even.
+    #[arg(long, default_value = "none")]
+    pub parity: String,
+    /// 1 or 2.
+    #[arg(long, default_value = "1")]
+    pub stop_bits: String,
+    /// none, software (XON/XOFF) or hardware (RTS/CTS).
+    #[arg(long, default_value = "none")]
+    pub flow: String,
+    /// Show typed characters locally (for devices that do not echo).
+    #[arg(long)]
+    pub local_echo: bool,
+    /// What Enter is sent as: cr, lf or crlf.
+    #[arg(long, default_value = "cr")]
+    pub line_ending: String,
+}
+
+impl SerialArgs {
+    /// The domain string the app resolves: a configured name or `serial:PORT?...`.
+    pub fn domain_ref(&self) -> Result<String, String> {
+        if let Some(d) = &self.domain {
+            return Ok(d.clone());
+        }
+        let port = self.port.clone().unwrap_or_default();
+        let mut o = mt_serial::SerialOpts::new(port);
+        o.baud = mt_serial::opts::parse_baud(&self.baud.to_string()).map_err(|e| e.to_string())?;
+        o.data_bits = self
+            .data_bits
+            .parse()
+            .map_err(|e: mt_serial::OptsError| e.to_string())?;
+        o.parity = self
+            .parity
+            .parse()
+            .map_err(|e: mt_serial::OptsError| e.to_string())?;
+        o.stop_bits = self
+            .stop_bits
+            .parse()
+            .map_err(|e: mt_serial::OptsError| e.to_string())?;
+        o.flow = self
+            .flow
+            .parse()
+            .map_err(|e: mt_serial::OptsError| e.to_string())?;
+        o.line_ending = self
+            .line_ending
+            .parse()
+            .map_err(|e: mt_serial::OptsError| e.to_string())?;
+        o.local_echo = self.local_echo;
+        Ok(o.to_domain_ref())
+    }
+}
+
+/// `microterm serial --list`: one line per port.
+pub fn print_serial_ports() {
+    let ports = mt_serial::discover();
+    if ports.is_empty() {
+        println!("no serial ports found");
+    }
+    for p in ports {
+        let d = p.detail();
+        if d.is_empty() {
+            println!("{}", p.path);
+        } else {
+            println!("{:<28} {d}", p.path);
         }
     }
 }

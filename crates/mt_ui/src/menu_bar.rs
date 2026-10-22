@@ -198,6 +198,12 @@ pub fn build_menu_bar(
             &format!("SpawnTabInDomain({})", d.name),
         ));
     }
+    for p in &config.serial_ports {
+        domains.push(c.on(
+            &format!("Serial: {}", p.name),
+            &format!("SpawnTabInDomain({})", p.name),
+        ));
+    }
     let attach = if st.parked.is_empty() {
         c.item("Attach", "AttachWorkspace", false)
     } else {

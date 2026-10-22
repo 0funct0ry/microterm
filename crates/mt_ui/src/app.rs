@@ -126,18 +126,30 @@ pub enum CloseTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptKind {
     ConnectHost,
+    /// `PORT [BAUD]` for a serial port that discovery does not list.
+    ConnectSerial,
     CreateWorkspace,
     RenameWorkspace(u64),
     /// "Move to folder…" for the snippet in `snippets.move_target` (an empty name = ungrouped).
     MoveSnippet,
 }
 
+/// A modem-line operation on a serial tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SerialOp {
+    Break,
+    Dtr,
+    Rts,
+}
+
 /// What the reconnect card shows (SPEC §4.6).
 pub struct SshCard {
     pub domain: mt_mux::DomainId,
     pub name: String,
-    /// `user@host:port`.
+    /// `user@host:port`, or `/dev/ttyUSB0 · 115200 8N1` for a serial port.
     pub label: String,
+    /// A serial port rather than an SSH host (different wording, no remote session).
+    pub serial: bool,
     pub state: DomainState,
 }
 
@@ -154,6 +166,12 @@ pub enum Target {
     NewTab(String),
     /// "Connect to host…": asks for `[user@]host[:port]`.
     ConnectHost,
+    /// "Connect to serial port…": opens the port picker.
+    ConnectSerial,
+    /// "Other port…" in the serial picker: asks for `PORT [BAUD]`.
+    PromptSerial,
+    /// A port from the picker: its device path.
+    Serial(String),
     Workspace(String),
     CreateWorkspace,
     /// Opens the workspace designer on the active workspace.
@@ -750,13 +768,19 @@ impl AppWindow {
             opts.scrollback = session::DEFAULT_SCROLLBACK;
         }
         let (tx, rx) = async_channel::bounded::<()>(1);
-        let term = crate::ssh_host::remote_terminal(cx, domain, pane, spec, opts, tx)?;
-        let title = {
-            let host = mux_host::host(cx);
-            match host.mux.domain_kind(domain) {
+        let kind = mux_host::host(cx).mux.domain_kind(domain);
+        let (term, title) = if matches!(kind, Some(mt_mux::DomainKind::Serial { .. })) {
+            let term = crate::serial_host::serial_terminal(cx, domain, opts, tx)?;
+            let title =
+                crate::serial_host::tab_label(cx, domain).unwrap_or_else(|| "serial".into());
+            (term, title)
+        } else {
+            let term = crate::ssh_host::remote_terminal(cx, domain, pane, spec, opts, tx)?;
+            let title = match kind {
                 Some(mt_mux::DomainKind::Ssh { name }) => name,
                 _ => "ssh".to_string(),
-            }
+            };
+            (term, title)
         };
         let tab = self.tabs.get_mut(index).ok_or("no such tab")?;
         let tab_id = tab.id;
@@ -1229,6 +1253,7 @@ impl AppWindow {
             | OverlayKind::Launcher
             | OverlayKind::WorkspaceSwitcher
             | OverlayKind::ThemeSelector
+            | OverlayKind::SerialPicker
             | OverlayKind::TabColorPicker => self.picker = Some(self.build_picker(kind, cx)),
             OverlayKind::QuickSelect => self.prepare_quick_select(cx),
             OverlayKind::CopyMode => self.prepare_copy_mode(cx),
@@ -1294,6 +1319,7 @@ impl AppWindow {
             }
             OverlayKind::Launcher
             | OverlayKind::WorkspaceSwitcher
+            | OverlayKind::SerialPicker
             | OverlayKind::TabColorPicker => {
                 self.picker = None;
             }
@@ -1409,6 +1435,29 @@ impl AppWindow {
                     kind,
                     state,
                     placeholder: "Select a theme…",
+                }
+            }
+            OverlayKind::SerialPicker => {
+                let mut items: Vec<(String, Entry)> = crate::serial_host::discovered()
+                    .into_iter()
+                    .map(|p| {
+                        let mut e = Entry::new(
+                            Target::Serial(p.path.clone()),
+                            format!("serial:{}", p.path),
+                        );
+                        e.icon = Some(IconName::Terminal);
+                        let d = p.detail();
+                        e.detail = (!d.is_empty()).then_some(d);
+                        (p.path, e)
+                    })
+                    .collect();
+                let mut other = Entry::new(Target::PromptSerial, "serial:other");
+                other.icon = Some(IconName::Plus);
+                items.push(("Other port…".to_string(), other));
+                PickerData {
+                    kind,
+                    state: PickerState::new(items),
+                    placeholder: "Select a serial port…",
                 }
             }
             OverlayKind::TabColorPicker => {
@@ -1604,6 +1653,10 @@ impl AppWindow {
         e.icon = Some(IconName::Plus);
         e.detail = Some("ssh".into());
         items.push(("Connect to host…".to_string(), e));
+        let mut e = Entry::new(Target::ConnectSerial, "domain:connect-serial".to_string());
+        e.icon = Some(IconName::Plus);
+        e.detail = Some("serial".into());
+        items.push(("Connect to serial port…".to_string(), e));
         for (name, detail, _) in self.workspace_rows(cx) {
             let mut e = Entry::new(Target::Workspace(name.clone()), format!("workspace:{name}"));
             e.icon = Some(IconName::Layers);
@@ -1617,6 +1670,7 @@ impl AppWindow {
     fn domain_names(&self, cx: &App) -> Vec<String> {
         let mut v = vec!["local".to_string()];
         v.extend(crate::ssh_host::configured_names(cx));
+        v.extend(crate::serial_host::configured_names(cx));
         v
     }
 
@@ -1754,6 +1808,14 @@ impl AppWindow {
             }
             Target::ConnectHost => {
                 self.begin_prompt(PromptKind::ConnectHost, String::new(), window, cx);
+            }
+            Target::PromptSerial => {
+                self.begin_prompt(PromptKind::ConnectSerial, String::new(), window, cx);
+            }
+            Target::ConnectSerial => self.open_overlay(OverlayKind::SerialPicker, window, cx),
+            Target::Serial(path) => {
+                let domain = self.serial_domain_ref_for(&path, cx);
+                self.spawn_tab_in_domain(&domain, window, cx);
             }
             Target::NewTab(domain) => {
                 if domain != "local" {
@@ -2238,6 +2300,20 @@ impl AppWindow {
                 let domain = format!("{}{name}", crate::ssh_host::ADHOC_PREFIX);
                 self.spawn_tab_in_domain(&domain, window, cx);
             }
+            PromptKind::ConnectSerial => {
+                self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
+                let mut words = name.split_whitespace();
+                let port = words.next().unwrap_or_default().to_string();
+                let baud = words.next().and_then(|b| b.parse::<u32>().ok());
+                let mut domain = self.serial_domain_ref_for(&port, cx);
+                if let Some(b) = baud.filter(|_| domain.starts_with("serial:")) {
+                    if let Ok(mut o) = mt_serial::SerialOpts::from_domain_ref(&domain) {
+                        o.baud = b;
+                        domain = o.to_domain_ref();
+                    }
+                }
+                self.spawn_tab_in_domain(&domain, window, cx);
+            }
             PromptKind::CreateWorkspace => {
                 self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
                 self.switch_workspace_named(name, true, cx);
@@ -2402,18 +2478,22 @@ impl AppWindow {
         let host = mux_host::host(cx);
         let domain = host.mux.pane_domain(pane)?;
         let state = host.mux.domain_state(domain)?.clone();
-        let mt_mux::DomainKind::Ssh { name } = host.mux.domain_kind(domain)? else {
-            return None;
+        let (name, serial) = match host.mux.domain_kind(domain)? {
+            mt_mux::DomainKind::Ssh { name } => (name, false),
+            mt_mux::DomainKind::Serial { name } => (name, true),
+            mt_mux::DomainKind::Local => return None,
         };
-        let label = host
-            .ssh
-            .conns
-            .get(&domain)
-            .map_or_else(|| name.clone(), |c| c.label.clone());
+        let label = if serial {
+            host.serial.conns.get(&domain).map(|c| c.label.clone())
+        } else {
+            host.ssh.conns.get(&domain).map(|c| c.label.clone())
+        }
+        .unwrap_or_else(|| name.clone());
         Some(SshCard {
             domain,
             name,
             label,
+            serial,
             state,
         })
     }
@@ -2424,9 +2504,25 @@ impl AppWindow {
             .is_some_and(|c| c.state != DomainState::Connected)
     }
 
+    /// `SerialSendBreak` / `SerialToggleDtr` / `SerialToggleRts` on the active tab's port.
+    pub(crate) fn serial_op(&mut self, op: SerialOp, cx: &mut Context<Self>) {
+        match self.ssh_card(cx) {
+            Some(card) if card.serial => match op {
+                SerialOp::Break => crate::serial_host::send_break(cx, card.domain),
+                SerialOp::Dtr => crate::serial_host::toggle_dtr(cx, card.domain),
+                SerialOp::Rts => crate::serial_host::toggle_rts(cx, card.domain),
+            },
+            _ => self.toast(ToastKind::Warning, "This tab is not a serial port", cx),
+        }
+    }
+
     pub(crate) fn reconnect_now(&mut self, cx: &mut Context<Self>) {
         if let Some(card) = self.ssh_card(cx) {
-            crate::ssh_host::reconnect_now(cx, card.domain);
+            if card.serial {
+                crate::serial_host::reconnect_now(cx, card.domain);
+            } else {
+                crate::ssh_host::reconnect_now(cx, card.domain);
+            }
         }
     }
 
@@ -2514,7 +2610,21 @@ impl AppWindow {
         self.answer_ssh_prompt(|r, _| r.confirm(trust), window, cx);
     }
 
-    /// Opens a tab in a named SSH domain (or `local`).
+    /// The domain string for opening `path`: the `[[serial_ports]]` entry for that device when
+    /// there is one (it carries the user's settings), else an ad-hoc `serial:` reference.
+    fn serial_domain_ref_for(&self, path: &str, cx: &App) -> String {
+        cx.global::<Settings>()
+            .config
+            .serial_ports
+            .iter()
+            .find(|p| p.port == path)
+            .map_or_else(
+                || mt_serial::SerialOpts::new(path).to_domain_ref(),
+                |p| p.name.clone(),
+            )
+    }
+
+    /// Opens a tab in a named SSH or serial domain (or `local`).
     pub(crate) fn spawn_tab_in_domain(
         &mut self,
         domain: &str,
@@ -2552,6 +2662,7 @@ impl AppWindow {
                 | OverlayKind::Launcher
                 | OverlayKind::WorkspaceSwitcher
                 | OverlayKind::ThemeSelector
+                | OverlayKind::SerialPicker
                 | OverlayKind::TabColorPicker,
             ) => {
                 if ev.keystroke.key == "backspace" {

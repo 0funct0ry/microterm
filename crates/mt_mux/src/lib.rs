@@ -14,8 +14,8 @@ pub mod wait;
 
 pub use color_rules::ColorRules;
 pub use domain::{
-    Domain, DomainId, DomainKind, DomainState, LocalDomain, SpawnSpec, SplitOrigin, SshDomain,
-    LOCAL_DOMAIN_ID,
+    Domain, DomainId, DomainKind, DomainState, LocalDomain, SerialDomain, SpawnSpec, SplitOrigin,
+    SshDomain, LOCAL_DOMAIN_ID,
 };
 pub use model::{
     Axis, Error, Id, Mux, MuxEvent, NotifySource, Pane, PaneClosed, PaneTree, Tab, Window,

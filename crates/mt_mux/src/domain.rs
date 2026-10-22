@@ -1,4 +1,4 @@
-//! Domains: where a pane's process lives (SPEC §5): `Local`, and since M10 `Ssh`.
+//! Domains: where a pane's process lives (SPEC §5): `Local`, since M10 `Ssh`, since M12 `Serial`.
 
 use std::path::PathBuf;
 
@@ -102,6 +102,36 @@ impl Domain for SshDomain {
     }
 }
 
+/// A serial port (`[[serial_ports]]` or an ad-hoc `microterm serial PORT`), since M12.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialDomain {
+    id: DomainId,
+    name: String,
+}
+
+impl SerialDomain {
+    pub fn new(id: DomainId, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+        }
+    }
+}
+
+impl Domain for SerialDomain {
+    fn id(&self) -> DomainId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn kind(&self) -> DomainKind {
+        DomainKind::Serial {
+            name: self.name.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LocalDomain;
 
@@ -143,6 +173,13 @@ mod tests {
             DomainState::Disconnected { reason: "x".into() }.label(),
             "disconnected"
         );
+    }
+
+    #[test]
+    fn serial_domain_identity() {
+        let d = SerialDomain::new(4, "uno");
+        assert_eq!((d.id(), d.name()), (4, "uno"));
+        assert_eq!(d.kind(), DomainKind::Serial { name: "uno".into() });
     }
 
     #[test]

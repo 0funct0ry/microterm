@@ -56,6 +56,19 @@ fn main() {
             let domain = args.domain_ref();
             launch_gui(cli, Some(domain))
         }
+        Some(Command::Serial(args)) => {
+            if args.list {
+                cli::print_serial_ports();
+                return;
+            }
+            match args.domain_ref() {
+                Ok(domain) => launch_gui(cli, Some(domain)),
+                Err(e) => {
+                    eprintln!("microterm serial: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         None => launch_gui(cli, None),
     }
 }

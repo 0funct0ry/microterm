@@ -1,0 +1,12 @@
+[package]
+name = "mt_serial"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# Backoff schedule shared with the SSH link (SPEC §11.4).
+mt_ssh = { path = "../mt_ssh" }
+serialport = "4.10"
+async-channel = { workspace = true }

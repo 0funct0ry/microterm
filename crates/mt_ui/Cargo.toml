@@ -23,6 +23,7 @@ mt_proto = { path = "../mt_proto" }
 mt_snippets = { path = "../mt_snippets" }
 mt_record = { path = "../mt_record" }
 mt_ssh = { path = "../mt_ssh" }
+mt_serial = { path = "../mt_serial" }
 async-channel = "2"
 anyhow = "1"
 fontdb = "0.24.0"

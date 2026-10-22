@@ -564,3 +564,51 @@ fn templates_without_enabled_is_an_info_diagnostic() {
     let l = parse_str("[snippets]\nenabled = true\ntemplates = true\n").unwrap();
     assert!(l.warnings.is_empty());
 }
+
+#[test]
+fn serial_ports_round_trip_and_defaults() {
+    let src = r##"
+[[serial_ports]]
+name = "uno"
+port = "/dev/ttyACM0"
+baud = 9600
+data_bits = "7"
+parity = "even"
+stop_bits = "2"
+flow = "hardware"
+local_echo = true
+line_ending = "crlf"
+color = "teal"
+[[serial_ports]]
+name = "plain"
+port = "/dev/ttyUSB0"
+"##;
+    let c = parse_str(src).expect("valid").config;
+    assert_eq!(c.serial_ports.len(), 2);
+    assert_eq!(c.serial_ports[0].baud, Some(9600));
+    assert!(c.serial_ports[0].local_echo && !c.serial_ports[1].local_echo);
+    assert_eq!(c.serial_ports[1].parity, None);
+    let back = parse_str(&toml::to_string(&c).unwrap()).unwrap().config;
+    assert_eq!(back, c);
+}
+
+#[test]
+fn bad_serial_options_are_errors() {
+    let m = msgs("[[serial_ports]]\nname = \"a\"\nport = \"/dev/x\"\nparity = \"mark\"\nbaud = 0\nline_ending = \"nl\"\n");
+    assert!(
+        m.contains("serial_ports[0].parity must be one of none, odd, even"),
+        "{m}"
+    );
+    assert!(m.contains("serial_ports[0].baud"), "{m}");
+    assert!(m.contains("serial_ports[0].line_ending"), "{m}");
+    let m = msgs("[[serial_ports]]\nname = \"a\"\nport = \"/dev/x\"\ncolor = \"gren\"\n");
+    assert!(m.contains("unknown color"), "{m}");
+}
+
+#[test]
+fn unknown_serial_key_is_flagged() {
+    let w = parse_str("[[serial_ports]]\nname = \"a\"\nport = \"/dev/x\"\nbaudrate = 1\n")
+        .expect("unknown keys only warn")
+        .warnings;
+    assert!(w.iter().any(|d| d.message.contains("baudrate")), "{w:?}");
+}

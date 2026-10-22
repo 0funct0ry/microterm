@@ -155,6 +155,11 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
         &[NewPanesOnly],
     );
     d.mark(
+        old.serial_ports != new.serial_ports,
+        "serial_ports",
+        &[NewPanesOnly],
+    );
+    d.mark(
         old.workspaces != new.workspaces,
         "workspaces",
         &[NewPanesOnly],

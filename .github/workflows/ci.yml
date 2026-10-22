@@ -27,7 +27,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             clang cmake pkg-config libssl-dev libfontconfig-dev libasound2-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
-            libx11-xcb-dev libvulkan-dev mesa-vulkan-drivers libzstd-dev
+            libx11-xcb-dev libvulkan-dev mesa-vulkan-drivers libzstd-dev libudev-dev socat
 
       # rust-toolchain.toml pins the version and components (rustfmt, clippy).
       - uses: dtolnay/rust-toolchain@stable

@@ -139,6 +139,10 @@ pub fn resolve_domain(cx: &mut App, name: &str) -> Result<DomainId, RpcError> {
     if name == "local" {
         return Ok(LOCAL_DOMAIN_ID);
     }
+    if let Some(serial) = crate::serial_host::def_for(cx, name) {
+        let def = serial.map_err(RpcError::bad_request)?;
+        return crate::serial_host::resolve(cx, def);
+    }
     let def = def_for(cx, name)
         .ok_or_else(|| RpcError::not_found(format!("no domain named \"{name}\"")))?;
     let id = mux_host::host(cx).mux.register_ssh_domain(&def.name);

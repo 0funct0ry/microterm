@@ -43,6 +43,7 @@ pub struct Config {
     pub launch: Vec<LaunchProfile>,
     pub workspaces: Vec<WorkspaceDef>,
     pub ssh_domains: Vec<SshDomain>,
+    pub serial_ports: Vec<SerialPort>,
     /// `[context_menu.<id>]`, keyed by registry id (SPEC §10.9).
     pub context_menu: BTreeMap<String, crate::menu::MenuConfig>,
     pub menu_groups: BTreeMap<String, crate::menu::MenuGroup>,
@@ -87,6 +88,7 @@ impl Default for Config {
             launch: Vec::new(),
             workspaces: Vec::new(),
             ssh_domains: Vec::new(),
+            serial_ports: Vec::new(),
             context_menu: BTreeMap::new(),
             menu_groups: BTreeMap::new(),
             menu_security: crate::menu::MenuSecurity::default(),
@@ -944,6 +946,38 @@ pub struct SshDomain {
     #[serde(default)]
     pub connect_timeout_s: Option<u32>,
     /// Color of every tab opened in this domain (name or `#rrggbb`).
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+/// A named serial port (`[[serial_ports]]`, SPEC §17.3). Option values are validated by the
+/// config diagnostics and parsed by `mt_serial`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialPort {
+    pub name: String,
+    /// Device path, e.g. `/dev/ttyUSB0` or `/dev/cu.usbmodem1101`.
+    pub port: String,
+    #[serde(default)]
+    pub baud: Option<u32>,
+    /// `5`..`8` (default 8).
+    #[serde(default)]
+    pub data_bits: Option<String>,
+    /// `none` | `odd` | `even`.
+    #[serde(default)]
+    pub parity: Option<String>,
+    /// `1` | `2`.
+    #[serde(default)]
+    pub stop_bits: Option<String>,
+    /// `none` | `software` | `hardware`.
+    #[serde(default)]
+    pub flow: Option<String>,
+    /// Show typed characters locally (for devices that do not echo).
+    #[serde(default)]
+    pub local_echo: bool,
+    /// What Enter is sent as: `cr` (default) | `lf` | `crlf`.
+    #[serde(default)]
+    pub line_ending: Option<String>,
+    /// Color of every tab opened on this port (name or `#rrggbb`).
     #[serde(default)]
     pub color: Option<String>,
 }

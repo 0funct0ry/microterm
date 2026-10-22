@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **M12 — Serial ports.** `microterm serial PORT [--baud N --data-bits 5-8 --parity none|odd|even
+  --stop-bits 1|2 --flow none|software|hardware --local-echo --line-ending cr|lf|crlf]` opens a
+  serial device in a tab (`microterm serial --list` shows the ports with USB VID:PID and product
+  names). `[[serial_ports]]` entries appear in the launcher, the menu bar and `ctl tab new
+  --domain NAME`; **Connect to serial port…** (launcher or `ConnectSerial`) picks a discovered
+  port, or any path with "Other port…". The tab shows `ttyUSB0 @ 115200`; the new actions
+  `SerialSendBreak`, `SerialToggleDtr` (resets most Arduino boards) and `SerialToggleRts` act on
+  the active tab. Unplugging a device shows the reconnect card with serial wording and reopens
+  the same path with the SSH backoff schedule when it comes back; the screen is kept. New
+  `mt_serial` crate (`serialport`); `socat` pty-pair test on Linux (`make test-serial`).
 - **M11.5 — Snippets.** Save reusable commands in `snippets.toml` and insert them into a pane from a
   collapsible right-hand **side panel** (`⌘⇧S` / `Ctrl+Shift+S`, resizable, folders, ranked
   search, a row menu and drag-to-reorder), the palette (`!`, `⌥Enter` runs), a key binding

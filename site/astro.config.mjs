@@ -25,6 +25,7 @@ export default defineConfig({
             { label: 'Copy mode', slug: 'docs/copy-mode' },
             { label: 'Search', slug: 'docs/search' },
             { label: 'SSH domains', slug: 'docs/ssh-domains' },
+            { label: 'Serial ports', slug: 'docs/serial-ports' },
             { label: 'microterm-mux', slug: 'docs/microterm-mux' },
           ],
         },

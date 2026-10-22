@@ -41,7 +41,7 @@ CRATE_FEATURES = $(if $(filter microterm,$(C)),$(FEATURES),$(if $(filter mt_ui x
 
 .PHONY: help setup doctor tools tool-cargo-deny \
 	run run-release run-headless build release mux mux-release mux-musl \
-	test test-crate test-ssh test-ssh-local ssh-demo ssh-demo-drop check clippy fmt fmt-check lint deny audit \
+	test test-crate test-ssh test-ssh-local test-serial ssh-demo ssh-demo-drop check clippy fmt fmt-check lint deny audit \
 	check-facade check-mux-gpui check-snippets-pure themes docs docs-check doc \
 	bench bundle install release-dry \
 	site-install site-dev site-build site-preview \
@@ -148,6 +148,9 @@ ssh-demo: mux ## Start a throw-away local sshd and print the microterm.toml bloc
 
 ssh-demo-drop: ## Drop the demo sshd's live connections (tests reconnection; the listener stays up)
 	scripts/ssh-demo.sh --drop
+
+test-serial: ## Serial reconnect test over a socat pty pair (Linux; skipped without socat)
+	$(CARGO) test -p mt_serial --test pty_pair
 
 test-ssh-local: mux ## SSH integration tests against a throw-away local sshd (no Docker, no root)
 	scripts/test-ssh.sh --local

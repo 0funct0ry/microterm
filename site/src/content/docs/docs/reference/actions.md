@@ -160,6 +160,15 @@ action = "Disable"   # unbind a default
 | `OpenSnippetsFile` | **Open snippets file** — Open snippets.toml in your editor | — | — |
 | `InsertSnippet` | **Insert snippet** — Insert the snippet `id` into the focused pane; `run` overrides the snippet's own run setting | — | — |
 
+## Serial
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `ConnectSerial` | **Connect to serial port** — Pick a serial port and open it in a new tab | — | — |
+| `SerialSendBreak` | **Serial: send break** — Send a break (250 ms) on the active tab's serial port | — | — |
+| `SerialToggleDtr` | **Serial: toggle DTR** — Flip the DTR line of the active tab's serial port (resets most Arduino boards) | — | — |
+| `SerialToggleRts` | **Serial: toggle RTS** — Flip the RTS line of the active tab's serial port | — | — |
+
 ## Misc
 
 | Action | Description | macOS | Linux |
@@ -167,7 +176,7 @@ action = "Disable"   # unbind a default
 | `Quit` | **Quit microterm** — Close every window and exit | `⌘Q` | `Ctrl+Shift+Q` |
 | `SendString` | **Send string** — Write the given text to the active pane as if typed | — | — |
 | `SpawnCommand` | **Spawn command** — Open a tab running `command`, with optional `cwd` and `title` | — | — |
-| `ConnectSsh` | **Connect SSH** — Open a tab on the named SSH domain (arrives with M10) | — | — |
+| `ConnectSsh` | **Connect SSH** — Open a tab on the named SSH domain | — | — |
 
 ## Debug
 

@@ -244,6 +244,18 @@ impl Render for AppWindow {
                     this.spawn_tab_in_domain(&a.0, w, cx)
                 }
             }))
+            .on_action(cx.listener(|this, _: &ConnectSerial, w, cx| {
+                this.open_overlay(OverlayKind::SerialPicker, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SerialSendBreak, _, cx| {
+                this.serial_op(crate::app::SerialOp::Break, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SerialToggleDtr, _, cx| {
+                this.serial_op(crate::app::SerialOp::Dtr, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SerialToggleRts, _, cx| {
+                this.serial_op(crate::app::SerialOp::Rts, cx)
+            }))
             // Needs OSC 133 prompt marks (M8); a no-op until a pane has them.
             .on_action(cx.listener(|_, _: &ScrollToPrompt, _, _| {}))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
@@ -1121,6 +1133,7 @@ impl AppWindow {
     ) -> impl IntoElement {
         let title = match prompt.kind {
             crate::app::PromptKind::ConnectHost => "Connect to host (user@host:port)",
+            crate::app::PromptKind::ConnectSerial => "Connect to serial port (PORT [BAUD])",
             crate::app::PromptKind::CreateWorkspace => "Create workspace",
             crate::app::PromptKind::RenameWorkspace(_) => "Rename workspace",
             crate::app::PromptKind::MoveSnippet => "Move snippet to folder (empty = ungrouped)",
@@ -1391,6 +1404,31 @@ impl AppWindow {
             DomainState::Reconnecting {
                 attempt,
                 next_in_secs,
+            } if card.serial => (
+                format!("Serial port {} disconnected", card.name),
+                format!("{} — waiting for the device to come back.", card.label),
+                if *next_in_secs == 0 {
+                    format!("Looking for the device… (attempt {attempt})")
+                } else {
+                    format!("Retrying in {next_in_secs} s (attempt {attempt}).")
+                },
+                StatusKind::Reconnecting,
+            ),
+            DomainState::Disconnected { reason } if card.serial => (
+                format!("Could not open {}", card.name),
+                reason.clone(),
+                "Not connected".to_string(),
+                StatusKind::Error,
+            ),
+            DomainState::Connecting if card.serial => (
+                format!("Opening {}", card.name),
+                card.label.clone(),
+                "Opening…".to_string(),
+                StatusKind::Reconnecting,
+            ),
+            DomainState::Reconnecting {
+                attempt,
+                next_in_secs,
             } => (
                 format!("Connection to {} lost", card.name),
                 format!(
@@ -1419,6 +1457,8 @@ impl AppWindow {
         };
         let retry = if matches!(card.state, DomainState::Disconnected { .. }) {
             "Retry"
+        } else if card.serial {
+            "Retry now"
         } else {
             "Reconnect now"
         };
@@ -1623,6 +1663,7 @@ impl AppWindow {
                 | OverlayKind::Launcher
                 | OverlayKind::WorkspaceSwitcher
                 | OverlayKind::ThemeSelector
+                | OverlayKind::SerialPicker
                 | OverlayKind::TabColorPicker
         );
         let mut ctx = KeyContext::default();

@@ -19,7 +19,9 @@ use serde_json::{json, Value};
 
 use crate::ipc_ops::{self, Recorders};
 use crate::ipc_pending::{CallCtx, PaneAccess, PaneRuntime};
-use crate::{app::AppWindow, app::TabView, settings::Settings, ssh_host::SshHub};
+use crate::{
+    app::AppWindow, app::TabView, serial_host::SerialHub, settings::Settings, ssh_host::SshHub,
+};
 
 pub struct MuxHost {
     pub mux: Mux,
@@ -35,6 +37,8 @@ pub struct MuxHost {
     pub(crate) socket: Option<PathBuf>,
     /// SSH domain connections.
     pub(crate) ssh: SshHub,
+    /// Serial port connections.
+    pub(crate) serial: SerialHub,
     /// Pane exits and the `pane.run` / `pane.wait` calls still waiting.
     pub(crate) runtime: PaneRuntime,
     /// OS notifications for `pane notify`; tests swap in a fake.
@@ -63,6 +67,7 @@ impl MuxHost {
             recorders: Recorders::default(),
             socket: None,
             ssh: SshHub::default(),
+            serial: SerialHub::default(),
             runtime: PaneRuntime::default(),
             notifier: crate::notifier::system(),
             rule_labels: HashMap::new(),
@@ -1218,6 +1223,13 @@ fn apply_domain_colors(cx: &mut App, palette: &std::collections::BTreeMap<String
         .ssh_domains
         .iter()
         .map(|d| (d.name.clone(), declared_color(d.color.as_deref(), palette)))
+        .chain(
+            cx.global::<Settings>()
+                .config
+                .serial_ports
+                .iter()
+                .map(|p| (p.name.clone(), declared_color(p.color.as_deref(), palette))),
+        )
         .collect();
     let h = host(cx);
     let tabs: Vec<(Id, Id)> = h

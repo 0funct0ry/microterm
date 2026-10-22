@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use mt_proto::{NotifyLevel, StatusState};
 
 use crate::domain::{
-    Domain, DomainId, DomainKind, DomainState, LocalDomain, SshDomain, LOCAL_DOMAIN_ID,
+    Domain, DomainId, DomainKind, DomainState, LocalDomain, SerialDomain, SshDomain,
+    LOCAL_DOMAIN_ID,
 };
 use crate::status::{sanitize, NotifyLimiter, Status, StatusSource};
 use mt_proto::color::{self, ColorSource, TabColor};
@@ -602,6 +603,24 @@ impl Mux {
         let id = self.alloc();
         self.domains.push(DomainRec {
             domain: Box::new(SshDomain::new(id, name)),
+            state: DomainState::Connecting,
+        });
+        self.emit(MuxEvent::DomainStateChanged {
+            domain: id,
+            state: DomainState::Connecting,
+        });
+        id
+    }
+
+    /// Registers a serial-port domain (or returns the existing one with that name). New
+    /// domains start `Connecting`.
+    pub fn register_serial_domain(&mut self, name: &str) -> DomainId {
+        if let Some(id) = self.domain_by_name(name) {
+            return id;
+        }
+        let id = self.alloc();
+        self.domains.push(DomainRec {
+            domain: Box::new(SerialDomain::new(id, name)),
             state: DomainState::Connecting,
         });
         self.emit(MuxEvent::DomainStateChanged {
@@ -1239,6 +1258,20 @@ mod tests {
         assert_eq!(mux.active_workspace().name, "api");
         assert_eq!(mux.focused_window(), Some(w3));
         assert_eq!(mux.focus_window(999), Err(Error::NoWindow(999)));
+    }
+
+    #[test]
+    fn serial_domains_register_once_and_share_the_id_space() {
+        let mut mux = Mux::new();
+        let ssh = mux.register_ssh_domain("prod");
+        let uno = mux.register_serial_domain("uno");
+        assert!(uno > ssh);
+        assert_eq!(mux.register_serial_domain("uno"), uno);
+        assert_eq!(
+            mux.domain_kind(uno),
+            Some(DomainKind::Serial { name: "uno".into() })
+        );
+        assert_eq!(mux.domain_state(uno), Some(&DomainState::Connecting));
     }
 
     #[test]

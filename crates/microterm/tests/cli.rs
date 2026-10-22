@@ -191,3 +191,43 @@ fn ls_fonts_names_the_font_per_character() {
                 .and(predicate::str::contains("JetBrains Mono  (font.family)")),
         );
 }
+
+#[test]
+fn serial_needs_a_port_a_domain_or_list() {
+    microterm().arg("serial").assert().code(1);
+    microterm()
+        .args(["serial", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("--baud")
+                .and(predicate::str::contains("--flow"))
+                .and(predicate::str::contains("--domain")),
+        );
+}
+
+#[test]
+fn serial_rejects_bad_options_before_opening_a_window() {
+    for (flag, bad) in [
+        ("--parity", "mark"),
+        ("--data-bits", "9"),
+        ("--stop-bits", "3"),
+        ("--flow", "dtr"),
+        ("--line-ending", "nl"),
+    ] {
+        microterm()
+            .args(["serial", "/dev/null", flag, bad])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("invalid"));
+    }
+    microterm()
+        .args(["serial", "/dev/null", "--baud", "fast"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn serial_list_exits_without_a_window() {
+    microterm().args(["serial", "--list"]).assert().success();
+}
