@@ -43,12 +43,14 @@ struct ShHelper {
 impl ShHelper {
     fn comp(&self, line: &str, pos: usize) -> super::complete::Completion {
         let snap = self.shared.snapshot();
+        let snippets = self.shared.snippet_ids();
         complete(
             line,
             pos,
             &CompCtx {
                 snap: snap.as_ref(),
                 aliases: &self.aliases,
+                snippets: &snippets,
             },
         )
     }

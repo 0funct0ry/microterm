@@ -43,6 +43,10 @@ pub mod exit {
     pub const CONFIRM_REQUIRED: i32 = 8;
     /// `run --in` while a command is already running.
     pub const BUSY: i32 = 9;
+    /// A feature switched off in the config (`ctl snippet …` while `snippets.enabled = false`).
+    pub const DISABLED: i32 = 10;
+    /// A snippet needs prompt values that were not supplied.
+    pub const MISSING_VARS: i32 = 11;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +66,12 @@ pub enum ErrorCode {
     NeedsShellIntegration,
     /// The pane is busy running a command (exit 9).
     Busy,
+    /// The feature is turned off in the config (exit 10).
+    Disabled,
+    /// A snippet template does not parse, or a runtime tag failed (exit 1).
+    TemplateError,
+    /// A snippet needs values for these prompts; the candidates list them (exit 11).
+    MissingVars,
 }
 
 impl ErrorCode {
@@ -75,6 +85,9 @@ impl ErrorCode {
             ErrorCode::Timeout => exit::TIMEOUT,
             ErrorCode::NeedsShellIntegration => exit::NEEDS_SHELL_INTEGRATION,
             ErrorCode::Busy => exit::BUSY,
+            ErrorCode::Disabled => exit::DISABLED,
+            ErrorCode::TemplateError => exit::USAGE,
+            ErrorCode::MissingVars => exit::MISSING_VARS,
         }
     }
 }
@@ -117,6 +130,19 @@ impl RpcError {
     }
     pub fn busy(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Busy, message)
+    }
+    pub fn disabled(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Disabled, message)
+    }
+    pub fn template_error(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::TemplateError, message)
+    }
+    /// `labels` are the prompts still missing, one `Label (kind)` per entry.
+    pub fn missing_vars(message: impl Into<String>, labels: Vec<String>) -> Self {
+        Self {
+            candidates: labels,
+            ..Self::new(ErrorCode::MissingVars, message)
+        }
     }
     pub fn ambiguous(message: impl Into<String>, candidates: Vec<String>) -> Self {
         Self {
@@ -601,6 +627,67 @@ pub struct MenuInvokeParams {
     pub dry_run: bool,
 }
 
+/// `snippet.list`: the snippets (SPEC §10.8, §12.1), optionally filtered.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnippetListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+}
+
+/// `snippet.get` and `snippet.remove`: one snippet by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnippetIdParams {
+    pub id: String,
+}
+
+/// `snippet.expand` and `snippet.insert`: a snippet by `id` (or an inline `body`) and the values
+/// for its prompts. `expand` is read-only; `insert` is an input verb that needs an explicit
+/// target (SPEC §12.3 rule 4).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnippetUseParams {
+    #[serde(flatten)]
+    pub target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Prompt label → value.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub vars: std::collections::BTreeMap<String, String>,
+    /// `insert` only: `Some(true)` runs, `Some(false)` never runs, `None` = the snippet's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<bool>,
+    /// The request comes from an agent: snippets with `secret` prompts are refused (SPEC §12.5).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub agent: bool,
+}
+
+/// `snippet.add`: writes one snippet to `snippets.toml` (an `id` is derived from the title when
+/// absent). An existing id needs `replace`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnippetAddParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub run: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub replace: bool,
+}
+
 /// Every IPC request (SPEC §12.2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -659,6 +746,12 @@ pub enum Request {
     MenuBarList,
     MenuShow(MenuShowParams),
     MenuInvoke(MenuInvokeParams),
+    SnippetList(SnippetListParams),
+    SnippetGet(SnippetIdParams),
+    SnippetExpand(SnippetUseParams),
+    SnippetInsert(SnippetUseParams),
+    SnippetAdd(SnippetAddParams),
+    SnippetRemove(SnippetIdParams),
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -705,6 +798,12 @@ pub const METHODS: &[&str] = &[
     "menubar.list",
     "menu.show",
     "menu.invoke",
+    "snippet.list",
+    "snippet.get",
+    "snippet.expand",
+    "snippet.insert",
+    "snippet.add",
+    "snippet.remove",
 ];
 
 impl Request {
@@ -751,6 +850,12 @@ impl Request {
             Request::MenuBarList => "menubar.list",
             Request::MenuShow(_) => "menu.show",
             Request::MenuInvoke(_) => "menu.invoke",
+            Request::SnippetList(_) => "snippet.list",
+            Request::SnippetGet(_) => "snippet.get",
+            Request::SnippetExpand(_) => "snippet.expand",
+            Request::SnippetInsert(_) => "snippet.insert",
+            Request::SnippetAdd(_) => "snippet.add",
+            Request::SnippetRemove(_) => "snippet.remove",
             Request::Subscribe(_) => "subscribe",
         }
     }
@@ -772,6 +877,10 @@ impl Request {
             | Request::MenuBarList => json!({}),
             Request::MenuShow(p) => to(p),
             Request::MenuInvoke(p) => to(p),
+            Request::SnippetList(p) => to(p),
+            Request::SnippetGet(p) | Request::SnippetRemove(p) => to(p),
+            Request::SnippetExpand(p) | Request::SnippetInsert(p) => to(p),
+            Request::SnippetAdd(p) => to(p),
             Request::Subscribe(p) => to(p),
             Request::WorkspaceCreate { name } | Request::WorkspaceSwitch { name } => {
                 json!({ "name": name })
@@ -896,6 +1005,12 @@ impl Request {
             "menubar.list" => Request::MenuBarList,
             "menu.show" => Request::MenuShow(p(method, params)?),
             "menu.invoke" => Request::MenuInvoke(p(method, params)?),
+            "snippet.list" => Request::SnippetList(p(method, params)?),
+            "snippet.get" => Request::SnippetGet(p(method, params)?),
+            "snippet.expand" => Request::SnippetExpand(p(method, params)?),
+            "snippet.insert" => Request::SnippetInsert(p(method, params)?),
+            "snippet.add" => Request::SnippetAdd(p(method, params)?),
+            "snippet.remove" => Request::SnippetRemove(p(method, params)?),
             other => return Err(RpcError::bad_request(format!("unknown method {other:?}"))),
         })
     }
@@ -1730,6 +1845,40 @@ mod tests {
                 item: "viewport/zoom".into(),
                 dry_run: true,
             }),
+            Request::SnippetList(SnippetListParams {
+                folder: Some("k8s".into()),
+                tag: None,
+                query: Some("log".into()),
+            }),
+            Request::SnippetGet(SnippetIdParams { id: "a".into() }),
+            Request::SnippetExpand(SnippetUseParams {
+                target: Target::pane(2),
+                id: Some("a".into()),
+                vars: [("Pod".to_string(), "api".to_string())].into(),
+                ..Default::default()
+            }),
+            Request::SnippetInsert(SnippetUseParams {
+                target: Target {
+                    all: true,
+                    ..Target::pane(3)
+                },
+                body: Some("echo {{ uuid }}".into()),
+                run: Some(true),
+                agent: true,
+                ..Default::default()
+            }),
+            Request::SnippetAdd(SnippetAddParams {
+                id: Some("a".into()),
+                title: "A".into(),
+                body: "echo".into(),
+                folder: Some("f".into()),
+                tags: vec!["x".into()],
+                description: Some("d".into()),
+                run: true,
+                key: Some("cmd+alt+1".into()),
+                replace: true,
+            }),
+            Request::SnippetRemove(SnippetIdParams { id: "a".into() }),
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -1770,7 +1919,7 @@ mod tests {
              pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
              pane.close pane.split pane.focus pane.zoom pane.resize pane.swap pane.rotate \
              record.start record.stop replay.start config.reload subscribe menu.list menubar.list menu.show \
-             menu.invoke"
+             menu.invoke snippet.list snippet.get snippet.expand snippet.insert snippet.add snippet.remove"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(
@@ -1891,6 +2040,13 @@ mod tests {
         assert_eq!(ErrorCode::Timeout.exit_code(), 6);
         assert_eq!(ErrorCode::NeedsShellIntegration.exit_code(), 7);
         assert_eq!(ErrorCode::Busy.exit_code(), 9);
+        assert_eq!(ErrorCode::Disabled.exit_code(), 10);
+        assert_eq!(ErrorCode::MissingVars.exit_code(), 11);
+        assert_eq!(ErrorCode::TemplateError.exit_code(), 1);
+        assert_eq!(
+            serde_json::to_value(RpcError::missing_vars("m", vec!["Pod (input)".into()])).unwrap(),
+            json!({"code": "missing_vars", "message": "m", "candidates": ["Pod (input)"]})
+        );
         let line = encode_response(Some(1), Err(RpcError::needs_shell_integration("x")));
         assert!(line.contains(r#""code":"needs_shell_integration""#));
         assert_eq!(

@@ -17,8 +17,8 @@ use super::live::Shared;
 use super::session::{parse_meta, Meta, Session, Switch, META_HELP, META_WORDS};
 use crate::client::Client;
 use crate::ctl::{
-    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, SkillCmd, StatusCmd, TabCmd, WindowCmd,
-    WorkspaceCmd,
+    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, SkillCmd, SnippetCmd, StatusCmd, TabCmd,
+    WindowCmd, WorkspaceCmd,
 };
 use crate::ctl_cmd::{self, Ctx};
 use crate::output::{Body, CtlError, Output};
@@ -84,6 +84,9 @@ pub fn readonly_allows(a: &CtlAction) -> bool {
             )
             | CtlAction::Skill(SkillCmd::Show(_))
             | CtlAction::MenuBar(MenuBarCmd::List)
+            | CtlAction::Snippet(
+                SnippetCmd::List { .. } | SnippetCmd::Show { .. } | SnippetCmd::Expand { .. }
+            )
             | CtlAction::Menu(
                 MenuCmd::List
                     | MenuCmd::Show { .. }

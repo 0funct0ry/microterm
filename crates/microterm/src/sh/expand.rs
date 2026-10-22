@@ -469,6 +469,9 @@ mod tests {
             "window close",
             "pane send-text hi",
             "workspace delete old",
+            "snippet insert deploy",
+            "snippet insert --body x",
+            "snippet expand deploy",
         ] {
             assert_eq!(apply_sticky(v(line), &s), v(line), "{line}");
         }

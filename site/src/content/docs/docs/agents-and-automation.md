@@ -21,6 +21,7 @@ There are two ways to give an agent access. Use either or both.
 | Ask a human | `microterm ctl pane status set --state waiting "approve migration?"` + `microterm ctl pane notify --level attention …` |
 | Fan out parallel work | one `microterm ctl tab new --title task-N -- …` per task; `microterm ctl events --type pane.command_finished --match 'title:task-*'` to collect |
 | Clean up | `microterm ctl tab close --match 'title:task-*' --all --force` |
+| Reuse the user's saved [snippets](/docs/snippets/) | `microterm ctl snippet list --json` (ids and the prompts each asks for), then `microterm ctl snippet insert ID --pane $MICROTERM_PANE --var Label=value --run` |
 
 See [Run & wait](/docs/run-and-wait/), [Notifications & status](/docs/notifications-and-status/) and
 [Selectors & targeting](/docs/selectors-and-targeting/). For `pane run --in` and
@@ -86,6 +87,15 @@ args = ["ctl", "mcp"]
 
 Failures come back as tool errors whose text is the `ctl` error object plus its `exit_code`. If the
 MCP server runs inside a microterm pane, tools default to that pane like the CLI does.
+
+### Snippet tools
+
+While `snippets.enabled = true` the server also lists `microterm_snippet_list`,
+`microterm_snippet_expand` and `microterm_snippet_insert` (it checks on every `tools/list`, so they
+appear and disappear with the config). Give a value in `vars` for every prompt that
+`microterm_snippet_list` reports; a missing one fails with `missing_vars` (exit code 11) and the
+labels. Snippets that ask for a `secret` are always refused over MCP, so secrets never pass
+through an agent. `insert` needs an explicit pane like `microterm_pane_send_text`.
 
 ## Security: read this before enabling it
 

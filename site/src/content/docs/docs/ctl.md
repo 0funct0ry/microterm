@@ -207,6 +207,40 @@ item, 1 when the item's `when` does not hold, and 8 when the item would ask for 
 (pass `--force`). `--dry-run` prints the expanded argv or text and runs nothing. `check` validates
 the menu config and `icons` lists the names usable as `icon = "…"`, both with no running instance.
 
+## snippet
+
+```sh
+microterm ctl snippet list [--folder F] [--tag T] [--query Q]
+microterm ctl snippet show ID
+microterm ctl snippet expand (ID | --body TEXT) [TARGET] [--var LABEL=VALUE]… [--vars-file FILE|-]
+microterm ctl snippet insert (ID | --body TEXT) TARGET [--var LABEL=VALUE]… [--vars-file FILE|-]
+                             [--run | --no-run] [--all]
+microterm ctl snippet add --title T [--id ID] [--folder F] [--tag T]… [--description D]
+                          [--run] [--key K] [--replace] [BODY]
+microterm ctl snippet rm ID
+```
+
+Works on [snippets](/docs/snippets/). While `snippets.enabled = false` every verb exits `10`.
+
+- `list`, `show`, `add` and `rm` work on `snippets.toml`; `add` and `rm` write it back like the
+  panel does (comments and other entries untouched) and refuse an existing id without `--replace`.
+  `add` reads the body from stdin when `BODY` is omitted.
+- `expand` prints what a snippet expands to for a pane (`--pane`, `--match`, `$MICROTERM_PANE`,
+  else the focused pane) and changes nothing; counters do not advance.
+- `insert` types the snippet into a pane. It is an input verb: it needs `--pane`, `--match` or
+  `$MICROTERM_PANE` and never falls back to the focused pane. `--run` presses Enter, `--no-run`
+  never does, otherwise the snippet's own `run` decides; `--all` inserts into every match.
+- Prompt values come from `--var Label=value` and `--vars-file` (a JSON object `{label: value}`,
+  `-` is stdin). Use `--vars-file -` for `secret` values, because argv is visible to other
+  processes. A missing value exits `11` and lists every label that still needs one; an `input`
+  with a `default=` does not need one. With `snippets.templates = false` the body is used as
+  written and `--var` is ignored with a warning.
+
+```sh
+microterm ctl snippet insert k8s-logs --pane $MICROTERM_PANE --var Namespace=dev --var Pod=api --run
+echo '{"Token":"s3cret"}' | microterm ctl snippet insert deploy --pane 3 --vars-file -
+```
+
 ## reload-config
 
 ```sh

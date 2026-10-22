@@ -52,6 +52,8 @@ pub struct Completion {
 pub struct CompCtx<'a> {
     pub snap: Option<&'a MuxSnapshot>,
     pub aliases: &'a Aliases,
+    /// Snippet ids, completed after `snippet show|expand|insert|rm` (empty while disabled).
+    pub snippets: &'a [String],
 }
 
 /// The selector keys of SPEC §12.3 with their meaning.
@@ -503,6 +505,7 @@ fn meta_candidates(word: &str, args: &[String], cx: &CompCtx<'_>) -> (Vec<Candid
 enum Positional {
     Selector(Kind),
     Workspace,
+    SnippetId,
     Path,
     None,
 }
@@ -529,6 +532,7 @@ fn positional_kind(argv: &[String], positionals_before: usize) -> Positional {
                 return Positional::Workspace
             }
             ["replay", ..] => return Positional::Path,
+            ["snippet", "show" | "expand" | "insert" | "rm"] => return Positional::SnippetId,
             _ => {}
         }
     }
@@ -678,6 +682,16 @@ pub fn complete(line: &str, pos: usize, cx: &CompCtx<'_>) -> Completion {
         Positional::Workspace => {
             done.items = filter(cx.snap.map(workspace_names).unwrap_or_default(), cur, true)
         }
+        Positional::SnippetId => {
+            done.items = filter(
+                cx.snippets
+                    .iter()
+                    .map(|id| Candidate::new(id.clone(), ""))
+                    .collect(),
+                cur,
+                true,
+            )
+        }
         Positional::Path => done.items = filter(path_candidates(cur), "", true),
         Positional::None => {}
     }
@@ -786,6 +800,7 @@ mod tests {
         let cx = CompCtx {
             snap,
             aliases: &aliases,
+            snippets: &[],
         };
         complete(line, line.len(), &cx)
             .items
@@ -853,6 +868,7 @@ mod tests {
         let cx = CompCtx {
             snap: Some(&snap),
             aliases: &aliases,
+            snippets: &[],
         };
         let c = complete("pane get --pane ", 16, &cx);
         assert_eq!(c.start, 16);
@@ -920,6 +936,7 @@ mod tests {
             let cx = CompCtx {
                 snap: Some(&snap),
                 aliases: &aliases,
+                snippets: &[],
             };
             complete("pane list status:wor", 20, &cx)
         };
@@ -986,6 +1003,7 @@ mod tests {
         let cx = CompCtx {
             snap: None,
             aliases: &aliases,
+            snippets: &[],
         };
         let c = complete("l", 1, &cx);
         assert!(c.items.iter().any(|i| i.replacement == "ll"));
@@ -1041,5 +1059,24 @@ mod tests {
             };
             assert_eq!(parsed[1], want, "{raw:?} → {q}");
         }
+    }
+
+    #[test]
+    fn snippet_ids_complete_after_the_verbs_that_take_one() {
+        let aliases = Aliases::default();
+        let ids = vec!["k8s-logs".to_string(), "git-undo".to_string()];
+        let cx = CompCtx {
+            snap: None,
+            aliases: &aliases,
+            snippets: &ids,
+        };
+        for verb in ["show", "expand", "insert", "rm"] {
+            let line = format!("snippet {verb} k8");
+            let c = complete(&line, line.len(), &cx);
+            let got: Vec<_> = c.items.iter().map(|i| i.replacement.as_str()).collect();
+            assert_eq!(got, ["k8s-logs"], "{verb}");
+        }
+        let c = complete("snippet list k", 14, &cx);
+        assert!(c.items.is_empty(), "list takes no id");
     }
 }

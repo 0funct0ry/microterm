@@ -33,6 +33,7 @@ pub mod quick_select;
 pub mod search;
 pub mod session;
 pub mod settings;
+pub mod snippets;
 pub mod ssh_host;
 pub mod state;
 pub mod tab_chrome;
@@ -95,6 +96,7 @@ pub fn run(opts: RunOptions) {
                 .clone()
                 .unwrap_or_else(|| settings.config.startup_workspace.clone());
             cx.set_global(settings);
+            snippets::library::sync(cx);
             settings::apply_theme(cx);
             settings::install_keymap(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
@@ -171,6 +173,8 @@ fn start_config_watcher(path: &std::path::Path, cx: &mut App) {
                     if cx
                         .update(|cx| {
                             settings::reload(cx);
+                            // The watcher also reports `snippets.toml`; unchanged text is a no-op.
+                            snippets::library::sync_and_notify(cx);
                         })
                         .is_err()
                     {

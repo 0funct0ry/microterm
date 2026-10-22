@@ -50,6 +50,7 @@ export default defineConfig({
             { label: 'Themes', slug: 'docs/themes' },
             { label: 'Fonts', slug: 'docs/fonts' },
             { label: 'Context menus', slug: 'docs/context-menus' },
+            { label: 'Snippets', slug: 'docs/snippets' },
           ],
         },
         {
@@ -57,6 +58,7 @@ export default defineConfig({
           items: [
             { label: 'Actions', slug: 'docs/reference/actions' },
             { label: 'Context menus', slug: 'docs/reference/context-menus' },
+            { label: 'Template functions', slug: 'docs/reference/template-functions' },
             { label: 'Agent skill', slug: 'docs/reference/agent-skill' },
             { label: 'Terminal API (VT) support', slug: 'docs/reference/terminal-api' },
             { label: 'Environment variables', slug: 'docs/reference/environment-variables' },

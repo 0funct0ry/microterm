@@ -139,13 +139,16 @@ the per-user socket, no listener of its own.
   `get-text`, `wait`, `status get`, `events`, `menu list|show|check|icons` and `menu invoke --dry-run`
   are allowed), and disables `!` host commands.
 - `send-text` and `record --input` print a one-line warning the first time they are used in a session.
+- `snippet insert` may carry secrets in `--var`, so like `send-text` it is kept out of the history
+  (see below), and a `use` target is never applied to it; `snippet list|show|expand` are
+  allowed in `--readonly`. Snippet ids complete after `snippet show|expand|insert|rm`.
 
 ## Configuration
 
 ```toml
 [sh]
 color = "auto"             # "auto" | "always" | "never"
-history_send_text = false  # keep lines containing `send-text` in the history
+history_send_text = false  # keep lines containing `send-text` or `snippet insert` in the history
 confirm_prompts = true     # offer the [y/N] question on exit 8 (interactive only)
 ```
 

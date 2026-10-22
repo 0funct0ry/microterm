@@ -285,6 +285,7 @@ fn reload_inner(cx: &mut App) -> ReloadOutcome {
         apply_theme(cx);
     }
     notify_windows(cx, &diff);
+    crate::snippets::library::sync_and_notify(cx);
     crate::menu_bar::refresh(cx);
     if diff.is_empty() && !registry_changed {
         ReloadOutcome::Unchanged
@@ -305,8 +306,10 @@ fn set_banner(cx: &mut App, banner: Option<Banner>) {
 
 /// Rebinds every key from the defaults plus the user's `[[keys]]`.
 pub fn install_keymap(cx: &mut App) {
-    let specs: Vec<KeyBindingSpec> =
-        mt_config::keys::bindings(&cx.global::<Settings>().config).unwrap_or_default();
+    // Per-snippet keys sit between the defaults and the user's `[[keys]]` (SPEC §10.8.2).
+    let mut specs: Vec<KeyBindingSpec> =
+        crate::snippets::keys::specs(&crate::snippets::library::set(cx));
+    specs.extend(mt_config::keys::bindings(&cx.global::<Settings>().config).unwrap_or_default());
     let (bindings, _) = actions::build_keymap(Platform::current(), cx, &specs);
     cx.clear_key_bindings();
     cx.bind_keys(bindings);

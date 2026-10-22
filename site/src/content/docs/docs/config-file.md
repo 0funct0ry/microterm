@@ -97,6 +97,25 @@ reorder the built-ins and set the trigger; `[[menu_groups.<name>.items]]` are re
 opens. See [Context menus](/docs/context-menus/) and the
 [menu reference](/docs/reference/context-menus/).
 
+## Snippets
+
+`[snippets]` turns on the [snippets](/docs/snippets/) feature and its `{{ }}` templates; both are
+off by default.
+
+```toml
+[snippets]
+enabled = false                  # master switch; false = no panel, no file read, `ctl snippet` exits 10
+templates = false                # expand {{ }} templates; false = bodies are inserted literally
+panel_width = 300                # px, 220-600; dragging the panel edge overrides it per window
+panel_open_on_start = false      # open the panel in new windows (the saved window state wins)
+confirm_multiline = false        # ask before inserting a multi-line snippet
+focus_terminal_after_insert = true
+preview_lines = 2                # body lines under each title in the panel (0-5)
+```
+
+The snippets themselves are in `snippets.toml`, next to this file. Changing `enabled` applies at
+once in every window; `templates` applies to the next insert.
+
 ## Errors
 
 - **Syntax and type errors** are errors. microterm keeps the last valid config.

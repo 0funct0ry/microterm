@@ -26,6 +26,10 @@ things you use most float to the top.
 `Enter` runs the highlighted row. `⌘Enter` / `Ctrl+Enter` runs it in a new window where that
 makes sense (launch profiles and *New tab in…*).
 
+With [snippets](/docs/snippets/) enabled, `!` lists your snippets ("Snippet: Tail pod logs"; the
+row shows the folder and first line). `Enter` inserts the snippet and `⌥Enter` / `Alt+Enter`
+inserts and runs it. The provider is absent while `snippets.enabled = false`.
+
 Every action in the [actions reference](/docs/reference/actions/) is reachable from the palette,
 except the ones that need an argument (`SendString`, `SpawnCommand`, …): bind those under
 `[[keys]]`.

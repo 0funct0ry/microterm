@@ -256,7 +256,12 @@ pub fn history_allows(line: &str, aliases: &Aliases, allow_send_text: bool) -> b
     }
     let words: Vec<String> = line.split_whitespace().map(String::from).collect();
     let expanded = super::expand::expand_aliases(words, aliases);
-    !expanded.iter().any(|w| w == "send-text") && !line.contains("send-text")
+    // `snippet insert` carries `--var` values that may be secrets, just like send-text.
+    let inserts_snippet = expanded
+        .windows(2)
+        .any(|w| w[0] == "snippet" && w[1] == "insert")
+        || line.contains("snippet insert");
+    !expanded.iter().any(|w| w == "send-text") && !line.contains("send-text") && !inserts_snippet
 }
 
 #[cfg(test)]
@@ -269,6 +274,24 @@ mod tests {
 
     fn meta(s: &str) -> Meta {
         parse_meta(&w(s)).expect("meta").expect("valid")
+    }
+
+    #[test]
+    fn snippet_insert_stays_out_of_the_history_unless_allowed() {
+        let a = Aliases::default();
+        assert!(!history_allows(
+            "snippet insert deploy --var Token=x",
+            &a,
+            false
+        ));
+        assert!(!history_allows(
+            "snippet  insert deploy --pane 3",
+            &a,
+            false
+        ));
+        assert!(history_allows("snippet insert deploy --pane 3", &a, true));
+        assert!(history_allows("snippet list", &a, false));
+        assert!(history_allows("snippet expand deploy", &a, false));
     }
 
     #[test]

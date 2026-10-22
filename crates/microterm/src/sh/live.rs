@@ -20,6 +20,8 @@ pub struct Shared {
     last_try: Mutex<Option<Instant>>,
     /// `[event] …` lines waiting for the next prompt.
     queue: Mutex<Vec<String>>,
+    /// Snippet ids for completion, refreshed at most every two seconds.
+    snippets: Mutex<(Option<Instant>, Vec<String>)>,
 }
 
 /// Structural events only: `pane.output` would invalidate the snapshot on every byte.
@@ -68,6 +70,7 @@ impl Shared {
             notices: AtomicBool::new(true),
             last_try: Mutex::new(None),
             queue: Mutex::new(Vec::new()),
+            snippets: Mutex::new((None, Vec::new())),
         })
     }
 
@@ -92,6 +95,33 @@ impl Shared {
     /// line editor is never interrupted from another thread.
     pub fn take_notices(&self) -> Vec<String> {
         std::mem::take(&mut *self.queue.lock().expect("queue lock"))
+    }
+
+    /// The snippet ids (empty while snippets are disabled or no instance answers).
+    pub fn snippet_ids(&self) -> Vec<String> {
+        let mut cache = self.snippets.lock().expect("snippets lock");
+        if cache
+            .0
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+        {
+            return cache.1.clone();
+        }
+        let ids = connect(self.socket.as_deref())
+            .ok()
+            .and_then(|mut c| {
+                c.call(&Request::SnippetList(mt_proto::SnippetListParams::default()))
+                    .ok()
+            })
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|s| s["id"].as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        *cache = (Some(Instant::now()), ids.clone());
+        ids
     }
 
     pub fn invalidate(&self) {

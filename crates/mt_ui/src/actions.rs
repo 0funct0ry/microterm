@@ -68,6 +68,13 @@ actions!(
         OpenReleaseNotes,
         ReportIssue,
         ShowConfigFolder,
+        // Snippets (M11.5).
+        ToggleSnippetsPanel,
+        FocusSnippetsPanel,
+        NewSnippet,
+        SaveSelectionAsSnippet,
+        SaveLastCommandAsSnippet,
+        OpenSnippetsFile,
         /// Placeholder behind a disabled menu row: no view handles it, so the OS greys the row.
         MenuDisabled,
         DebugShowConfigError,
@@ -78,6 +85,7 @@ actions!(
         PickerDown,
         PickerConfirm,
         PickerConfirmInNewWindow,
+        PickerConfirmRun,
         NewWorkspaceFromQuery,
     ]
 );
@@ -118,6 +126,15 @@ pub struct SetTabColor(pub String);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = microterm, no_json)]
 pub struct InvokeMenuItem(pub String);
+
+/// Insert the snippet `id` into the focused pane; `run` overrides the snippet's own `run`
+/// (SPEC §10.8.6): `{ InsertSnippet = { id = "k8s-logs", run = true } }`.
+#[derive(Clone, Debug, Default, PartialEq, Action)]
+#[action(namespace = microterm, no_json)]
+pub struct InsertSnippet {
+    pub id: String,
+    pub run: Option<bool>,
+}
 
 /// Swap the focused pane with its neighbour.
 #[derive(Clone, PartialEq, Action)]
@@ -939,6 +956,60 @@ pub static ACTIONS: &[ActionDef] = &[
         "Open a tab on the named SSH domain (arrives with M10)",
         ConnectSsh(String::new())
     ),
+    def!(
+        "ToggleSnippetsPanel",
+        "Toggle snippets panel",
+        "Open the snippets side panel; press again to focus it, and again to close it",
+        &["cmd-shift-s"],
+        &["ctrl-shift-s"],
+        ToggleSnippetsPanel
+    ),
+    def!(
+        "FocusSnippetsPanel",
+        "Focus snippets panel",
+        "Move keyboard focus to the snippets panel (opening it if needed)",
+        &[],
+        &[],
+        FocusSnippetsPanel
+    ),
+    def!(
+        "NewSnippet",
+        "New snippet",
+        "Create a snippet in the snippets panel",
+        &[],
+        &[],
+        NewSnippet
+    ),
+    def!(
+        "SaveSelectionAsSnippet",
+        "Save selection as snippet",
+        "Create a snippet from the selected text",
+        &[],
+        &[],
+        SaveSelectionAsSnippet
+    ),
+    def!(
+        "SaveLastCommandAsSnippet",
+        "Save last command as snippet",
+        "Create a snippet from the last command (needs shell integration)",
+        &[],
+        &[],
+        SaveLastCommandAsSnippet
+    ),
+    def!(
+        "OpenSnippetsFile",
+        "Open snippets file",
+        "Open snippets.toml in your editor",
+        &[],
+        &[],
+        OpenSnippetsFile
+    ),
+    def!(
+        args "InsertSnippet",
+        "Insert snippet",
+        "Insert the snippet `id` into the focused pane; `run` overrides the snippet's own run setting",
+        InsertSnippet::default()
+    ),
     def!(debug "DebugShowConfigError", "Debug: Show config error banner", "Show the invalid-config banner", DebugShowConfigError),
     def!(debug "DebugShowToast", "Debug: Show toast", "Push a toast onto the stack", DebugShowToast),
 ];
@@ -954,6 +1025,7 @@ pub const CATEGORIES: &[&str] = &[
     "Config",
     "Menus",
     "Tab colors",
+    "Snippets",
     "Misc",
     "Debug",
 ];
@@ -1013,6 +1085,13 @@ impl ActionDef {
             | "OpenReleaseNotes" | "ReportIssue" => "Config",
             "ShowContextMenu" | "InvokeMenuItem" => "Menus",
             "SetTabColor" | "SetTabColorInteractive" | "ClearTabColor" => "Tab colors",
+            "ToggleSnippetsPanel"
+            | "FocusSnippetsPanel"
+            | "NewSnippet"
+            | "SaveSelectionAsSnippet"
+            | "SaveLastCommandAsSnippet"
+            | "OpenSnippetsFile"
+            | "InsertSnippet" => "Snippets",
             _ => "Misc",
         }
     }
@@ -1105,6 +1184,16 @@ pub fn resolve_action(name: &str, arg: &Option<ActionArg>) -> Result<Box<dyn Act
         ("SpawnCommand", Some(ActionArg::Table(t))) => parse_spawn_command(t)
             .map(|c| Box::new(c) as Box<dyn Action>)
             .map_err(|e| format!("SpawnCommand: {e}")),
+        ("InsertSnippet", Some(ActionArg::Table(t))) => parse_insert_snippet(t)
+            .map(|c| Box::new(c) as Box<dyn Action>)
+            .map_err(|e| format!("InsertSnippet: {e}")),
+        ("InsertSnippet", Some(ActionArg::Str(id))) => Ok(Box::new(InsertSnippet {
+            id: id.clone(),
+            run: None,
+        })),
+        ("InsertSnippet", _) => {
+            Err("InsertSnippet takes a table: { id = \"k8s-logs\", run = true }".into())
+        }
         ("SpawnCommand", _) => {
             Err("SpawnCommand takes a table: { command = [\"htop\"], cwd = \"~\" }".into())
         }
@@ -1185,6 +1274,23 @@ pub fn parse_resize_pane(table: &str) -> Result<ResizePane, String> {
         Some(_) => return Err("`cells` must be a number from 1 to 1000".into()),
     };
     Ok(ResizePane(dir, cells))
+}
+
+pub fn parse_insert_snippet(table: &str) -> Result<InsertSnippet, String> {
+    let t: toml::Table = table
+        .parse()
+        .map_err(|e: toml::de::Error| e.message().to_string())?;
+    let id = t
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing `id = \"snippet-id\"`")?
+        .to_string();
+    let run = match t.get("run") {
+        None => None,
+        Some(toml::Value::Boolean(b)) => Some(*b),
+        Some(_) => return Err("`run` must be true or false".into()),
+    };
+    Ok(InsertSnippet { id, run })
 }
 
 pub fn parse_spawn_command(table: &str) -> Result<SpawnCommand, String> {
@@ -1340,6 +1446,12 @@ pub fn build_keymap(
     out.push(fixed(
         new_window,
         Box::new(PickerConfirmInNewWindow),
+        CONTEXT_PICKER,
+    ));
+    // `⌥Enter` runs a snippet row (SPEC §10.8.6); other rows treat it like Enter.
+    out.push(fixed(
+        "alt-enter",
+        Box::new(PickerConfirmRun),
         CONTEXT_PICKER,
     ));
     (out, warnings)

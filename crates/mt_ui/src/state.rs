@@ -36,9 +36,48 @@ pub fn save_window_size(dir: &Path, width: f32, height: f32) -> std::io::Result<
     std::fs::rename(tmp, dir.join(WINDOW_FILE))
 }
 
+const UI_FILE: &str = "ui.json";
+
+/// Per-window UI state kept between runs (best effort): the snippets side panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UiState {
+    pub panel_open: Option<bool>,
+    pub panel_width: Option<f32>,
+}
+
+/// `ui.json`; a missing or corrupt file means defaults.
+pub fn load_ui(dir: &Path) -> UiState {
+    std::fs::read_to_string(dir.join(UI_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_ui(dir: &Path, state: &UiState) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!("{UI_FILE}.tmp"));
+    std::fs::write(&tmp, serde_json::to_string(state).unwrap_or_default())?;
+    std::fs::rename(tmp, dir.join(UI_FILE))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_state_round_trips_and_ignores_garbage() {
+        let d = temp("ui");
+        assert_eq!(load_ui(&d), UiState::default());
+        let s = UiState {
+            panel_open: Some(true),
+            panel_width: Some(333.0),
+        };
+        save_ui(&d, &s).unwrap();
+        assert_eq!(load_ui(&d), s);
+        std::fs::write(d.join(UI_FILE), "{ not json").unwrap();
+        assert_eq!(load_ui(&d), UiState::default());
+        let _ = std::fs::remove_dir_all(d);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("mt-state-{name}-{}", std::process::id()));

@@ -451,6 +451,10 @@ impl AppWindow {
                 self.focus_pane(pane, window, cx);
                 self.clear_scrollback(cx);
             }
+            Builtin::SaveAsSnippet => {
+                self.focus_pane(pane, window, cx);
+                self.save_selection_as_snippet(window, cx);
+            }
             Builtin::Zoom => self.toggle_zoom_of(pane, window, cx),
             Builtin::Swap(d) => self.swap_pane_of(pane, d, window, cx),
             Builtin::Rotate => self.rotate_panes_of(pane, window, cx),

@@ -15,6 +15,7 @@ pub enum ToastKind {
 pub struct Toast {
     kind: ToastKind,
     text: SharedString,
+    action: Option<(ElementId, SharedString, ClickHandler)>,
 }
 
 impl Toast {
@@ -22,7 +23,19 @@ impl Toast {
         Self {
             kind,
             text: text.into(),
+            action: None,
         }
+    }
+
+    /// A button after the text (e.g. "Open config").
+    pub fn action(
+        mut self,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.action = Some((id.into(), label.into(), Box::new(handler)));
+        self
     }
 }
 
@@ -51,6 +64,13 @@ impl RenderOnce for Toast {
             .text_size(px(13.))
             .child(Icon::new(icon).color(color))
             .child(gpui::div().child(self.text))
+            .when_some(self.action, |el, (id, label, handler)| {
+                el.child(
+                    Button::new(id, label)
+                        .style(ButtonStyle::Subtle)
+                        .on_click(handler),
+                )
+            })
     }
 }
 

@@ -76,6 +76,8 @@ pub struct Facts {
     pub shell: shell::ShellState,
     /// The tab's manual color, for the check mark of the `tab/color` swatches.
     pub manual_color: Option<mt_mux::TabColor>,
+    /// `snippets.enabled`: the "Save selection as snippet…" row exists only while it is on.
+    pub snippets_enabled: bool,
 }
 
 impl Facts {
@@ -176,6 +178,7 @@ impl Facts {
             values: v,
             shell,
             manual_color: None,
+            snippets_enabled: crate::snippets::gate::SnippetsGate::of_config(cfg).enabled,
         })
     }
 
@@ -240,6 +243,7 @@ pub enum Builtin {
     CloseTab,
     CloseOtherTabs,
     RenameTab,
+    SaveAsSnippet,
 }
 
 impl Builtin {
@@ -252,6 +256,7 @@ impl Builtin {
             ("viewport", "copy_link") => Builtin::CopyLink,
             ("viewport", "search") => Builtin::Search,
             ("viewport", "clear_scrollback") => Builtin::ClearScrollback,
+            ("viewport", "save_as_snippet") => Builtin::SaveAsSnippet,
             ("viewport", "zoom") => Builtin::Zoom,
             ("viewport", "swap_left") => Builtin::Swap(Dir::Left),
             ("viewport", "swap_right") => Builtin::Swap(Dir::Right),
@@ -312,6 +317,7 @@ impl Builtin {
             | Builtin::OpenLink
             | Builtin::CopyLink
             | Builtin::Search
+            | Builtin::SaveAsSnippet
             | Builtin::CloseOtherTabs
             | Builtin::RenameTab => return None,
         })
@@ -364,6 +370,9 @@ impl MenuRow {
 }
 
 fn builtin_row(b: &'static BuiltinDef, f: &Facts) -> Option<MenuRow> {
+    if b.id == "save_as_snippet" && !f.snippets_enabled {
+        return None;
+    }
     let holds = f.holds(b.when);
     if !holds && b.when_false == WhenFalse::Hide {
         return None;

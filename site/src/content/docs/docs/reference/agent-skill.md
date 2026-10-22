@@ -23,6 +23,7 @@ Rules: every command is non-interactive and never opens a GUI dialog. Add `--jso
 | Ask a human | `microterm ctl pane status set --state waiting "approve migration?"` + `microterm ctl pane notify --level attention …` |
 | Fan out parallel work | one `microterm ctl tab new --title task-N -- …` per task, `microterm ctl events --type pane.command_finished --match 'title:task-*'` to collect |
 | Clean up | `microterm ctl tab close --match 'title:task-*' --all --force` |
+| Reuse the user's saved snippets | `microterm ctl snippet list --json` shows ids and the prompts each asks for; `microterm ctl snippet insert ID --pane $MICROTERM_PANE --var Label=value --run` types one (exit 10 while snippets are off, exit 11 listing missing prompt values). Snippets that ask for a `secret` are refused over MCP. |
 
 ### Targeting yourself and others
 
@@ -51,6 +52,8 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 | 7 | needs shell integration (no OSC 133 marks in that pane) |
 | 8 | confirmation required: closing would prompt and `--force` was not given; nothing was closed |
 | 9 | pane busy (`run --in` while a command is already running) |
+| 10 | feature disabled by config (`ctl snippet …` while `snippets.enabled = false`) |
+| 11 | a snippet needs prompt values that were not given (`--var`); stderr lists every missing label |
 
 `pane run --in` and `pane get-text --last-command` need shell integration (`eval "$(microterm shell-integration zsh)"`).
 
@@ -103,6 +106,12 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl menu icons` — List the icon names an item can use (`icon = "…"`); needs no running instance
 - `microterm ctl menu check` — Validate the menu config of a config file; needs no running instance
 - `microterm ctl menu-bar list` — List every menu row: path, action, enabled state and shortcut chip
+- `microterm ctl snippet list` — List snippets (id, title, folder, run, key)
+- `microterm ctl snippet show` — Show one snippet with its body and prompts
+- `microterm ctl snippet expand` — Print what a snippet expands to for a pane; changes nothing
+- `microterm ctl snippet insert` — Type a snippet into a pane (never the focused pane: --pane, --match or $MICROTERM_PANE)
+- `microterm ctl snippet add` — Add a snippet to snippets.toml (the body comes from BODY, else stdin)
+- `microterm ctl snippet rm` — Remove a snippet from snippets.toml
 
 Run `microterm ctl <resource> <verb> --help` for flags.
 

@@ -4112,6 +4112,7 @@ dependencies = [
  "mt_mux",
  "mt_proto",
  "mt_record",
+ "mt_snippets",
  "mt_term",
  "mt_theme",
  "mt_ui",
@@ -4290,6 +4291,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt_snippets"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "libc",
+ "md-5",
+ "mt_config",
+ "percent-encoding",
+ "proptest",
+ "rand 0.8.8",
+ "serde",
+ "sha2 0.10.9",
+ "strsim",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "ulid",
+ "uuid",
+]
+
+[[package]]
 name = "mt_ssh"
 version = "0.1.0"
 dependencies = [
@@ -4338,6 +4362,7 @@ dependencies = [
  "mt_patterns",
  "mt_proto",
  "mt_record",
+ "mt_snippets",
  "mt_ssh",
  "mt_term",
  "mt_theme",
@@ -7701,6 +7726,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
+dependencies = [
+ "rand 0.9.5",
+ "web-time",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9015,6 +9050,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "microterm",
+ "mt_snippets",
  "mt_term",
  "mt_theme",
  "mt_ui",

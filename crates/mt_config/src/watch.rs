@@ -1,5 +1,7 @@
 //! File watching with a 150 ms debounce (SPEC §8.2). Editors save via rename, so the parent
-//! directory is watched as well as the file; the themes directory is watched too.
+//! directory is watched as well as the file; `snippets.toml` (same
+//! directory) and the themes directory are watched too. The receiver does not say which file
+//! changed; consumers re-read what they own and treat unchanged content as a no-op.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -8,7 +10,7 @@ use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::load::themes_dir;
+use crate::load::{snippets_path, themes_dir};
 
 pub const DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -18,8 +20,8 @@ pub struct ConfigWatcher {
     _thread: JoinHandle<()>,
 }
 
-fn relevant(path: &Path, config: &Path, themes: &Path) -> bool {
-    path == config || path.starts_with(themes)
+fn relevant(path: &Path, config: &Path, snippets: &Path, themes: &Path) -> bool {
+    path == config || path == snippets || path.starts_with(themes)
 }
 
 /// Start watching. The receiver yields one `()` per debounced burst of relevant changes.
@@ -39,13 +41,18 @@ pub fn watch_with(
         _ => config_path.to_path_buf(),
     };
     let themes = themes_dir(&config);
+    let snippets = snippets_path(&config);
     let (raw_tx, raw_rx) = mpsc::channel::<()>();
     let (tx, rx) = async_channel::unbounded::<()>();
 
-    let (cfg2, themes2) = (config.clone(), themes.clone());
+    let (cfg2, snip2, themes2) = (config.clone(), snippets, themes.clone());
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = res {
-            if ev.paths.iter().any(|p| relevant(p, &cfg2, &themes2)) {
+            if ev
+                .paths
+                .iter()
+                .any(|p| relevant(p, &cfg2, &snip2, &themes2))
+            {
                 let _ = raw_tx.send(());
             }
         }

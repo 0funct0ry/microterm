@@ -47,6 +47,38 @@ struct Host {
     cfg: Arc<mt_config::Config>,
 }
 
+/// `snippet.*` in a headless instance: `snippets.toml` is read on every call, and GUI-only facts
+/// (clipboard, font, theme) are unavailable, so their tags fail and honour `default=`.
+struct HeadlessSnippets {
+    cfg: Arc<mt_config::Config>,
+    path: PathBuf,
+    set: Arc<mt_snippets::SnippetSet>,
+    rows: Rows,
+    panes: HashMap<Id, Arc<Terminal>>,
+}
+
+impl mt_ui::snippets::ipc::SnippetHost for HeadlessSnippets {
+    fn config(&self) -> Arc<mt_config::Config> {
+        self.cfg.clone()
+    }
+    fn set(&self) -> Arc<mt_snippets::SnippetSet> {
+        self.set.clone()
+    }
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+    fn rows(&mut self) -> Rows {
+        self.rows.clone()
+    }
+    fn terminal(&mut self, pane: u64) -> Option<Arc<Terminal>> {
+        self.panes.get(&pane).cloned()
+    }
+    fn gui(&mut self, _: bool) -> (Option<String>, Option<f32>, Option<String>) {
+        (None, None, None)
+    }
+    fn reloaded(&mut self) {}
+}
+
 /// The headless mux as pending `pane.run` / `pane.wait` calls see it.
 struct Access<'a> {
     mux: &'a Mux,
@@ -511,6 +543,31 @@ impl Host {
         Ok(json!({ "closed": set.panes }))
     }
 
+    fn snippets(&mut self, request: Request) -> Reply {
+        let path = mt_config::load::snippets_path(&self.path);
+        let set = if mt_ui::snippets::gate::SnippetsGate::of_config(&self.cfg).enabled {
+            match mt_snippets::store::load(&path) {
+                Ok(l) => l.set,
+                Err(d) => {
+                    return Err(RpcError::bad_request(
+                        d.first()
+                            .map_or_else(String::new, |d| d.render("snippets.toml")),
+                    ))
+                }
+            }
+        } else {
+            Default::default()
+        };
+        let mut host = HeadlessSnippets {
+            cfg: self.cfg.clone(),
+            path,
+            set: Arc::new(set),
+            rows: self.rows(),
+            panes: self.panes.clone(),
+        };
+        mt_ui::snippets::ipc::handle(&mut host, request)
+    }
+
     fn handle(&mut self, request: Request) -> Reply {
         let ok = || Ok(json!({}));
         match request {
@@ -657,6 +714,12 @@ impl Host {
                 mt_ui::menu::show(&self.cfg, &self.rows(), &p, &|id| panes.get(&id).cloned())
             }
             Request::MenuInvoke(p) => self.menu_invoke(&p),
+            r @ (Request::SnippetList(_)
+            | Request::SnippetGet(_)
+            | Request::SnippetExpand(_)
+            | Request::SnippetInsert(_)
+            | Request::SnippetAdd(_)
+            | Request::SnippetRemove(_)) => self.snippets(r),
             Request::PaneStatusSet(p) => {
                 let rows = self.rows();
                 ipc_ops::status_set(

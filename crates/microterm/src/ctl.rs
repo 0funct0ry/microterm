@@ -159,6 +159,137 @@ EXAMPLES:
     /// The macOS main menu bar: list the resolved menus (SPEC §10.7).
     #[command(subcommand, name = "menu-bar")]
     MenuBar(MenuBarCmd),
+
+    /// Snippets: list, show, expand, insert, add, rm (SPEC §10.8).
+    ///
+    /// Needs `[snippets] enabled = true`; while it is off every verb exits 10. A missing
+    /// prompt value exits 11 and lists every label that still needs one.
+    #[command(subcommand)]
+    Snippet(SnippetCmd),
+}
+
+/// How an `expand`/`insert` names its snippet and supplies prompt values.
+#[derive(Args, Debug, Default, Clone)]
+pub struct SnippetSource {
+    /// Snippet id.
+    #[arg(value_name = "ID", conflicts_with = "body")]
+    pub id: Option<String>,
+    /// Use this text as the snippet body instead of a saved snippet.
+    #[arg(long, value_name = "TEXT")]
+    pub body: Option<String>,
+    /// A value for a prompt: LABEL=VALUE (repeatable). Secrets belong in --vars-file.
+    #[arg(long = "var", value_name = "LABEL=VALUE", value_parser = parse_var)]
+    pub vars: Vec<(String, String)>,
+    /// A JSON object {label: value}; `-` reads stdin. The way to pass `secret` values, because
+    /// argv is visible to other processes.
+    #[arg(long, value_name = "FILE|-")]
+    pub vars_file: Option<String>,
+}
+
+fn parse_var(s: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .ok_or_else(|| format!("expected LABEL=VALUE, got \"{s}\""))
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SnippetCmd {
+    /// List snippets (id, title, folder, run, key).
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl snippet list
+  microterm ctl snippet list --folder k8s --json | jq '.[].id'
+  microterm ctl snippet list --query logs")]
+    List {
+        /// Only this folder.
+        #[arg(long)]
+        folder: Option<String>,
+        /// Only snippets with this tag.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Fuzzy search over title, body, tags, folder and description.
+        #[arg(long)]
+        query: Option<String>,
+    },
+    /// Show one snippet with its body and prompts.
+    Show {
+        /// Snippet id.
+        id: String,
+    },
+    /// Print what a snippet expands to for a pane; changes nothing.
+    ///
+    /// The pane is --pane, --match, $MICROTERM_PANE, else the focused pane. Counters do not
+    /// advance. With `snippets.templates = false` the body is printed literally.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl snippet expand k8s-logs --var Namespace=dev --var Pod=api
+  microterm ctl snippet expand --body 'echo {{ uuid }}'")]
+    Expand {
+        #[command(flatten)]
+        source: SnippetSource,
+        #[command(flatten)]
+        target: PaneTarget,
+    },
+    /// Type a snippet into a pane (never the focused pane: --pane, --match or $MICROTERM_PANE).
+    ///
+    /// --run presses Enter afterwards, --no-run never does; otherwise the snippet's own `run`
+    /// decides. --all inserts into every pane the selector matches.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl snippet insert k8s-logs --pane $MICROTERM_PANE --var Namespace=dev --var Pod=api --run
+  echo '{\"Token\":\"s3cret\"}' | microterm ctl snippet insert deploy --pane 3 --vars-file -")]
+    Insert {
+        #[command(flatten)]
+        source: SnippetSource,
+        #[command(flatten)]
+        target: PaneTarget,
+        /// Press Enter after inserting.
+        #[arg(long, conflicts_with = "no_run")]
+        run: bool,
+        /// Never press Enter, even for a snippet with run = true.
+        #[arg(long)]
+        no_run: bool,
+        /// Insert into every pane the selector matches.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Add a snippet to snippets.toml (the body comes from BODY, else stdin).
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl snippet add --title 'Tail logs' --folder k8s 'docker logs -f {{ input \"Pod\" }}'
+  echo 'git status' | microterm ctl snippet add --title Status --run")]
+    Add {
+        /// Display title.
+        #[arg(long)]
+        title: String,
+        /// Id (default: derived from the title).
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        folder: Option<String>,
+        /// A tag (repeatable).
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        #[arg(long)]
+        description: Option<String>,
+        /// Press Enter after inserting.
+        #[arg(long)]
+        run: bool,
+        /// A key binding, e.g. cmd+alt+1.
+        #[arg(long = "key", value_name = "KEY")]
+        key: Option<String>,
+        /// Overwrite an existing snippet with this id.
+        #[arg(long)]
+        replace: bool,
+        /// The body; stdin when omitted.
+        body: Option<String>,
+    },
+    /// Remove a snippet from snippets.toml.
+    Rm {
+        /// Snippet id.
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

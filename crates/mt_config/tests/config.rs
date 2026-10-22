@@ -520,3 +520,47 @@ fn color_keys_are_known_so_no_unknown_key_warning() {
     let l = parse_str(src).unwrap();
     assert!(l.warnings.is_empty(), "{:?}", l.warnings);
 }
+
+#[test]
+fn snippets_section_defaults_values_and_validation() {
+    let c = Config::default().snippets;
+    assert!(!c.enabled && !c.templates && !c.panel_open_on_start && !c.confirm_multiline);
+    assert_eq!((c.panel_width, c.preview_lines), (300, 2));
+    assert!(c.focus_terminal_after_insert);
+
+    let l = parse_str(
+        "[snippets]\nenabled = true\ntemplates = true\npanel_width = 420\npreview_lines = 0\n",
+    )
+    .unwrap();
+    assert!(l.config.snippets.enabled && l.config.snippets.templates);
+    assert_eq!(l.config.snippets.panel_width, 420);
+    assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+
+    for (src, key) in [
+        ("[snippets]\npanel_width = 219\n", "panel_width"),
+        ("[snippets]\npanel_width = 601\n", "panel_width"),
+        ("[snippets]\npreview_lines = 6\n", "preview_lines"),
+    ] {
+        let e = err(src);
+        assert!(e[0].message.contains(key), "{e:?}");
+        assert_eq!(e[0].line, 2, "{e:?}");
+    }
+
+    let l = parse_str("[snippets]\nenable = true\n").unwrap();
+    assert!(
+        l.warnings.iter().any(|w| w.message.contains("enabled")),
+        "{:?}",
+        l.warnings
+    );
+}
+
+#[test]
+fn templates_without_enabled_is_an_info_diagnostic() {
+    let l = parse_str("[snippets]\ntemplates = true\n").unwrap();
+    assert_eq!(l.warnings.len(), 1, "{:?}", l.warnings);
+    assert_eq!(l.warnings[0].severity, Severity::Info);
+    assert!(l.warnings[0].message.contains("no effect"));
+    assert_eq!(l.warnings[0].line, 2);
+    let l = parse_str("[snippets]\nenabled = true\ntemplates = true\n").unwrap();
+    assert!(l.warnings.is_empty());
+}

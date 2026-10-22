@@ -34,6 +34,7 @@ pub struct Config {
     pub gpu: Gpu,
     pub ctl: Ctl,
     pub sh: Sh,
+    pub snippets: Snippets,
     pub menu_bar: MenuBar,
     pub notifications: Notifications,
     pub terminal: Terminal,
@@ -77,6 +78,7 @@ impl Default for Config {
             gpu: Gpu::default(),
             ctl: Ctl::default(),
             sh: Sh::default(),
+            snippets: Snippets::default(),
             menu_bar: MenuBar::default(),
             notifications: Notifications::default(),
             terminal: Terminal::default(),
@@ -637,6 +639,38 @@ pub enum ShColor {
     Auto,
     Always,
     Never,
+}
+
+/// `[snippets]`: the snippets side panel and `{{ }}` templates (SPEC §10.8, §8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Snippets {
+    /// Master switch; `false` leaves the feature fully inert.
+    pub enabled: bool,
+    /// Expand `{{ }}` templates; `false` inserts bodies literally.
+    pub templates: bool,
+    /// Initial panel width in px (220-600).
+    pub panel_width: u32,
+    pub panel_open_on_start: bool,
+    /// Ask before inserting a multi-line snippet.
+    pub confirm_multiline: bool,
+    pub focus_terminal_after_insert: bool,
+    /// Body lines shown under each title in the panel (0-5).
+    pub preview_lines: u32,
+}
+
+impl Default for Snippets {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            templates: false,
+            panel_width: 300,
+            panel_open_on_start: false,
+            confirm_multiline: false,
+            focus_terminal_after_insert: true,
+            preview_lines: 2,
+        }
+    }
 }
 
 /// `[menu_bar]`: the macOS main menu (SPEC §10.7). `false` keeps only the microterm menu.

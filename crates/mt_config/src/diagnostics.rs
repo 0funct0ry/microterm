@@ -10,6 +10,8 @@ use crate::schema::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    /// Informational: listed with the warnings but never raises a banner.
+    Info,
     Warning,
     Error,
 }
@@ -101,6 +103,14 @@ pub fn parse_str(src: &str) -> Result<Loaded, Vec<Diagnostic>> {
 
     let mut errors = Vec::new();
     validate(src, &doc, &config, &mut errors);
+    if config.snippets.templates && !config.snippets.enabled {
+        warnings.push(Diagnostic::at(
+            src,
+            Severity::Info,
+            item_at(&doc, &["snippets", "templates"]).and_then(|i| i.span()),
+            "snippets.templates has no effect while snippets.enabled = false".into(),
+        ));
+    }
     for issue in crate::menu::validate(&config) {
         let d = Diagnostic::at(
             src,
@@ -397,6 +407,18 @@ const ROOT: &[(&str, K)] = &[
             ("color", K::Leaf),
             ("history_send_text", K::Leaf),
             ("confirm_prompts", K::Leaf),
+        ]),
+    ),
+    (
+        "snippets",
+        K::Table(&[
+            ("enabled", K::Leaf),
+            ("templates", K::Leaf),
+            ("panel_width", K::Leaf),
+            ("panel_open_on_start", K::Leaf),
+            ("confirm_multiline", K::Leaf),
+            ("focus_terminal_after_insert", K::Leaf),
+            ("preview_lines", K::Leaf),
         ]),
     ),
     ("menu_bar", K::Table(&[("enabled", K::Leaf)])),
@@ -784,6 +806,18 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
         out.push(Diagnostic::at(src, Severity::Error, span, msg));
     };
 
+    if !(220..=600).contains(&c.snippets.panel_width) {
+        err(
+            &["snippets", "panel_width"],
+            "snippets.panel_width must be between 220 and 600".into(),
+        );
+    }
+    if c.snippets.preview_lines > 5 {
+        err(
+            &["snippets", "preview_lines"],
+            "snippets.preview_lines must be between 0 and 5".into(),
+        );
+    }
     if !(0.0..=1.0).contains(&c.window.opacity) {
         err(
             &["window", "opacity"],

@@ -3,10 +3,7 @@
 //! Only changed, added or removed workspace entries and `startup_workspace` are touched; every
 //! other byte of the file is preserved. Output is the nested array-of-tables form.
 
-use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::sync::Mutex;
 
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
@@ -16,7 +13,7 @@ use crate::{SplitKind, WorkspaceDef, WorkspacePane, WorkspaceTab};
 pub enum EditError {
     #[error("config file does not parse: {0}")]
     Unparsable(String),
-    #[error("config file changed on disk since the designer opened")]
+    #[error("file changed on disk since it was opened")]
     Stale,
     #[error("{0}")]
     Io(#[from] std::io::Error),
@@ -32,11 +29,9 @@ pub fn content_hash(s: &str) -> u64 {
     h
 }
 
-static LAST_WRITTEN: Mutex<Option<u64>> = Mutex::new(None);
-
-/// True when `text` is exactly what the designer last wrote, so the watcher's reload is a no-op.
+/// True when `text` is exactly what we last wrote, so the watcher's reload is a no-op.
 pub fn is_self_write(text: &str) -> bool {
-    *LAST_WRITTEN.lock().unwrap() == Some(content_hash(text))
+    crate::atomic::is_self_write_any(text)
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -217,24 +212,7 @@ pub fn save(
     workspaces: &[WorkspaceDef],
     startup: &str,
 ) -> Result<String, EditError> {
-    let target = fs::canonicalize(path)?;
-    let src = fs::read_to_string(&target)?;
-    if content_hash(&src) != opened_hash {
-        return Err(EditError::Stale);
-    }
-    let out = patch(&src, workspaces, startup)?;
-    let mut bak = target.clone().into_os_string();
-    bak.push(".bak");
-    fs::write(&bak, &src)?;
-    let mut tmp = target.clone().into_os_string();
-    tmp.push(".tmp");
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(out.as_bytes())?;
-        f.sync_all()?;
-    }
-    fs::set_permissions(&tmp, fs::metadata(&target)?.permissions())?;
-    *LAST_WRITTEN.lock().unwrap() = Some(content_hash(&out));
-    fs::rename(&tmp, &target)?;
-    Ok(out)
+    crate::atomic::write_atomic(path, Some(opened_hash), |src| {
+        patch(src, workspaces, startup)
+    })
 }

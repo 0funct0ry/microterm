@@ -9,7 +9,7 @@ use std::io::{BufRead, Write};
 use std::time::{Duration, Instant};
 
 use mt_proto::tools::{self, ToolKind};
-use mt_proto::CallerEnv;
+use mt_proto::{CallerEnv, Request};
 use serde_json::{json, Value};
 
 use crate::client::{Client, ClientError, Events};
@@ -79,7 +79,7 @@ impl Server {
                 }),
             ),
             "ping" => rpc_ok(id, json!({})),
-            "tools/list" => rpc_ok(id, json!({"tools": tool_list()})),
+            "tools/list" => rpc_ok(id, json!({"tools": self.tool_list()})),
             "tools/call" => {
                 let name = msg["params"]["name"].as_str().unwrap_or("");
                 let args = msg["params"]["arguments"].clone();
@@ -150,11 +150,19 @@ impl Server {
     }
 }
 
-fn tool_list() -> Vec<Value> {
-    tools::TOOLS
-        .iter()
-        .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema()}))
-        .collect()
+impl Server {
+    /// The tools to list. The snippet tools appear only while `snippets.enabled = true`, which
+    /// `snippet.list` answers (SPEC §12.5); no instance or a `disabled` error hides them.
+    fn tool_list(&mut self) -> Vec<Value> {
+        let snippets_on = (self.connect)()
+            .and_then(|mut c| c.call(&Request::SnippetList(Default::default())))
+            .is_ok();
+        tools::TOOLS
+            .iter()
+            .filter(|t| snippets_on || !tools::is_snippet_tool(t.name))
+            .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema()}))
+            .collect()
+    }
 }
 
 /// The `{"error":{…}}` object `ctl --json` prints on stderr, plus its exit code.
@@ -226,7 +234,11 @@ mod tests {
             json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}),
         );
         let tools = l["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), mt_proto::tools::TOOLS.len());
+        // No instance answers `snippet.list`, so the snippet tools are not offered.
+        assert_eq!(tools.len(), mt_proto::tools::TOOLS.len() - 3);
+        assert!(!tools.iter().any(|t| t["name"]
+            .as_str()
+            .is_some_and(mt_proto::tools::is_snippet_tool)));
         assert!(tools.iter().all(|t| t["inputSchema"]["type"] == "object"));
         let e = call(&mut s, json!({"jsonrpc":"2.0","id":4,"method":"nope"}));
         assert_eq!(e["error"]["code"], -32601);

@@ -909,7 +909,8 @@ fn every_palette_action_is_reachable_by_its_label(cx: &mut TestAppContext) {
     for (i, def) in actions::ACTIONS
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.palette)
+        // The snippet actions exist only while `snippets.enabled` (see snippets::tests).
+        .filter(|(_, d)| d.palette && d.category() != "Snippets")
     {
         view.update(cx, |t, _| {
             t.picker.as_mut().unwrap().state.set_query(def.label)

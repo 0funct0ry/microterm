@@ -15,6 +15,7 @@ pub const PATTERNS: &[(&str, &str)] = &[
     ("Ask a human", "`microterm ctl pane status set --state waiting \"approve migration?\"` + `microterm ctl pane notify --level attention …`"),
     ("Fan out parallel work", "one `microterm ctl tab new --title task-N -- …` per task, `microterm ctl events --type pane.command_finished --match 'title:task-*'` to collect"),
     ("Clean up", "`microterm ctl tab close --match 'title:task-*' --all --force`"),
+    ("Reuse the user's saved snippets", "`microterm ctl snippet list --json` shows ids and the prompts each asks for; `microterm ctl snippet insert ID --pane $MICROTERM_PANE --var Label=value --run` types one (exit 10 while snippets are off, exit 11 listing missing prompt values). Snippets that ask for a `secret` are refused over MCP."),
 ];
 
 const EXIT_CODES: &[(i32, &str)] = &[
@@ -28,6 +29,8 @@ const EXIT_CODES: &[(i32, &str)] = &[
     (mt_proto::exit::NEEDS_SHELL_INTEGRATION, "needs shell integration (no OSC 133 marks in that pane)"),
     (mt_proto::exit::CONFIRM_REQUIRED, "confirmation required: closing would prompt and `--force` was not given; nothing was closed"),
     (mt_proto::exit::BUSY, "pane busy (`run --in` while a command is already running)"),
+    (mt_proto::exit::DISABLED, "feature disabled by config (`ctl snippet …` while `snippets.enabled = false`)"),
+    (mt_proto::exit::MISSING_VARS, "a snippet needs prompt values that were not given (`--var`); stderr lists every missing label"),
 ];
 
 const SELECTORS: &str = "\

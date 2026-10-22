@@ -148,6 +148,18 @@ action = "Disable"   # unbind a default
 | `SetTabColorInteractive` | **Tab: Set color…** — Pick a color for the active tab from a list | — | — |
 | `ClearTabColor` | **Tab: Clear color** — Remove the manual color of the active tab; declared colors and rules still apply | — | — |
 
+## Snippets
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `ToggleSnippetsPanel` | **Toggle snippets panel** — Open the snippets side panel; press again to focus it, and again to close it | `⌘⇧S` | `Ctrl+Shift+S` |
+| `FocusSnippetsPanel` | **Focus snippets panel** — Move keyboard focus to the snippets panel (opening it if needed) | — | — |
+| `NewSnippet` | **New snippet** — Create a snippet in the snippets panel | — | — |
+| `SaveSelectionAsSnippet` | **Save selection as snippet** — Create a snippet from the selected text | — | — |
+| `SaveLastCommandAsSnippet` | **Save last command as snippet** — Create a snippet from the last command (needs shell integration) | — | — |
+| `OpenSnippetsFile` | **Open snippets file** — Open snippets.toml in your editor | — | — |
+| `InsertSnippet` | **Insert snippet** — Insert the snippet `id` into the focused pane; `run` overrides the snippet's own run setting | — | — |
+
 ## Misc
 
 | Action | Description | macOS | Linux |

@@ -2423,3 +2423,438 @@ fn tab_color_events_stream_only_real_changes() {
         (None, Some("none"))
     );
 }
+
+// ------------------------------------------------------------------ snippets (M11.5)
+
+const SNIPPETS_TOML: &str = r#"# kept
+[[snippets]]
+id = "greet"
+title = "Greet"
+body = "echo hello-snippet"
+folder = "demo"
+tags = ["fun"]
+
+[[snippets]]
+id = "ask"
+title = "Ask"
+body = '''echo {{ input "Word" | upper }}-{{ choice "Env" "dev" "prod" }}'''
+
+[[snippets]]
+id = "secretive"
+title = "Secretive"
+body = '''echo {{ secret "Token" | sha256 }}'''
+
+[[snippets]]
+id = "unique"
+title = "Unique"
+body = "echo {{ uuid }}"
+"#;
+
+impl Instance {
+    fn snippets_path(&self) -> String {
+        format!("{}/cfg/microterm/snippets.toml", self.home)
+    }
+
+    fn with_snippets(config: &str, snippets: &str) -> Instance {
+        let i = Self::start_with(Some(config));
+        std::fs::write(i.snippets_path(), snippets).unwrap();
+        i
+    }
+
+    fn ctl_stdin(&self, args: &[&str], stdin: &str) -> (i32, String, String) {
+        let out = self
+            .cmd(&[&["ctl"][..], args].concat())
+            .write_stdin(stdin.to_string())
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+}
+
+const SNIP_ON: &str = "[snippets]\nenabled = true\ntemplates = true\n";
+
+#[test]
+fn snippet_verbs_exit_10_while_disabled() {
+    let i = Instance::with_snippets("", SNIPPETS_TOML);
+    for args in [
+        &["snippet", "list"][..],
+        &["snippet", "show", "greet"],
+        &["snippet", "expand", "greet"],
+        &["snippet", "insert", "greet", "--pane", "1"],
+        &["snippet", "add", "--title", "x", "body"],
+        &["snippet", "rm", "greet"],
+    ] {
+        let (code, err) = i.ctl_err(args);
+        assert_eq!(code, 10, "{args:?}: {err}");
+        assert!(err.contains("snippets.enabled"), "{err}");
+    }
+    // The file was not touched.
+    assert_eq!(
+        std::fs::read_to_string(i.snippets_path()).unwrap(),
+        SNIPPETS_TOML
+    );
+}
+
+#[test]
+fn snippet_list_show_and_filters() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let all = i.json(&["snippet", "list"]);
+    assert_eq!(all.as_array().unwrap().len(), 4);
+    let ids: Vec<_> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["greet", "ask", "secretive", "unique"]);
+    assert_eq!(
+        i.json(&["snippet", "list", "--folder", "demo"])
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        i.json(&["snippet", "list", "--tag", "fun"])
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        i.json(&["snippet", "list", "--query", "secretive"])[0]["id"],
+        "secretive"
+    );
+    let ask = i.json(&["snippet", "show", "ask"]);
+    assert_eq!(
+        ask["prompts"][0],
+        serde_json::json!({"label": "Word", "kind": "input"})
+    );
+    assert_eq!(
+        ask["prompts"][1]["options"],
+        serde_json::json!(["dev", "prod"])
+    );
+    let text = i.ctl(&["snippet", "list"]);
+    assert!(text.contains("greet") && text.contains("demo"), "{text}");
+    assert_eq!(i.ctl_code(&["snippet", "show", "nope"]), 3);
+}
+
+#[test]
+fn snippet_insert_needs_an_explicit_target() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let _pane = i.spawn_sh("cat", &[]);
+    let (code, err) = i.ctl_err(&["snippet", "insert", "greet"]);
+    assert_eq!(code, 1, "never falls back to the focused pane: {err}");
+    assert!(err.contains("no pane given"), "{err}");
+}
+
+#[test]
+fn snippet_expand_and_insert_with_vars() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let pane = i.spawn_sh("cat", &[]);
+    // expand is read-only and falls back to the focused pane.
+    assert_eq!(
+        i.ctl(&["snippet", "expand", "ask", "--var", "Word=hi", "--var", "Env=prod"]),
+        "echo HI-prod"
+    );
+    // Missing values: exit 11 listing every label with its kind.
+    let (code, err) = i.ctl_err(&["snippet", "expand", "ask"]);
+    assert_eq!(code, 11, "{err}");
+    assert!(
+        err.contains("Word (input)") && err.contains("Env (choice)"),
+        "{err}"
+    );
+    let (code, err) = i.ctl_err(&["snippet", "expand", "ask", "--var", "Word=x"]);
+    assert_eq!(code, 11);
+    assert!(
+        err.contains("Env (choice)") && !err.contains("Word (input)"),
+        "{err}"
+    );
+    // A choice value must be an option.
+    assert_eq!(
+        i.ctl_code(&["snippet", "expand", "ask", "--var", "Word=x", "--var", "Env=nope"]),
+        1
+    );
+    // Inline body.
+    assert_eq!(
+        i.ctl(&[
+            "snippet",
+            "expand",
+            "--body",
+            "x{{ input \"A\" | upper }}",
+            "--var",
+            "A=a"
+        ])
+        .trim(),
+        "xA"
+    );
+    let (code, err) = i.ctl_err(&["snippet", "expand", "--body", "echo {{ nope }}"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("template error at 1:9") && err.contains("unknown function"),
+        "{err}"
+    );
+    // Insert with --run types the command and presses Enter.
+    i.ctl(&[
+        "snippet", "insert", "ask", "--pane", &pane, "--var", "Word=ok", "--var", "Env=dev",
+        "--run",
+    ]);
+    i.wait_text(&pane, "echo OK-dev");
+    // --no-run overrides a snippet's own run (none here), and the text is typed once.
+    let t = i.text(&pane, &[]);
+    assert_eq!(
+        t.matches("echo OK-dev").count(),
+        2,
+        "typed once, echoed once by cat: {t}"
+    );
+}
+
+#[test]
+fn snippet_vars_file_from_stdin_and_secret_hygiene() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let pane = i.spawn_sh("cat", &[]);
+    let (code, _, err) = i.ctl_stdin(
+        &[
+            "snippet",
+            "insert",
+            "secretive",
+            "--pane",
+            &pane,
+            "--vars-file",
+            "-",
+        ],
+        r#"{"Token": "hunter2"}"#,
+    );
+    assert_eq!(code, 0, "{err}");
+    // sha256("hunter2")
+    i.wait_text(
+        &pane,
+        "f52fbd32b2b3b86ff88ef6c490628285f482af15ddcb29541f94bcf526a3f6c7",
+    );
+    assert!(
+        !i.text(&pane, &[]).contains("hunter2"),
+        "the secret itself is never typed"
+    );
+    // A bad vars file is a usage error.
+    let (code, _, err) = i.ctl_stdin(&["snippet", "expand", "ask", "--vars-file", "-"], "[1]");
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("JSON object"), "{err}");
+}
+
+#[test]
+fn snippet_agent_requests_refuse_secrets() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let req = |agent: bool| serde_json::json!({"v":1,"id":1,"method":"snippet.expand","params":{"id":"secretive","vars":{"Token":"x"},"agent":agent}});
+    let ask = |v: Value| -> Value {
+        let mut s = UnixStream::connect(&i.socket).unwrap();
+        writeln!(s, "{v}").unwrap();
+        let mut line = String::new();
+        BufReader::new(s).read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+    let _pane = i.spawn_sh("cat", &[]);
+    let ok = ask(req(false));
+    assert!(ok.get("error").is_none(), "{ok}");
+    let refused = ask(req(true));
+    assert_eq!(refused["error"]["code"], "template_error", "{refused}");
+}
+
+#[test]
+fn snippet_add_and_rm_write_the_file_surgically() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let out = i.ctl(&[
+        "snippet",
+        "add",
+        "--title",
+        "Tail logs",
+        "--folder",
+        "k8s",
+        "--tag",
+        "a",
+        "--tag",
+        "b",
+        "--run",
+        "--key",
+        "cmd+alt+1",
+        "docker logs -f {{ input \"Pod\" }}",
+    ]);
+    assert_eq!(out.trim(), "tail-logs");
+    let after = std::fs::read_to_string(i.snippets_path()).unwrap();
+    assert!(
+        after.starts_with(SNIPPETS_TOML),
+        "other entries and comments are byte-identical"
+    );
+    assert!(
+        after.contains("id = \"tail-logs\"") && after.contains("run = true"),
+        "{after}"
+    );
+    assert!(
+        std::fs::read_to_string(format!("{}.bak", i.snippets_path())).unwrap() == SNIPPETS_TOML
+    );
+    assert_eq!(
+        i.json(&["snippet", "show", "tail-logs"])["key"],
+        "cmd+alt+1"
+    );
+    // Existing ids need --replace.
+    let (code, err) = i.ctl_err(&["snippet", "add", "--title", "T", "--id", "tail-logs", "x"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("--replace"), "{err}");
+    i.ctl(&[
+        "snippet",
+        "add",
+        "--title",
+        "T2",
+        "--id",
+        "tail-logs",
+        "--replace",
+        "echo two",
+    ]);
+    assert_eq!(
+        i.json(&["snippet", "show", "tail-logs"])["body"],
+        "echo two"
+    );
+    // Body from stdin, bad key, bad id.
+    let (code, out, _) = i.ctl_stdin(&["snippet", "add", "--title", "From stdin"], "echo piped\n");
+    assert_eq!(code, 0);
+    assert_eq!(out.trim(), "from-stdin");
+    assert_eq!(
+        i.json(&["snippet", "show", "from-stdin"])["body"],
+        "echo piped"
+    );
+    assert_eq!(
+        i.ctl_code(&["snippet", "add", "--title", "K", "--key", "bogus+", "x"]),
+        1
+    );
+    assert_eq!(
+        i.ctl_code(&["snippet", "add", "--title", "K", "--id", "Bad Id", "x"]),
+        1
+    );
+    // rm
+    i.ctl(&["snippet", "rm", "tail-logs"]);
+    assert_eq!(i.ctl_code(&["snippet", "show", "tail-logs"]), 3);
+    assert_eq!(i.ctl_code(&["snippet", "rm", "tail-logs"]), 3);
+    assert!(std::fs::read_to_string(i.snippets_path())
+        .unwrap()
+        .starts_with(SNIPPETS_TOML));
+}
+
+#[test]
+fn snippet_templates_off_uses_the_literal_body_and_warns() {
+    let i = Instance::with_snippets("[snippets]\nenabled = true\n", SNIPPETS_TOML);
+    let _pane = i.spawn_sh("cat", &[]);
+    let (code, err) = i.ctl_err(&["snippet", "expand", "unique", "--var", "x=y"]);
+    assert_eq!(code, 0);
+    assert!(err.contains("--var ignored"), "{err}");
+    assert_eq!(i.ctl(&["snippet", "expand", "unique"]), "echo {{ uuid }}");
+}
+
+#[test]
+fn snippet_insert_into_every_matched_pane_with_all() {
+    let i = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let a = i.spawn_sh("cat", &[]);
+    let b = i.spawn_sh("cat", &[]);
+    i.ctl(&[
+        "snippet",
+        "insert",
+        "greet",
+        "--match",
+        "domain:local",
+        "--all",
+    ]);
+    i.wait_text(&a, "echo hello-snippet");
+    i.wait_text(&b, "echo hello-snippet");
+    let (code, err) = i.ctl_err(&["snippet", "insert", "greet", "--match", "domain:local"]);
+    assert_eq!(code, 5, "several matches without --all: {err}");
+}
+
+fn mcp_tool_names(m: &mut Mcp) -> Vec<String> {
+    m.rpc(
+        "initialize",
+        serde_json::json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}),
+    );
+    m.rpc("tools/list", serde_json::json!({}))["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn mcp_lists_the_snippet_tools_only_while_snippets_are_enabled() {
+    let off = Instance::with_snippets("", SNIPPETS_TOML);
+    let names = mcp_tool_names(&mut Mcp::start(&off));
+    assert_eq!(names.len(), 12);
+    assert!(
+        !names.iter().any(|n| n.starts_with("microterm_snippet_")),
+        "{names:?}"
+    );
+
+    let on = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let mut m = Mcp::start(&on);
+    let names = mcp_tool_names(&mut m);
+    assert_eq!(names.len(), 15);
+    for t in [
+        "microterm_snippet_list",
+        "microterm_snippet_expand",
+        "microterm_snippet_insert",
+    ] {
+        assert!(names.contains(&t.to_string()), "{t} in {names:?}");
+    }
+}
+
+#[test]
+fn mcp_snippet_tools_expand_insert_and_refuse_secrets() {
+    let inst = Instance::with_snippets(SNIP_ON, SNIPPETS_TOML);
+    let pane = inst.spawn_sh("cat", &[]);
+    let mut m = Mcp::start(&inst);
+    mcp_tool_names(&mut m);
+    let (err, list) = m.tool(
+        "microterm_snippet_list",
+        serde_json::json!({"query": "ask"}),
+    );
+    assert!(!err);
+    assert_eq!(list[0]["id"], "ask");
+    assert_eq!(list[0]["prompts"][0]["label"], "Word");
+
+    let (err, e) = m.tool(
+        "microterm_snippet_expand",
+        serde_json::json!({"id":"ask","vars":{"Word":"a","Env":"dev"}}),
+    );
+    assert!(!err);
+    assert_eq!(e["text"], "echo A-dev");
+
+    let pane_n: u64 = pane.parse().unwrap();
+    let (err, r) = m.tool(
+        "microterm_snippet_insert",
+        serde_json::json!({"id":"greet","pane":pane_n,"run":true}),
+    );
+    assert!(!err, "{r}");
+    inst.wait_text(&pane, "hello-snippet");
+
+    // Missing values surface exit code 11 with the labels.
+    let (err, r) = m.tool(
+        "microterm_snippet_insert",
+        serde_json::json!({"id":"ask","pane":pane_n}),
+    );
+    assert!(err);
+    assert_eq!(r["error"]["code"], "missing_vars");
+    assert_eq!(r["exit_code"], 11);
+    assert_eq!(r["error"]["candidates"][0], "Word (input)");
+
+    // A secret never passes through an agent, however the values arrive.
+    let (err, r) = m.tool(
+        "microterm_snippet_insert",
+        serde_json::json!({"id":"secretive","pane":pane_n,"vars":{"Token":"x"}}),
+    );
+    assert!(err);
+    assert_eq!(r["error"]["code"], "template_error", "{r}");
+    assert!(
+        !inst.text(&pane, &[]).contains("hunter"),
+        "nothing was typed"
+    );
+}

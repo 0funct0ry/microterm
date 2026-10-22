@@ -20,6 +20,9 @@ pub enum Effect {
     RestartRequired,
     /// Context menus: resolved at the next open; an open menu closes (SPEC §10.9.2).
     Menus,
+    /// `snippets.enabled` / `snippets.templates` changed: register or tear down the panel,
+    /// actions, palette provider, per-snippet keys and the `snippets.toml` watch (SPEC §10.8.1).
+    Snippets,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -79,6 +82,25 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
     d.mark(old.clipboard != new.clipboard, "clipboard", &[Repaint]);
     d.mark(old.paste != new.paste, "paste", &[Repaint]);
     d.mark(old.menu_bar != new.menu_bar, "menu_bar", &[Repaint]);
+    d.mark(
+        old.snippets.enabled != new.snippets.enabled
+            || old.snippets.templates != new.snippets.templates,
+        "snippets.enabled/templates",
+        &[Snippets, Keymap, Repaint, Relayout],
+    );
+    d.mark(
+        old.snippets.panel_width != new.snippets.panel_width,
+        "snippets.panel_width",
+        &[Relayout],
+    );
+    d.mark(
+        old.snippets.preview_lines != new.snippets.preview_lines
+            || old.snippets.confirm_multiline != new.snippets.confirm_multiline
+            || old.snippets.focus_terminal_after_insert != new.snippets.focus_terminal_after_insert
+            || old.snippets.panel_open_on_start != new.snippets.panel_open_on_start,
+        "snippets",
+        &[Repaint],
+    );
     d.mark(old.bell != new.bell, "bell", &[Repaint]);
     d.mark(
         old.confirm_close != new.confirm_close,
@@ -173,6 +195,40 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
 mod tests {
     use super::*;
     use crate::schema::*;
+
+    #[test]
+    fn every_snippets_key_is_classified() {
+        let old = Config::default();
+        type Edit = (&'static str, fn(&mut Snippets), Effect);
+        let edits: [Edit; 7] = [
+            ("enabled", |s| s.enabled = true, Effect::Snippets),
+            ("templates", |s| s.templates = true, Effect::Snippets),
+            ("panel_width", |s| s.panel_width = 400, Effect::Relayout),
+            (
+                "panel_open_on_start",
+                |s| s.panel_open_on_start = true,
+                Effect::Repaint,
+            ),
+            (
+                "confirm_multiline",
+                |s| s.confirm_multiline = true,
+                Effect::Repaint,
+            ),
+            (
+                "focus_terminal_after_insert",
+                |s| s.focus_terminal_after_insert = false,
+                Effect::Repaint,
+            ),
+            ("preview_lines", |s| s.preview_lines = 4, Effect::Repaint),
+        ];
+        for (key, edit, effect) in edits {
+            let mut n = old.clone();
+            edit(&mut n.snippets);
+            let d = diff(&old, &n);
+            assert!(!d.is_empty(), "{key} is not classified");
+            assert!(d.has(effect), "{key}: {:?}", d.effects);
+        }
+    }
 
     #[test]
     fn identical_is_empty() {

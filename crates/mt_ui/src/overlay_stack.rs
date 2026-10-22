@@ -19,6 +19,8 @@ pub enum OverlayKind {
     WorkspaceDesigner,
     /// A context-menu item waiting on confirmation (SPEC §10.9.5).
     MenuConfirm,
+    /// Values for a snippet's `input`/`choice`/`secret` tags (SPEC §10.8.5).
+    SnippetFill,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -46,7 +48,8 @@ impl OverlayKind {
             | Self::NamePrompt
             | Self::SshPrompt
             | Self::WorkspaceDesigner
-            | Self::MenuConfirm => Class::Dialog,
+            | Self::MenuConfirm
+            | Self::SnippetFill => Class::Dialog,
         }
     }
 }
@@ -56,6 +59,8 @@ impl OverlayKind {
 pub enum FocusTarget {
     /// No overlay is open: the terminal viewport.
     Viewport,
+    /// The snippets side panel (not an overlay: `overlays.is_empty()` stays true).
+    Panel,
     Overlay(OverlayKind),
 }
 

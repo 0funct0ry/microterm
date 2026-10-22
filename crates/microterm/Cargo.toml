@@ -25,6 +25,7 @@ mt_ui = { path = "../mt_ui" }
 mt_config = { path = "../mt_config" }
 mt_theme = { path = "../mt_theme" }
 mt_proto = { path = "../mt_proto" }
+mt_snippets = { path = "../mt_snippets" }
 mt_mux = { path = "../mt_mux" }
 mt_term = { path = "../mt_term" }
 mt_record = { path = "../mt_record" }

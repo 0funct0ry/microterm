@@ -51,6 +51,11 @@ pub fn themes_dir(path: &Path) -> PathBuf {
     config_dir(path).join("themes")
 }
 
+/// `<config_dir>/snippets.toml` (SPEC §10.8.2).
+pub fn snippets_path(config_path: &Path) -> PathBuf {
+    config_dir(config_path).join("snippets.toml")
+}
+
 /// Load from disk. A missing file means all defaults.
 pub fn load(path: &Path) -> Result<Loaded, Vec<Diagnostic>> {
     match std::fs::read_to_string(path) {

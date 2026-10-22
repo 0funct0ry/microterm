@@ -1,5 +1,6 @@
 //! Config schema, defaults, loading, validation, watching and keymap (SPEC §8, §9.1).
 
+pub mod atomic;
 pub mod diagnostics;
 pub mod diff;
 pub mod edit;

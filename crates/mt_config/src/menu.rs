@@ -453,6 +453,14 @@ const VIEWPORT_BUILTINS: &[BuiltinDef] = &[
         "selection",
         WhenFalse::Disable,
     ),
+    // Hidden while `snippets.enabled = false` (SPEC §10.8.6).
+    b_if(
+        "save_as_snippet",
+        "Save selection as snippet…",
+        Some("SaveSelectionAsSnippet"),
+        "selection",
+        WhenFalse::Hide,
+    ),
     b(
         "clear_scrollback",
         "Clear scrollback",

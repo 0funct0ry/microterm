@@ -231,6 +231,54 @@ pub const TOOLS: &[ToolDef] = &[
         schema: || obj(pane_props(json!({"all":{"type":"boolean"}})), &[]),
     },
     ToolDef {
+        name: "microterm_snippet_list",
+        description: "List the user's saved snippets (id, title, folder, tags, run, and the prompts each one asks for). Only available while snippets are enabled in the config.",
+        method: "snippet.list",
+        kind: ToolKind::Call,
+        schema: || {
+            obj(
+                json!({
+                    "folder": {"type":"string"},
+                    "tag": {"type":"string"},
+                    "query": {"type":"string","description":"Fuzzy search over title, body, tags, folder and description"}
+                }),
+                &[],
+            )
+        },
+    },
+    ToolDef {
+        name: "microterm_snippet_expand",
+        description: "Show what a snippet expands to for a pane, without typing it. Give a value in `vars` for every prompt (see microterm_snippet_list). Snippets that ask for a secret are refused.",
+        method: "snippet.expand",
+        kind: ToolKind::Call,
+        schema: || {
+            obj(
+                pane_props(json!({
+                    "id": {"type":"string"},
+                    "vars": {"type":"object","additionalProperties":{"type":"string"},"description":"Prompt label -> value"}
+                })),
+                &["id"],
+            )
+        },
+    },
+    ToolDef {
+        name: "microterm_snippet_insert",
+        description: "Type a saved snippet into a pane, optionally pressing Enter. Never falls back to the focused pane. Give a value in `vars` for every prompt. Snippets that ask for a secret are refused.",
+        method: "snippet.insert",
+        kind: ToolKind::Call,
+        schema: || {
+            obj(
+                pane_props(json!({
+                    "id": {"type":"string"},
+                    "vars": {"type":"object","additionalProperties":{"type":"string"},"description":"Prompt label -> value"},
+                    "run": {"type":"boolean","description":"Press Enter afterwards (default: the snippet's own setting)"},
+                    "all": {"type":"boolean"}
+                })),
+                &["id"],
+            )
+        },
+    },
+    ToolDef {
         name: "microterm_events_next",
         description: "Long-poll for mux events (command finished, notification, status changed, …). Returns the events seen within `timeout_ms` as a JSON array (possibly empty). The first call starts the subscription; events between calls are buffered.",
         method: "subscribe",
@@ -249,6 +297,11 @@ pub const TOOLS: &[ToolDef] = &[
         },
     },
 ];
+
+/// The snippet tools are listed only while `snippets.enabled = true` (SPEC §12.5).
+pub fn is_snippet_tool(name: &str) -> bool {
+    name.starts_with("microterm_snippet_")
+}
 
 pub fn find(name: &str) -> Option<&'static ToolDef> {
     TOOLS.iter().find(|t| t.name == name)
@@ -413,6 +466,23 @@ pub fn request(name: &str, args: &Value, env: CallerEnv) -> Result<Request, Stri
         #[serde(default)]
         all: bool,
     }
+    #[derive(Deserialize, Default)]
+    struct SnippetList {
+        folder: Option<String>,
+        tag: Option<String>,
+        query: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct SnippetUse {
+        #[serde(flatten)]
+        sel: PaneSel,
+        id: String,
+        #[serde(default)]
+        vars: std::collections::BTreeMap<String, String>,
+        run: Option<bool>,
+        #[serde(default)]
+        all: bool,
+    }
     fn yes() -> bool {
         true
     }
@@ -538,6 +608,35 @@ pub fn request(name: &str, args: &Value, env: CallerEnv) -> Result<Request, Stri
             let a: StatusClear = parse(args)?;
             Request::PaneStatusClear(a.sel.target(env, a.all, false))
         }
+        "microterm_snippet_list" => {
+            let a: SnippetList = parse(args)?;
+            Request::SnippetList(crate::SnippetListParams {
+                folder: a.folder,
+                tag: a.tag,
+                query: a.query,
+            })
+        }
+        "microterm_snippet_expand" | "microterm_snippet_insert" => {
+            let a: SnippetUse = parse(args)?;
+            let insert = name == "microterm_snippet_insert";
+            if !insert && (a.run.is_some() || a.all) {
+                return Err("invalid arguments: `run` and `all` only apply to insert".into());
+            }
+            let p = crate::SnippetUseParams {
+                target: a.sel.target(env, a.all, false),
+                id: Some(a.id),
+                body: None,
+                vars: a.vars,
+                run: a.run,
+                // Agents never pass secrets through (SPEC §12.5).
+                agent: true,
+            };
+            if insert {
+                Request::SnippetInsert(p)
+            } else {
+                Request::SnippetExpand(p)
+            }
+        }
         other => return Err(format!("unknown tool {other:?}")),
     })
 }
@@ -608,6 +707,7 @@ mod tests {
                         None => json!("x"),
                     },
                     "array" => json!(["x"]),
+                    "object" => json!({"k": "v"}),
                     t => panic!("type {t}"),
                 };
                 o.insert(k.clone(), v);
@@ -693,8 +793,46 @@ mod tests {
                 "microterm_notify",
                 "microterm_status_set",
                 "microterm_status_clear",
+                "microterm_snippet_list",
+                "microterm_snippet_expand",
+                "microterm_snippet_insert",
                 "microterm_events_next",
             ]
         );
+    }
+
+    #[test]
+    fn snippet_tools_are_flagged_as_agent_requests() {
+        let env = CallerEnv {
+            pane: Some(4),
+            ..Default::default()
+        };
+        match request(
+            "microterm_snippet_insert",
+            &json!({"id":"a","vars":{"X":"1"},"run":true,"all":true}),
+            env,
+        )
+        .unwrap()
+        {
+            Request::SnippetInsert(p) => {
+                assert!(p.agent && p.run == Some(true) && p.target.all);
+                assert_eq!(p.target.pane, Some(4));
+                assert_eq!(p.vars["X"], "1");
+                assert_eq!(p.id.as_deref(), Some("a"));
+            }
+            r => panic!("{r:?}"),
+        }
+        match request("microterm_snippet_expand", &json!({"id":"a"}), env).unwrap() {
+            Request::SnippetExpand(p) => assert!(p.agent),
+            r => panic!("{r:?}"),
+        }
+        assert!(request(
+            "microterm_snippet_expand",
+            &json!({"id":"a","run":true}),
+            env
+        )
+        .is_err());
+        assert!(request("microterm_snippet_insert", &json!({}), env).is_err());
+        assert!(is_snippet_tool("microterm_snippet_list") && !is_snippet_tool("microterm_list"));
     }
 }

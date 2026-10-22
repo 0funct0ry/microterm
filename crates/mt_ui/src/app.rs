@@ -28,6 +28,7 @@ use crate::{
     platform::Platform,
     session::{self, TerminalSession},
     settings::{self, Banner, Settings},
+    snippets::gate::SnippetsGate,
     terminal_view::{CellMetrics, TermFont},
     theme::Theme,
 };
@@ -127,6 +128,8 @@ pub enum PromptKind {
     ConnectHost,
     CreateWorkspace,
     RenameWorkspace(u64),
+    /// "Move to folder…" for the snippet in `snippets.move_target` (an empty name = ungrouped).
+    MoveSnippet,
 }
 
 /// What the reconnect card shows (SPEC §4.6).
@@ -164,6 +167,8 @@ pub enum Target {
     MenuItem(String),
     /// "Tab: Set color…": a color (`None` = Default, clears the manual color) for the active tab.
     Color(Option<mt_mux::TabColor>),
+    /// A snippet id (`!` provider; Enter inserts, ⌥Enter runs).
+    Snippet(String),
 }
 
 /// Provider groups of the command palette (the `u8` tag in `PickerState`).
@@ -172,6 +177,7 @@ pub mod group {
     pub const WORKSPACES: u8 = 1;
     pub const TABS: u8 = 2;
     pub const THEMES: u8 = 3;
+    pub const SNIPPETS: u8 = 4;
 }
 
 /// `>` actions (the default), `@` workspaces, `#` tabs, `~` themes (SPEC §10.1).
@@ -181,6 +187,15 @@ pub const PALETTE_PREFIXES: &[(char, u8)] = &[
     ('#', group::TABS),
     ('~', group::THEMES),
 ];
+
+/// `>` plus `!` snippets while the feature is on.
+pub fn palette_prefixes(snippets: bool) -> Vec<(char, u8)> {
+    let mut p = PALETTE_PREFIXES.to_vec();
+    if snippets {
+        p.push(('!', group::SNIPPETS));
+    }
+    p
+}
 
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -221,6 +236,8 @@ pub struct ToastItem {
     pub id: u64,
     pub kind: ToastKind,
     pub text: SharedString,
+    /// Shows an "Open config" button (the snippets-disabled toast, SPEC §10.8.1).
+    pub open_config: bool,
 }
 
 pub struct AppWindow {
@@ -238,6 +255,8 @@ pub struct AppWindow {
     pub(crate) close_confirm: Option<CloseTarget>,
     pub(crate) prompt: Option<NamePrompt>,
     pub(crate) designer: Option<crate::designer::Designer>,
+    /// The snippets panel, fill dialog and editor (SPEC §10.8).
+    pub(crate) snippets: crate::snippets::ui::SnippetsUi,
     /// Where each designer text field's text was painted, for mouse hit-testing.
     pub(crate) designer_layout: crate::designer_view::FieldLayouts,
     /// The designer field a left-button drag is selecting in.
@@ -358,6 +377,7 @@ impl AppWindow {
             .parked
             .remove(&mux_window)
             .unwrap_or_default();
+        let snippets = crate::snippets::ui::SnippetsUi::new(&cfg, cx.focus_handle());
         let mut this = Self {
             viewport_focus,
             overlay_focus,
@@ -370,6 +390,7 @@ impl AppWindow {
             close_confirm: None,
             prompt: None,
             designer: None,
+            snippets,
             designer_layout: Default::default(),
             designer_drag: None,
             last_window_title: String::new(),
@@ -1107,7 +1128,13 @@ impl AppWindow {
 
     pub(crate) fn confirm_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.paste_confirm.take();
+        // A confirmed snippet insert carries its own deliveries (one per target pane).
+        let pending = self.snippets.pending.take();
         self.close_overlay(OverlayKind::PasteConfirm, true, window, cx);
+        if let Some(deliveries) = pending {
+            self.deliver_all(deliveries, window, cx);
+            return;
+        }
         if let (Some(text), Some(session)) = (text, self.live()) {
             session.term.paste(&text);
         }
@@ -1152,9 +1179,10 @@ impl AppWindow {
 
     // ---------------------------------------------------------------- overlays & focus
 
-    fn sync_focus(&self, window: &mut Window) {
-        match self.overlays.focus_target() {
+    pub(crate) fn sync_focus(&self, window: &mut Window) {
+        match self.focus_target() {
             crate::overlay_stack::FocusTarget::Viewport => window.focus(&self.viewport_focus),
+            crate::overlay_stack::FocusTarget::Panel => window.focus(&self.snippets.focus),
             crate::overlay_stack::FocusTarget::Overlay(_) => window.focus(&self.overlay_focus),
         }
     }
@@ -1214,6 +1242,7 @@ impl AppWindow {
             | OverlayKind::MenuConfirm
             | OverlayKind::NamePrompt
             | OverlayKind::WorkspaceDesigner
+            | OverlayKind::SnippetFill
             | OverlayKind::SshPrompt => {}
         }
     }
@@ -1279,7 +1308,11 @@ impl AppWindow {
                 self.ssh_prompts.pop_front();
                 self.ssh_input.clear();
             }
-            OverlayKind::PasteConfirm => self.paste_confirm = None,
+            OverlayKind::PasteConfirm => {
+                self.paste_confirm = None;
+                self.snippets.pending = None;
+            }
+            OverlayKind::SnippetFill => self.snippets.fill = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
             OverlayKind::MenuConfirm => self.menu_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
@@ -1297,9 +1330,15 @@ impl AppWindow {
                 let items = self.palette_entries(cx);
                 PickerData {
                     kind,
-                    state: with_mru(items, cx)
-                        .with_prefixes(PALETTE_PREFIXES, Some(group::ACTIONS)),
-                    placeholder: "Type a command…  (@ workspaces · # tabs · ~ themes)",
+                    state: with_mru(items, cx).with_prefixes(
+                        &palette_prefixes(SnippetsGate::of_config(&self.cfg).enabled),
+                        Some(group::ACTIONS),
+                    ),
+                    placeholder: if SnippetsGate::of_config(&self.cfg).enabled {
+                        "Type a command…  (@ workspaces · # tabs · ~ themes · ! snippets)"
+                    } else {
+                        "Type a command…  (@ workspaces · # tabs · ~ themes)"
+                    },
                 }
             }
             OverlayKind::Launcher => {
@@ -1426,11 +1465,14 @@ impl AppWindow {
     pub(crate) fn palette_entries(&self, cx: &mut Context<Self>) -> Vec<(String, Entry)> {
         let mut items: Vec<(String, Entry)> = Vec::new();
         let quick_select_on = self.cfg.quick_select.enabled;
+        let snippets_on = SnippetsGate::of_config(&self.cfg).enabled;
         for (i, def) in ACTIONS
             .iter()
             .enumerate()
             .filter(|(_, d)| d.palette)
             .filter(|(_, d)| quick_select_on || d.name != "ActivateQuickSelect")
+            // The snippet actions are absent while the feature is off (SPEC §10.8.1).
+            .filter(|(_, d)| snippets_on || d.category() != "Snippets")
         {
             let mut e = Entry::new(Target::Action(i), format!("action:{}", def.name));
             e.detail = Some(def.description.to_string());
@@ -1501,6 +1543,23 @@ impl AppWindow {
                 let mut name = def.id.to_string();
                 name[..1].make_ascii_uppercase();
                 items.push((format!("{name} menu: {label}"), e));
+            }
+        }
+        if snippets_on {
+            for s in &crate::snippets::library::set(cx).snippets {
+                let mut e = Entry::new(Target::Snippet(s.id.clone()), format!("snippet:{}", s.id));
+                e.group = group::SNIPPETS;
+                e.icon = Some(IconName::FileText);
+                let first = s.body.lines().next().unwrap_or("");
+                e.detail = Some(if s.folder.is_empty() {
+                    first.to_string()
+                } else {
+                    format!("{} · {first}", s.folder)
+                });
+                if !s.keys.is_empty() {
+                    e.chip = Some(s.keys.clone());
+                }
+                items.push((format!("Snippet: {}", s.title), e));
             }
         }
         let current = *cx.global::<Theme>();
@@ -1677,6 +1736,7 @@ impl AppWindow {
     }
 
     fn confirm_picker(&mut self, new_window: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let alt = std::mem::take(&mut self.snippets.alt_confirm);
         let Some(picker) = &self.picker else { return };
         let kind = picker.kind;
         let Some(entry) = picker.state.selected_item().cloned() else {
@@ -1730,6 +1790,13 @@ impl AppWindow {
                 }
             }
             Target::MenuItem(addr) => self.invoke_menu_address(&addr, window, cx),
+            Target::Snippet(id) => {
+                let g = crate::snippets::panel_state::Gesture {
+                    run: alt.then_some(true),
+                    broadcast: false,
+                };
+                self.insert_snippet(&id, g, window, cx);
+            }
             // A workspace switch has no "new window" form; the modifier acts like plain Enter.
             Target::Workspace(name) => self.switch_workspace_named(name, false, cx),
             Target::CreateWorkspace => {
@@ -2157,6 +2224,10 @@ impl AppWindow {
             return;
         };
         let name = prompt.text.trim().to_string();
+        if prompt.kind == PromptKind::MoveSnippet {
+            self.confirm_move(&name, window, cx);
+            return;
+        }
         if name.is_empty() {
             self.prompt = Some(prompt);
             return;
@@ -2171,6 +2242,7 @@ impl AppWindow {
                 self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
                 self.switch_workspace_named(name, true, cx);
             }
+            PromptKind::MoveSnippet => {}
             PromptKind::RenameWorkspace(id) => {
                 let result = mux_host::host(cx).mux.rename_workspace(id, &name);
                 match result {
@@ -2222,6 +2294,7 @@ impl AppWindow {
             id,
             kind,
             text: text.into(),
+            open_config: false,
         });
         if self.toasts.len() > 3 {
             self.toasts.remove(0);
@@ -2236,6 +2309,19 @@ impl AppWindow {
         })
         .detach();
         cx.notify();
+    }
+
+    /// A toast with an "Open config" button (it stays a little longer so it can be clicked).
+    pub(crate) fn toast_open_config(
+        &mut self,
+        kind: ToastKind,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.toast(kind, text, cx);
+        if let Some(t) = self.toasts.last_mut() {
+            t.open_config = true;
+        }
     }
 
     /// Saves the window size 500 ms after the last resize (`window.remember_size`).
@@ -2497,6 +2583,7 @@ impl AppWindow {
             }
             Some(OverlayKind::NamePrompt) => self.prompt_key(ev, window, cx),
             Some(OverlayKind::WorkspaceDesigner) => self.designer_key(ev, window, cx),
+            Some(OverlayKind::SnippetFill) => self.fill_key(ev, window, cx),
             None => {}
         }
     }
@@ -2616,6 +2703,9 @@ impl AppWindow {
         if diff.has(mt_config::Effect::Menus) && self.open_menu.take().is_some() {
             cx.notify();
         }
+        if diff.has(mt_config::Effect::Snippets) {
+            self.snippets_changed(window, cx);
+        }
         self.links = crate::mouse_input::build_links(&cfg);
         self.mouse.link_cache.clear();
         self.mouse.hover = None;
@@ -2647,7 +2737,7 @@ impl AppWindow {
     }
 
     /// Re-measures the cell and makes every PTY pick up the new grid size on the next paint.
-    fn relayout(&mut self, window: &Window) {
+    pub(crate) fn relayout(&mut self, window: &Window) {
         self.cell = CellMetrics::measure(
             window,
             &self.font,

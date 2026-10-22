@@ -23,8 +23,8 @@ use serde_json::Value;
 use crate::cli::RecordArgs;
 use crate::client::{Client, ClientError};
 use crate::ctl::{
-    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, PaneTarget, StatusCmd, TabCmd, TabTarget,
-    WindowCmd, WindowTarget, WorkspaceCmd,
+    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, PaneTarget, SnippetCmd, SnippetSource,
+    StatusCmd, TabCmd, TabTarget, WindowCmd, WindowTarget, WorkspaceCmd,
 };
 use crate::output::{Body, ColKind, Column, CtlError, Output, Table};
 use crate::render::{render, render_error, RenderOpts};
@@ -239,6 +239,260 @@ pub fn run(args: CtlArgs) -> i32 {
         Err(e) => Err(e.into()),
     };
     present(res, json, &opts, &mut stdout, &mut stderr)
+}
+
+/// Prompt values from `--vars-file` (a JSON object; `-` is stdin) overlaid by `--var`.
+fn snippet_vars(
+    source: &SnippetSource,
+    ctx: &Ctx<'_>,
+) -> Result<std::collections::BTreeMap<String, String>, CtlError> {
+    let mut vars = std::collections::BTreeMap::new();
+    if let Some(file) = &source.vars_file {
+        let text = if file == "-" {
+            if !ctx.allow_stdin {
+                return Err(CtlError::usage(
+                    "--vars-file - needs stdin, which is not available here",
+                ));
+            }
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .map_err(|e| CtlError::usage(format!("cannot read stdin: {e}")))?;
+            s
+        } else {
+            std::fs::read_to_string(file)
+                .map_err(|e| CtlError::usage(format!("cannot read {file}: {e}")))?
+        };
+        let v: Value = serde_json::from_str(&text)
+            .map_err(|e| CtlError::usage(format!("--vars-file is not JSON: {e}")))?;
+        let Value::Object(map) = v else {
+            return Err(CtlError::usage(
+                "--vars-file must hold a JSON object {label: value}",
+            ));
+        };
+        for (k, v) in map {
+            vars.insert(
+                k,
+                match v {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                },
+            );
+        }
+    }
+    for (k, v) in &source.vars {
+        vars.insert(k.clone(), v.clone());
+    }
+    Ok(vars)
+}
+
+fn snippet_warnings(v: &Value) {
+    for w in v["warnings"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        if let Some(w) = w.as_str() {
+            eprintln!("microterm: warning: {w}");
+        }
+    }
+}
+
+fn snippet_verb(
+    call: &mut dyn FnMut(Request) -> Result<Value, CtlError>,
+    cmd: SnippetCmd,
+    ctx: &mut Ctx<'_>,
+) -> Result<Output, CtlError> {
+    let json = ctx.json;
+    let env = ctx.env;
+    let result = |v: Value, plain: &dyn Fn(Value) -> Result<Output, CtlError>| {
+        if json {
+            Ok(Output::new(Body::Json(v)))
+        } else {
+            plain(v)
+        }
+    };
+    let quiet = |v: Value| -> Result<Output, CtlError> {
+        Ok(if json {
+            Output::new(Body::Json(v))
+        } else {
+            Output::none()
+        })
+    };
+    match cmd {
+        SnippetCmd::List { folder, tag, query } => {
+            let v = call(Request::SnippetList(mt_proto::SnippetListParams {
+                folder,
+                tag,
+                query,
+            }))?;
+            result(v, &|v| {
+                let rows = v
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| {
+                        let t = |k: &str| s[k].as_str().unwrap_or_default().to_string();
+                        vec![
+                            t("id"),
+                            t("title"),
+                            t("folder"),
+                            if s["run"].as_bool().unwrap_or(false) {
+                                "run".into()
+                            } else {
+                                String::new()
+                            },
+                            t("key"),
+                        ]
+                    })
+                    .collect();
+                Ok(table(
+                    vec![
+                        Column::new("ID", ColKind::Text),
+                        Column::new("TITLE", ColKind::Text),
+                        Column::low("FOLDER", ColKind::Text, 1),
+                        Column::low("RUN", ColKind::Text, 2),
+                        Column::low("KEY", ColKind::Text, 3),
+                    ],
+                    rows,
+                    "snippet",
+                ))
+            })
+        }
+        SnippetCmd::Show { id } => {
+            let v = call(Request::SnippetGet(mt_proto::SnippetIdParams { id }))?;
+            result(v, &|v| {
+                let t = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+                let mut kv = vec![
+                    ("id".to_string(), t("id")),
+                    ("title".into(), t("title")),
+                    ("folder".into(), t("folder")),
+                    (
+                        "tags".into(),
+                        v["tags"].as_array().map_or(String::new(), |a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }),
+                    ),
+                    (
+                        "run".into(),
+                        v["run"].as_bool().unwrap_or(false).to_string(),
+                    ),
+                    ("key".into(), t("key")),
+                ];
+                for p in v["prompts"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    kv.push((
+                        "prompt".into(),
+                        format!(
+                            "{} ({})",
+                            p["label"].as_str().unwrap_or(""),
+                            p["kind"].as_str().unwrap_or("")
+                        ),
+                    ));
+                }
+                kv.push(("body".into(), t("body")));
+                Ok(Output::new(Body::Card(kv)))
+            })
+        }
+        SnippetCmd::Expand { source, target } => {
+            let vars = snippet_vars(&source, ctx)?;
+            let v = call(Request::SnippetExpand(mt_proto::SnippetUseParams {
+                target: pane_target(target, env),
+                id: source.id,
+                body: source.body,
+                vars,
+                ..Default::default()
+            }))?;
+            snippet_warnings(&v);
+            result(v, &|v| {
+                Ok(Output::new(Body::Raw(
+                    v["text"].as_str().unwrap_or_default().to_string(),
+                )))
+            })
+        }
+        SnippetCmd::Insert {
+            source,
+            target,
+            run,
+            no_run,
+            all,
+        } => {
+            let vars = snippet_vars(&source, ctx)?;
+            let v = call(Request::SnippetInsert(mt_proto::SnippetUseParams {
+                target: Target {
+                    all,
+                    ..pane_target(target, env)
+                },
+                id: source.id,
+                body: source.body,
+                vars,
+                run: if run {
+                    Some(true)
+                } else if no_run {
+                    Some(false)
+                } else {
+                    None
+                },
+                agent: false,
+            }))?;
+            snippet_warnings(&v);
+            quiet(v)
+        }
+        SnippetCmd::Add {
+            title,
+            id,
+            folder,
+            tags,
+            description,
+            run,
+            key,
+            replace,
+            body,
+        } => {
+            let body = match body {
+                Some(b) => b,
+                None if !ctx.allow_stdin => {
+                    return Err(CtlError::usage(
+                        "snippet add needs BODY here (stdin is not available)",
+                    ))
+                }
+                None => {
+                    let mut s = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut s)
+                        .map_err(|e| CtlError::usage(format!("cannot read stdin: {e}")))?;
+                    s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+                }
+            };
+            let v = call(Request::SnippetAdd(mt_proto::SnippetAddParams {
+                id,
+                title,
+                body,
+                folder,
+                tags,
+                description,
+                run,
+                key,
+                replace,
+            }))?;
+            result(v, &|v| {
+                Ok(Output::new(Body::Raw(format!(
+                    "{}\n",
+                    v["id"].as_str().unwrap_or_default()
+                ))))
+            })
+        }
+        SnippetCmd::Rm { id } => quiet(call(Request::SnippetRemove(mt_proto::SnippetIdParams {
+            id,
+        }))?),
+    }
 }
 
 fn pane_target(t: PaneTarget, env: CallerEnv) -> Target {
@@ -978,6 +1232,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
                 ))
             })
         }
+        CtlAction::Snippet(cmd) => snippet_verb(&mut call, cmd, ctx),
         CtlAction::Menu(MenuCmd::Show { menu, target }) => {
             let v = call(Request::MenuShow(mt_proto::MenuShowParams {
                 target: pane_target(target, env),

@@ -3,6 +3,33 @@
 ## Unreleased
 
 ### Added
+- **M11.5 — Snippets.** Save reusable commands in `snippets.toml` and insert them into a pane from a
+  collapsible right-hand **side panel** (`⌘⇧S` / `Ctrl+Shift+S`, resizable, folders, ranked
+  search, a row menu and drag-to-reorder), the palette (`!`, `⌥Enter` runs), a key binding
+  (`keys` on a snippet, or `InsertSnippet` in `[[keys]]`), `microterm ctl snippet
+  list|show|expand|insert|add|rm`, `microterm sh` and three MCP tools (`microterm_snippet_list`,
+  `_expand`, `_insert`, listed only while enabled). Both the feature (`[snippets] enabled`) and
+  template expansion (`templates`) are **off by default** and switch on without a restart.
+  With templates on, a body can use `{{ }}` tags: generators (`uuid`, `ulid`, `nanoid`,
+  `random`, `password`, `counter`, …), date and time, local system facts, pane and terminal
+  state (`cwd`, `git_branch`, `last_command`, `selection`, `clipboard`, …), filters (`quote`,
+  `kebab`, `sha256`, …), `$name` bindings, `default=` fallbacks and prompts (`input`, `choice`,
+  `secret`) that open a **fill dialog** with a live preview identical to the inserted bytes. The
+  engine is hand-written in the new `mt_snippets` crate (no GPUI, no process spawning, no
+  network); `cursor` leaves the shell cursor at the marker. Inserts are sanitised (NUL and ESC
+  removed) and pasted (bracketed when the program asked), optionally followed by Enter. The panel
+  edits snippets in place: the file is patched surgically (comments and other entries stay
+  byte-identical), written atomically with a `.bak`, and an entry changed on disk is refused
+  with "Reload and re-apply". New exit codes `10` (feature disabled) and `11` (missing prompt
+  values, with the labels listed); IPC `snippet.*`; the "Template functions" reference page is
+  generated from the function registry. Secrets are tainted: never logged, remembered,
+  previewed, printed by `ctl` or accepted over MCP. Shared write-back (`mt_config::atomic`) now
+  serves both the workspace designer and snippets; the file watcher also reports `snippets.toml`.
+  Deferred: iTerm2 import, processes or network calls in templates, loops and conditionals,
+  snippet sync, per-workspace or per-project files, evaluating system functions on an SSH host,
+  persisted prompt values, a left-hand panel, Lua-defined functions, composition (IME) input in
+  the editor (it uses the app's key-based text input), and the panel resizing terminals while you
+  drag instead of on release.
 - **M11.4 — Main application menu.** On macOS microterm has a full menu bar (microterm, Shell,
   Edit, View, Window, Help) with live shortcut chips that follow rebinds, rows that grey out when
   they cannot apply, and a *New Tab in Domain* submenu with every `[[ssh_domains]]` entry. New

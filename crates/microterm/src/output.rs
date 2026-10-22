@@ -157,6 +157,8 @@ impl CtlError {
             exit::TIMEOUT => "timeout",
             exit::NEEDS_SHELL_INTEGRATION => "needs_shell_integration",
             exit::BUSY => "busy",
+            exit::DISABLED => "disabled",
+            exit::MISSING_VARS => "missing_vars",
             _ => "bad_request",
         }
     }

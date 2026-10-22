@@ -1559,6 +1559,14 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
             &cx.global::<Settings>().config.clone(),
         )),
         Request::MenuBarList => Ok(crate::menu_bar::current(cx).json()),
+        r @ (Request::SnippetList(_)
+        | Request::SnippetGet(_)
+        | Request::SnippetExpand(_)
+        | Request::SnippetInsert(_)
+        | Request::SnippetAdd(_)
+        | Request::SnippetRemove(_)) => {
+            crate::snippets::ipc::handle(&mut crate::snippets::ipc::GuiHost(cx), r)
+        }
         Request::MenuShow(p) => {
             let rows = rows(cx);
             let cfg = cx.global::<Settings>().config.clone();

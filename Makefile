@@ -42,7 +42,7 @@ CRATE_FEATURES = $(if $(filter microterm,$(C)),$(FEATURES),$(if $(filter mt_ui x
 .PHONY: help setup doctor tools tool-cargo-deny \
 	run run-release run-headless build release mux mux-release mux-musl \
 	test test-crate test-ssh test-ssh-local ssh-demo ssh-demo-drop check clippy fmt fmt-check lint deny audit \
-	check-facade check-mux-gpui themes docs docs-check doc \
+	check-facade check-mux-gpui check-snippets-pure themes docs docs-check doc \
 	bench bundle install release-dry \
 	site-install site-dev site-build site-preview \
 	ci tree clean clean-site distclean
@@ -174,7 +174,7 @@ deny: tool-cargo-deny ## Licence, advisory and source checks (cargo-deny)
 
 audit: deny ## Alias of deny
 
-lint: check-facade check-mux-gpui fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
+lint: check-facade check-mux-gpui check-snippets-pure fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
 
 # Facade rule (SPEC §3.3): only mt_term may mention alacritty_terminal.
 check-facade:
@@ -186,10 +186,14 @@ check-mux-gpui:
 	@if $(CARGO) tree -p mt_mux_server 2>/dev/null | grep -Ei 'gpui|tokio'; then \
 		echo 'error: mt_mux_server must not depend on gpui or tokio'; exit 1; fi
 
+check-snippets-pure: # mt_snippets stays free of GPUI and the terminal engine (SPEC §10.8, D12)
+	@if $(CARGO) tree -p mt_snippets 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
+		echo 'error: mt_snippets must not depend on gpui or alacritty_terminal'; exit 1; fi
+
 themes: ## Validate the bundled themes (licence, 16 colours, contrast)
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-themes
 
-docs: ## Regenerate generated docs (reference/actions.md, agent-skill.md, terminal-api.md) from the action registry
+docs: ## Regenerate generated docs (reference/actions.md, agent-skill.md, terminal-api.md, context-menus.md, template-functions.md) from the registries
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- gen-docs
 
 docs-check: ## Fail if generated docs are stale
@@ -223,7 +227,7 @@ site-preview: site-build ## Serve the built site locally
 
 # ------------------------------------------------------------------------------ CI
 
-ci: check-facade check-mux-gpui fmt-check clippy deny test themes docs-check site-build ## Everything CI runs
+ci: check-facade check-mux-gpui check-snippets-pure fmt-check clippy deny test themes docs-check site-build ## Everything CI runs
 
 # ------------------------------------------------------------------------------ packaging (M13)
 

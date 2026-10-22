@@ -142,6 +142,15 @@ color = "auto"                   # "auto" | "always" | "never" (NO_COLOR is alwa
 history_send_text = false        # keep lines containing `send-text` in the history
 confirm_prompts = true           # offer `Close 3 panes? [y/N]` when a close needs confirmation
 
+[snippets]                       # snippets side panel + `{{ }}` templates (snippets.toml)
+enabled = false                  # master switch; false = feature fully inert (no panel, no file read)
+templates = false                # expand {{ }} templates; false = bodies are inserted literally
+panel_width = 300                # px, 220-600; dragging the panel edge overrides it per window
+panel_open_on_start = false      # open the panel in new windows (saved window state wins)
+confirm_multiline = false        # ask before inserting a multi-line snippet
+focus_terminal_after_insert = true
+preview_lines = 2                # body lines shown under each title in the panel (0-5)
+
 [menu_bar]                       # the macOS main menu bar
 enabled = true                   # false keeps only the microterm menu (with Quit)
 

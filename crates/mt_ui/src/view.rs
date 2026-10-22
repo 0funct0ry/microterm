@@ -67,7 +67,18 @@ impl Render for AppWindow {
         if !tab_bar_bottom && !tab_bar_hidden {
             root = root.child(self.tab_bar(cx));
         }
-        root = root.child(self.viewport(&t, window, cx));
+        let viewport = self.viewport(&t, window, cx);
+        let side_panel = self.snippets_panel(&t, cx);
+        root = root.child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .child(viewport)
+                .children(side_panel),
+        );
         if tab_bar_bottom && !tab_bar_hidden {
             root = root.child(self.tab_bar(cx));
         }
@@ -79,6 +90,12 @@ impl Render for AppWindow {
 
         if let Some(menu) = self.render_open_menu(cx) {
             root = root.child(menu);
+        }
+        if let Some(menu) = self.render_row_menu(cx) {
+            root = root.child(menu);
+        }
+        if let Some(m) = self.fill_modal(&t, cx) {
+            root = root.child(m);
         }
         if let Some(tip) = self.link_tooltip(&t) {
             root = root.child(tip);
@@ -183,7 +200,9 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &SpawnWindow, _, cx| this.on_action_spawn_window(cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
-                if this.designer_clipboard(Clip::Copy, cx) {
+                if this.designer_clipboard(Clip::Copy, cx)
+                    || this.snippets_clipboard(Clip::Copy, cx)
+                {
                     return;
                 }
                 if !this.copy_selection(cx) {
@@ -191,18 +210,24 @@ impl Render for AppWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
-                if !this.designer_clipboard(Clip::SelectAll, cx) {
+                if !this.designer_clipboard(Clip::SelectAll, cx)
+                    && !this.snippets_clipboard(Clip::SelectAll, cx)
+                {
                     this.select_all(cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &SearchSelection, w, cx| this.search_selection(w, cx)))
             .on_action(cx.listener(|this, _: &Paste, w, cx| {
-                if !this.designer_clipboard(Clip::Paste, cx) {
+                if !this.designer_clipboard(Clip::Paste, cx)
+                    && !this.snippets_clipboard(Clip::Paste, cx)
+                {
                     this.paste(w, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &PastePrimary, w, cx| {
-                if !this.designer_clipboard(Clip::Paste, cx) {
+                if !this.designer_clipboard(Clip::Paste, cx)
+                    && !this.snippets_clipboard(Clip::Paste, cx)
+                {
                     this.paste_primary(w, cx)
                 }
             }))
@@ -276,6 +301,31 @@ impl Render for AppWindow {
                 cx.listener(|this, _: &ReloadConfig, window, cx| this.reload_config(window, cx)),
             )
             .on_action(cx.listener(|this, _: &OpenConfig, window, cx| this.open_config(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleSnippetsPanel, w, cx| {
+                    this.toggle_snippets_panel(w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusSnippetsPanel, w, cx| this.focus_snippets_panel(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NewSnippet, w, cx| this.new_snippet(w, cx)))
+            .on_action(cx.listener(|this, _: &SaveSelectionAsSnippet, w, cx| {
+                this.save_selection_as_snippet(w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SaveLastCommandAsSnippet, w, cx| {
+                this.save_last_command_as_snippet(w, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenSnippetsFile, w, cx| this.open_snippets_file(w, cx)),
+            )
+            .on_action(cx.listener(|this, a: &InsertSnippet, w, cx| {
+                let g = crate::snippets::panel_state::Gesture {
+                    run: a.run,
+                    broadcast: false,
+                };
+                this.insert_snippet(&a.id, g, w, cx)
+            }))
             .on_action(cx.listener(|this, _: &ShowCommandPalette, w, cx| {
                 this.toggle(OverlayKind::CommandPalette, w, cx)
             }))
@@ -334,6 +384,10 @@ impl Render for AppWindow {
             )
             .on_action(cx.listener(|this, _: &PickerConfirmInNewWindow, w, cx| {
                 this.on_picker_confirm(true, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PickerConfirmRun, w, cx| {
+                this.snippets.alt_confirm = true;
+                this.on_picker_confirm(false, w, cx)
             }))
     }
 }
@@ -1069,6 +1123,7 @@ impl AppWindow {
             crate::app::PromptKind::ConnectHost => "Connect to host (user@host:port)",
             crate::app::PromptKind::CreateWorkspace => "Create workspace",
             crate::app::PromptKind::RenameWorkspace(_) => "Rename workspace",
+            crate::app::PromptKind::MoveSnippet => "Move snippet to folder (empty = ungrouped)",
         };
         Modal::new("name-prompt")
             .width(px(380.))
@@ -1587,7 +1642,7 @@ impl AppWindow {
 
     // ------------------------------------------------------------------ toasts
 
-    fn toast_stack(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn toast_stack(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .absolute()
             .bottom(px(16.))
@@ -1596,11 +1651,20 @@ impl AppWindow {
             .flex_col()
             .items_end()
             .gap_2()
-            .children(
-                self.toasts
-                    .iter()
-                    .map(|toast| Toast::new(toast.kind, toast.text.clone())),
-            )
+            .children(self.toasts.iter().map(|toast| {
+                let t = Toast::new(toast.kind, toast.text.clone());
+                if toast.open_config {
+                    t.action(
+                        ("toast-open-config", toast.id as usize),
+                        "Open config",
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_config(window, cx)
+                        }),
+                    )
+                } else {
+                    t
+                }
+            }))
     }
 }
 
