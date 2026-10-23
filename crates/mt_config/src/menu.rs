@@ -461,6 +461,12 @@ const VIEWPORT_BUILTINS: &[BuiltinDef] = &[
         "selection",
         WhenFalse::Hide,
     ),
+    // Hidden while `recording.enabled = false` (SPEC §10.10.1).
+    b(
+        "toggle_recording",
+        "Start/Stop recording",
+        Some("ToggleRecording"),
+    ),
     b(
         "clear_scrollback",
         "Clear scrollback",

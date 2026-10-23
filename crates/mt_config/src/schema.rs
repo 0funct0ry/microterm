@@ -826,7 +826,7 @@ impl Default for Notifications {
     fn default() -> Self {
         Self {
             badge: true,
-            toast: ToastMode::Background,
+            toast: ToastMode::Always,
             desktop: DesktopMode::Unfocused,
         }
     }

@@ -98,6 +98,31 @@ The sidecar can always be rebuilt from the `.cast`. A missing or corrupt one is 
   `kill -9` the next `ctl recording list` completes the file (a truncated last line is dropped) and
   marks it `recovered`.
 
+### Recording mode (keys, pill, tab dot)
+
+With `recording.enabled = true`, `⌘⌥R` / `Ctrl+Alt+R` (`ToggleRecording`) starts and stops a
+recording of the focused pane. The palette ("Start Recording" / "Stop Recording"), **Edit ▸ Start
+Recording** on macOS, the pane context menu (**Start/Stop recording**) and `ctl recording
+start|stop` do the same. `StartRecording`, `StopRecording` and `RecordingMarker` (no default key)
+are also available as actions.
+
+- **REC pill.** A red dot, `REC` and the elapsed time (`REC 00:42`; `REC +INPUT 00:42` when
+  `capture_input` is on) at the top right of the pane, left of the Copy / Quick Select / Search
+  pill. The dot pulses once a second unless the OS asks for reduced motion (set
+  `MICROTERM_REDUCE_MOTION=1` to force a steady dot). Click the pill to stop.
+- **Not modal.** Keys still reach the shell, `Esc` included; copy mode can be used while recording
+  (output keeps recording).
+- **Tab dot.** Every tab with a recording pane shows a 6 px red dot before its title; the tooltip
+  reads `Recording pane 12 — 00:42`. It sits beside the tab color, status dot and badge.
+- **Toasts.** Start, stop ("Saved ‹title› · 00:42 · 1.2 MB" with **Open panel** and **Export…**,
+  which do nothing until the Recordings panel arrives), a reached limit, and "Recording stopped:
+  disabled in config" when you turn the feature off.
+- **One recorder per pane.** Starting a second one on the same pane only shows a toast; other
+  panes can record at the same time. Closing the pane or tab saves its recording.
+
+With the default config the key, palette and menu rows are absent or only show "Recording is
+disabled — set `recording.enabled = true`" with an **Open config** button.
+
 ### Limits
 
 `recording.max_duration_minutes` (default 60) and `recording.max_size_mb` (default 200) end a

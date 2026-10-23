@@ -75,6 +75,14 @@ actions!(
         SaveSelectionAsSnippet,
         SaveLastCommandAsSnippet,
         OpenSnippetsFile,
+        // Recording mode (M12.2); the panel and export actions are stubs until M12.4.
+        ToggleRecording,
+        StartRecording,
+        StopRecording,
+        RecordingMarker,
+        ToggleRecordingsPanel,
+        FocusRecordingsPanel,
+        ExportRecording,
         // Serial ports (M12).
         ConnectSerial,
         SerialSendBreak,
@@ -1002,6 +1010,62 @@ pub static ACTIONS: &[ActionDef] = &[
         SaveLastCommandAsSnippet
     ),
     def!(
+        "ToggleRecording",
+        "Toggle recording",
+        "Start or stop recording the focused pane (needs `recording.enabled = true`)",
+        &["cmd-alt-r"],
+        &["ctrl-alt-r"],
+        ToggleRecording
+    ),
+    def!(
+        "StartRecording",
+        "Start recording",
+        "Start recording the focused pane",
+        &[],
+        &[],
+        StartRecording
+    ),
+    def!(
+        "StopRecording",
+        "Stop recording",
+        "Stop and save the focused pane's recording",
+        &[],
+        &[],
+        StopRecording
+    ),
+    def!(
+        "RecordingMarker",
+        "Add recording marker",
+        "Add a marker to the focused pane's recording",
+        &[],
+        &[],
+        RecordingMarker
+    ),
+    def!(
+        "ToggleRecordingsPanel",
+        "Toggle recordings panel",
+        "Open the recordings side panel (arrives with M12.4)",
+        &["cmd-shift-y"],
+        &["ctrl-shift-y"],
+        ToggleRecordingsPanel
+    ),
+    def!(
+        "FocusRecordingsPanel",
+        "Focus recordings panel",
+        "Move keyboard focus to the recordings panel (arrives with M12.4)",
+        &[],
+        &[],
+        FocusRecordingsPanel
+    ),
+    def!(
+        "ExportRecording",
+        "Export recording",
+        "Open the export dialog for the selected recording (arrives with M12.4)",
+        &[],
+        &[],
+        ExportRecording
+    ),
+    def!(
         "ConnectSerial",
         "Connect to serial port",
         "Pick a serial port and open it in a new tab",
@@ -1063,6 +1127,7 @@ pub const CATEGORIES: &[&str] = &[
     "Menus",
     "Tab colors",
     "Snippets",
+    "Recording",
     "Serial",
     "Misc",
     "Debug",
@@ -1130,6 +1195,13 @@ impl ActionDef {
             | "SaveLastCommandAsSnippet"
             | "OpenSnippetsFile"
             | "InsertSnippet" => "Snippets",
+            "ToggleRecording"
+            | "StartRecording"
+            | "StopRecording"
+            | "RecordingMarker"
+            | "ToggleRecordingsPanel"
+            | "FocusRecordingsPanel"
+            | "ExportRecording" => "Recording",
             "ConnectSerial" | "SerialSendBreak" | "SerialToggleDtr" | "SerialToggleRts" => "Serial",
             _ => "Misc",
         }
@@ -1690,6 +1762,16 @@ mod tests {
         ] {
             assert!(ACTIONS.iter().any(|a| a.name == name), "{name} missing");
         }
+    }
+
+    #[test]
+    fn toggle_recording_has_its_default_key_and_no_other_default_uses_it() {
+        let uses: Vec<&str> = ACTIONS
+            .iter()
+            .filter(|d| d.mac.contains(&"cmd-alt-r") || d.linux.contains(&"ctrl-alt-r"))
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(uses, ["ToggleRecording"]);
     }
 
     #[test]

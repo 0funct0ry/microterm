@@ -25,6 +25,8 @@ pub struct MenuState {
     pub workspaces: usize,
     /// Workspaces detached earlier and not yet attached again.
     pub parked: Vec<String>,
+    /// The focused pane is recording (the Edit row reads "Stop Recording").
+    pub recording: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -247,18 +249,33 @@ pub fn build_menu_bar(
     };
     let edit = MenuModel {
         title: "Edit".into(),
-        entries: vec![
-            c.item("Copy", "Copy", st.has_selection),
-            c.on("Paste", "Paste"),
-            c.on("Paste Selection", "PastePrimary"),
-            c.on("Select All", "SelectAll"),
-            Entry::Separator,
-            c.on("Find…", "Search"),
-            c.on("Quick Select", "ActivateQuickSelect"),
-            c.on("Copy Mode", "ActivateCopyMode"),
-            Entry::Separator,
-            c.on("Clear Scrollback", "ClearScrollback"),
-        ],
+        entries: {
+            let mut entries = vec![
+                c.item("Copy", "Copy", st.has_selection),
+                c.on("Paste", "Paste"),
+                c.on("Paste Selection", "PastePrimary"),
+                c.on("Select All", "SelectAll"),
+                Entry::Separator,
+                c.on("Find…", "Search"),
+                c.on("Quick Select", "ActivateQuickSelect"),
+                c.on("Copy Mode", "ActivateCopyMode"),
+                Entry::Separator,
+                c.on("Clear Scrollback", "ClearScrollback"),
+            ];
+            // Hidden while the recording gate is off (SPEC §10.7, §10.10.1).
+            if crate::recording::gate::RecordingGate::of_config(config).enabled {
+                entries.push(Entry::Separator);
+                entries.push(c.on(
+                    if st.recording {
+                        "Stop Recording"
+                    } else {
+                        "Start Recording"
+                    },
+                    "ToggleRecording",
+                ));
+            }
+            entries
+        },
     };
     let view = MenuModel {
         title: "View".into(),
@@ -414,7 +431,8 @@ pub fn collect_state(cx: &mut App) -> MenuState {
         ..Default::default()
     };
     if let Some(w) = cx.active_window().and_then(|w| w.downcast::<AppWindow>()) {
-        let _ = w.update(cx, |this, _, _| {
+        let _ = w.update(cx, |this, _, cx| {
+            st.recording = this.focused_is_recording(cx);
             let (panes, tabs, sel, link) = this.menu_probe();
             st.panes = panes;
             st.tabs = tabs;
@@ -569,6 +587,7 @@ mod tests {
             link_under_pointer: true,
             workspaces: 2,
             parked: vec!["infra".into()],
+            recording: false,
         }
     }
 
@@ -646,6 +665,22 @@ mod tests {
             walk(&m.entries, &mut n);
         }
         assert!(n > 60, "{n}");
+    }
+
+    #[test]
+    fn recording_row_follows_the_gate_and_the_pane_state() {
+        let off = bar(&many(), &Config::default()).rows();
+        assert!(!off.iter().any(|r| r.title.ends_with("Recording")));
+        let cfg = mt_config::parse_str("[recording]\nenabled = true\n")
+            .unwrap()
+            .config;
+        let on = bar(&many(), &cfg).rows();
+        let r = row(&on, "Start Recording");
+        assert_eq!(r.action.as_deref(), Some("ToggleRecording"));
+        let mut st = many();
+        st.recording = true;
+        let rec = bar(&st, &cfg).rows();
+        assert!(rec.iter().any(|r| r.title == "Stop Recording"));
     }
 
     #[test]

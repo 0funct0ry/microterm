@@ -221,7 +221,7 @@ fn notifications_and_status_len_default_and_validate() {
     let c = Config::default();
     assert_eq!(c.ctl.status_max_len, 120);
     assert!(c.notifications.badge);
-    assert_eq!(c.notifications.toast, ToastMode::Background);
+    assert_eq!(c.notifications.toast, ToastMode::Always);
     assert_eq!(c.notifications.desktop, DesktopMode::Unfocused);
     let cfg = parse_str(
         "[ctl]\nstatus_max_len = 10\n[notifications]\nbadge = false\ntoast = \"always\"\ndesktop = \"never\"\n",

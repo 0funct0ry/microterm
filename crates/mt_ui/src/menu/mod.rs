@@ -78,6 +78,8 @@ pub struct Facts {
     pub manual_color: Option<mt_mux::TabColor>,
     /// `snippets.enabled`: the "Save selection as snippet…" row exists only while it is on.
     pub snippets_enabled: bool,
+    /// `recording.enabled`: the "Start/Stop recording" row exists only while it is on.
+    pub recording_enabled: bool,
 }
 
 impl Facts {
@@ -179,6 +181,7 @@ impl Facts {
             shell,
             manual_color: None,
             snippets_enabled: crate::snippets::gate::SnippetsGate::of_config(cfg).enabled,
+            recording_enabled: crate::recording::gate::RecordingGate::of_config(cfg).enabled,
         })
     }
 
@@ -244,6 +247,7 @@ pub enum Builtin {
     CloseOtherTabs,
     RenameTab,
     SaveAsSnippet,
+    ToggleRecording,
 }
 
 impl Builtin {
@@ -257,6 +261,7 @@ impl Builtin {
             ("viewport", "search") => Builtin::Search,
             ("viewport", "clear_scrollback") => Builtin::ClearScrollback,
             ("viewport", "save_as_snippet") => Builtin::SaveAsSnippet,
+            ("viewport", "toggle_recording") => Builtin::ToggleRecording,
             ("viewport", "zoom") => Builtin::Zoom,
             ("viewport", "swap_left") => Builtin::Swap(Dir::Left),
             ("viewport", "swap_right") => Builtin::Swap(Dir::Right),
@@ -318,6 +323,7 @@ impl Builtin {
             | Builtin::CopyLink
             | Builtin::Search
             | Builtin::SaveAsSnippet
+            | Builtin::ToggleRecording
             | Builtin::CloseOtherTabs
             | Builtin::RenameTab => return None,
         })
@@ -371,6 +377,9 @@ impl MenuRow {
 
 fn builtin_row(b: &'static BuiltinDef, f: &Facts) -> Option<MenuRow> {
     if b.id == "save_as_snippet" && !f.snippets_enabled {
+        return None;
+    }
+    if b.id == "toggle_recording" && !f.recording_enabled {
         return None;
     }
     let holds = f.holds(b.when);

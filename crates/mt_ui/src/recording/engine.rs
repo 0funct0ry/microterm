@@ -41,6 +41,7 @@ struct Running {
     id: String,
     started: Instant,
     title: String,
+    input: bool,
     handle: JoinHandle<(Result<Sidecar, String>, Option<LimitHit>)>,
 }
 
@@ -223,6 +224,7 @@ impl StoreRecorders {
                 id: info.id.clone(),
                 started: t0,
                 title: info.title.clone(),
+                input: opts.input,
                 handle,
             },
         );
@@ -280,6 +282,11 @@ impl StoreRecorders {
             });
         }
         out
+    }
+
+    /// Whether the pane's running recording captures input (`REC +INPUT`).
+    pub fn captures_input(&self, pane: Id) -> bool {
+        self.active.get(&pane).is_some_and(|r| r.input)
     }
 
     pub fn title_of(&self, pane: Id) -> Option<&str> {

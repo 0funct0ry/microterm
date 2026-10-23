@@ -112,6 +112,14 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl snippet insert` — Type a snippet into a pane (never the focused pane: --pane, --match or $MICROTERM_PANE)
 - `microterm ctl snippet add` — Add a snippet to snippets.toml (the body comes from BODY, else stdin)
 - `microterm ctl snippet rm` — Remove a snippet from snippets.toml
+- `microterm ctl recording list` — List stored recordings (id, title, duration, size, flags) and running ones
+- `microterm ctl recording show` — Show one recording's metadata
+- `microterm ctl recording start` — Start recording a pane into the store (never the focused pane: --pane or $MICROTERM_PANE)
+- `microterm ctl recording stop` — Stop a recording and save it (--pane ID, a recording id, or --all)
+- `microterm ctl recording marker` — Add a marker to a running recording
+- `microterm ctl recording rename` — Rename a recording
+- `microterm ctl recording rm` — Delete recordings and their metadata. Needs --force
+- `microterm ctl recording replay` — Play a recording into a new tab (same as `ctl replay FILE`)
 
 Run `microterm ctl <resource> <verb> --help` for flags.
 

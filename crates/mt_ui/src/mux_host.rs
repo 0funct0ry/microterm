@@ -132,6 +132,11 @@ pub fn ensure(cx: &mut App) {
     }
 }
 
+/// Read-only view of the host (it exists once any window has been built).
+pub(crate) fn host_ref(cx: &App) -> &MuxHost {
+    cx.global::<MuxHost>()
+}
+
 pub(crate) fn host(cx: &mut App) -> &mut MuxHost {
     ensure(cx);
     cx.global_mut::<MuxHost>()
@@ -461,13 +466,37 @@ fn to_json<T: serde::Serialize>(v: &T) -> Reply {
 
 /// The live terminal of `pane`, wherever its tab currently lives (a window, or parked).
 pub(crate) fn terminal(cx: &mut App, pane: Id) -> Option<Arc<Terminal>> {
+    terminal_leased(cx, pane, None)
+}
+
+/// A window whose entity is being updated and so cannot be read: its own terminals.
+pub(crate) struct Leased<'a> {
+    pub window: Id,
+    pub terms: &'a HashMap<Id, Arc<Terminal>>,
+}
+
+/// As [`terminal`], for callers inside a window update: that window is answered from `leased`
+/// and never read (reading a window that is on the stack panics).
+pub(crate) fn terminal_leased(
+    cx: &mut App,
+    pane: Id,
+    leased: Option<&Leased>,
+) -> Option<Arc<Terminal>> {
+    if let Some(t) = leased.and_then(|l| l.terms.get(&pane)) {
+        return Some(t.clone());
+    }
     let h = host(cx);
     for tabs in h.parked.values() {
         if let Some(v) = tabs.iter().find_map(|t| t.pane_view(pane)) {
             return v.session.as_ref().map(|s| s.term.clone());
         }
     }
-    let handles: Vec<_> = h.open.values().copied().collect();
+    let handles: Vec<_> = h
+        .open
+        .iter()
+        .filter(|(id, _)| leased.is_none_or(|l| l.window != **id))
+        .map(|(_, h)| *h)
+        .collect();
     handles.into_iter().find_map(|handle| {
         handle
             .read_with(cx, |view, _| {
@@ -733,6 +762,10 @@ fn run_ctl_item(cx: &mut App, pane: Id, argv: Vec<String>) {
 
 /// Snapshot of the mux with each pane's live terminal facts, for `ctl` listings and targets.
 pub(crate) fn rows(cx: &mut App) -> Rows {
+    rows_leased(cx, None)
+}
+
+pub(crate) fn rows_leased(cx: &mut App, leased: Option<&Leased>) -> Rows {
     let panes: Vec<Id> = host(cx)
         .mux
         .windows()
@@ -744,7 +777,7 @@ pub(crate) fn rows(cx: &mut App) -> Rows {
     let live: HashMap<Id, Live> = panes
         .into_iter()
         .map(|p| {
-            let term = terminal(cx, p);
+            let term = terminal_leased(cx, p, leased);
             let l = ipc_ops::live_with_exit(term.as_deref(), host(cx).runtime.exit_of(p));
             (p, l)
         })
@@ -1365,7 +1398,10 @@ pub(crate) fn on_osc_notify(cx: &mut App, pane: Id, text: &str) {
     let max = status_max_len(cx);
     let now = mt_term::now_ms();
     if let Some(d) = ipc_ops::osc_notify(&mut host(cx).mux, pane, text, max, now) {
-        deliver(cx, d);
+        // OSC bytes are handled while the pane's own window is being updated, and a window on
+        // the stack cannot be read or updated: `deliver` would see the pane as out of view and
+        // its toast would be lost. Run it once that update has finished.
+        cx.defer(move |cx| deliver(cx, d));
     }
 }
 

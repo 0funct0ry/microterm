@@ -256,6 +256,24 @@ pub struct ToastItem {
     pub text: SharedString,
     /// Shows an "Open config" button (the snippets-disabled toast, SPEC §10.8.1).
     pub open_config: bool,
+    /// Extra buttons (the recording-saved toast, SPEC §10.10.2).
+    pub buttons: Vec<ToastButton>,
+}
+
+/// Toast buttons that are not "Open config".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastButton {
+    OpenPanel,
+    Export,
+}
+
+impl ToastButton {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenPanel => "Open panel",
+            Self::Export => "Export…",
+        }
+    }
 }
 
 pub struct AppWindow {
@@ -288,6 +306,9 @@ pub struct AppWindow {
     pub(crate) quick: QuickState,
     pub(crate) toasts: Vec<ToastItem>,
     next_toast_id: u64,
+    /// Pulse phase of the REC dot, flipped once per second.
+    pub(crate) rec_pulse: bool,
+    pub(crate) rec_was_active: bool,
     pub(crate) config_error: Option<SharedString>,
     /// Questions from SSH connections (host keys, passwords), oldest first; the front one is
     /// on screen. Dropping a request cancels it.
@@ -420,6 +441,8 @@ impl AppWindow {
             quick: QuickState::default(),
             toasts: Vec::new(),
             next_toast_id: 0,
+            rec_pulse: false,
+            rec_was_active: false,
             config_error: None,
             ssh_prompts: VecDeque::new(),
             ssh_input: String::new(),
@@ -458,6 +481,7 @@ impl AppWindow {
         // Unit tests build windows by the dozen and never poll processes.
         if !cfg!(test) {
             this.start_process_poll(cx);
+            this.start_recording_tick(cx);
         }
         this
     }
@@ -1517,6 +1541,8 @@ impl AppWindow {
         let mut items: Vec<(String, Entry)> = Vec::new();
         let quick_select_on = self.cfg.quick_select.enabled;
         let snippets_on = SnippetsGate::of_config(&self.cfg).enabled;
+        let recording_on = crate::recording::gate::RecordingGate::of_config(&self.cfg).enabled;
+        let recording_now = self.focused_is_recording(cx);
         for (i, def) in ACTIONS
             .iter()
             .enumerate()
@@ -1524,11 +1550,29 @@ impl AppWindow {
             .filter(|(_, d)| quick_select_on || d.name != "ActivateQuickSelect")
             // The snippet actions are absent while the feature is off (SPEC §10.8.1).
             .filter(|(_, d)| snippets_on || d.category() != "Snippets")
+            // Recording rows are absent while the gate is off (SPEC §10.10.1); one row covers
+            // start and stop, and the panel rows wait for M12.4.
+            .filter(|(_, d)| recording_on || d.category() != "Recording")
+            .filter(|(_, d)| {
+                !matches!(
+                    d.name,
+                    "StartRecording"
+                        | "StopRecording"
+                        | "ToggleRecordingsPanel"
+                        | "FocusRecordingsPanel"
+                        | "ExportRecording"
+                )
+            })
         {
             let mut e = Entry::new(Target::Action(i), format!("action:{}", def.name));
             e.detail = Some(def.description.to_string());
             e.chip = cx.global::<Settings>().chip(def);
-            items.push((def.label.to_string(), e));
+            let label = match def.name {
+                "ToggleRecording" if recording_now => "Stop Recording",
+                "ToggleRecording" => "Start Recording",
+                _ => def.label,
+            };
+            items.push((label.to_string(), e));
         }
         for (name, detail, is_active) in self.workspace_rows(cx) {
             let mut e = Entry::new(Target::Workspace(name.clone()), format!("workspace:{name}"));
@@ -2375,6 +2419,7 @@ impl AppWindow {
             kind,
             text: text.into(),
             open_config: false,
+            buttons: Vec::new(),
         });
         if self.toasts.len() > 3 {
             self.toasts.remove(0);
@@ -2825,7 +2870,8 @@ impl AppWindow {
             && !crate::recording::gate::RecordingGate::of_config(&cfg).enabled
         {
             // Gate off: stop and save every running recording (SPEC §10.10.1).
-            crate::recording::ipc::stop_all(&mut crate::recording::ipc::GuiHost(cx));
+            let done = crate::recording::ipc::stop_all(&mut self.window_host(cx));
+            self.report_finished(done, true, cx);
         }
         self.links = crate::mouse_input::build_links(&cfg);
         self.mouse.link_cache.clear();

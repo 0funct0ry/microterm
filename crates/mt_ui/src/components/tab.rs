@@ -248,6 +248,17 @@ impl RenderOnce for Tab {
                         .bg(color_hsla.unwrap_or(t.accent)),
                 )
             })
+            // Recording indicator (SPEC §10.10.2); coexists with tab color, status dot and badge.
+            .when(chrome.recording.is_some(), |el| {
+                el.child(
+                    gpui::div()
+                        .flex_none()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(t.error)
+                        .id("tab-rec-dot"),
+                )
+            })
             // A status dot replaces the dirty dot: both are "something is running here".
             .when_some(chrome.dot, |el, kind| {
                 el.child(StatusDot::new(kind).ring(ring))

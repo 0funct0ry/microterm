@@ -134,7 +134,7 @@ status_max_len = 120             # `pane status` text is truncated to this many 
 
 [notifications]                  # for `ctl pane notify`
 badge = true                     # attention badge on the tab until it is focused
-toast = "background"             # "background" | "always" | "never"
+toast = "always"                 # "always" | "background" (pane not visible) | "never"
 desktop = "unfocused"            # "unfocused" | "always" | "never" (OS notification)
 
 [terminal]                       # VT behaviour

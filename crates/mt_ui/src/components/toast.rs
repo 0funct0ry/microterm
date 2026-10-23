@@ -3,6 +3,10 @@ use gpui::{prelude::*, px, AnyElement, App, ClickEvent, ElementId, SharedString,
 use super::{theme, Button, ButtonStyle, Icon, IconButton};
 use crate::{assets::IconName, metrics::RADIUS_POPOVER};
 
+/// Messages wrap and the toast grows in height; past this many lines the text is clipped.
+const TOAST_MAX_LINES: f32 = 5.0;
+const TOAST_LINE_HEIGHT: f32 = 18.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastKind {
     Info,
@@ -15,7 +19,7 @@ pub enum ToastKind {
 pub struct Toast {
     kind: ToastKind,
     text: SharedString,
-    action: Option<(ElementId, SharedString, ClickHandler)>,
+    actions: Vec<(ElementId, SharedString, ClickHandler)>,
 }
 
 impl Toast {
@@ -23,7 +27,7 @@ impl Toast {
         Self {
             kind,
             text: text.into(),
-            action: None,
+            actions: Vec::new(),
         }
     }
 
@@ -34,7 +38,8 @@ impl Toast {
         label: impl Into<SharedString>,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.action = Some((id.into(), label.into(), Box::new(handler)));
+        self.actions
+            .push((id.into(), label.into(), Box::new(handler)));
         self
     }
 }
@@ -52,6 +57,7 @@ impl RenderOnce for Toast {
             .flex()
             .items_center()
             .gap_2()
+            .w_auto()
             .max_w(px(360.))
             .px_3()
             .py_2()
@@ -62,15 +68,25 @@ impl RenderOnce for Toast {
             .shadow_lg()
             .text_color(t.text)
             .text_size(px(13.))
-            .child(Icon::new(icon).color(color))
-            .child(gpui::div().child(self.text))
-            .when_some(self.action, |el, (id, label, handler)| {
-                el.child(
+            .child(gpui::div().flex_none().child(Icon::new(icon).color(color)))
+            // The text takes the remaining width and wraps; very long messages are clipped
+            // after `TOAST_MAX_LINES` lines.
+            .child(
+                gpui::div()
+                    .flex_1()
+                    .min_w_0()
+                    .line_height(px(TOAST_LINE_HEIGHT))
+                    .max_h(px(TOAST_LINE_HEIGHT * TOAST_MAX_LINES))
+                    .overflow_hidden()
+                    .child(self.text),
+            )
+            .children(self.actions.into_iter().map(|(id, label, handler)| {
+                gpui::div().flex_none().child(
                     Button::new(id, label)
                         .style(ButtonStyle::Subtle)
                         .on_click(handler),
                 )
-            })
+            }))
     }
 }
 

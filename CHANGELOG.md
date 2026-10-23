@@ -2,7 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+- **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
+
 ### Added
+- **M12.2 — Recording mode.** With `recording.enabled = true`, `⌘⌥R` / `Ctrl+Alt+R`
+  (`ToggleRecording`; also `StartRecording`, `StopRecording`, `RecordingMarker`) records the
+  focused pane into the store. A `REC mm:ss` pill (`+INPUT` when input is captured, pulsing dot
+  unless reduced motion) stacks left of the Copy / Quick Select / Search pill and stops on click;
+  tabs with a recording pane get a red dot and a tooltip. Toasts for start, stop (with **Open
+  panel** / **Export…**, inert until M12.4), limits and gate-off; palette, Edit menu and pane
+  context-menu rows (hidden while the gate is off). With the default config the keys only show
+  "Recording is disabled" with **Open config**. Recording mode is not modal: `Esc` reaches the
+  shell. The panel and export actions exist as stubs.
 - **M12.1 — Recording engine and store.** New opt-in `[recording]` config (`enabled = false` by
   default: no recorder runs and the store is never read or created) and `microterm ctl recording
   list|show|start|stop|marker|rename|rm|replay`. Recordings are asciicast v2 files in

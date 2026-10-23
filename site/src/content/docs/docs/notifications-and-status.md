@@ -59,7 +59,8 @@ microterm ctl pane notify [TARGET] [--title T] [--level info|attention|error] [-
 - A **badge** (a dot in `accent`, `warning` or `error`, by level) appears on the pane's tab until
   that pane is focused. A badge is only raised for a pane you are not already looking at, and a
   higher level is never downgraded by a lower one.
-- A **toast** shows when the pane is not visible.
+- A **toast** shows by default, whether or not the pane is visible (`toast = "background"` limits
+  it to panes you are not looking at).
 - An **OS notification** is raised when microterm is not the focused application. `--desktop`
   forces one.
 - A `pane.notification` [event](#events) is emitted.
@@ -70,7 +71,7 @@ succeeds and reports the count (`"dropped": N` with `--json`, a line on stderr o
 ```toml
 [notifications]
 badge = true            # attention badge on the tab until it is focused
-toast = "background"    # "background" (pane not visible) | "always" | "never"
+toast = "always"        # "always" | "background" (pane not visible) | "never"
 desktop = "unfocused"   # "unfocused" (no microterm window focused) | "always" | "never"
 ```
 

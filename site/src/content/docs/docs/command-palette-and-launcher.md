@@ -30,6 +30,10 @@ With [snippets](/docs/snippets/) enabled, `!` lists your snippets ("Snippet: Tai
 row shows the folder and first line). `Enter` inserts the snippet and `⌥Enter` / `Alt+Enter`
 inserts and runs it. The provider is absent while `snippets.enabled = false`.
 
+With [recording](/docs/recording-and-replay/) enabled, one row reads "Start Recording" or "Stop
+Recording" depending on whether the focused pane is recording, plus "Add recording marker". The
+rows are absent while `recording.enabled = false`.
+
 Every action in the [actions reference](/docs/reference/actions/) is reachable from the palette,
 except the ones that need an argument (`SendString`, `SpawnCommand`, …): bind those under
 `[[keys]]`.

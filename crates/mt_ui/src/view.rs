@@ -321,6 +321,17 @@ impl Render for AppWindow {
             .on_action(
                 cx.listener(|this, _: &FocusSnippetsPanel, w, cx| this.focus_snippets_panel(w, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleRecording, w, cx| this.toggle_recording(w, cx)))
+            .on_action(cx.listener(|this, _: &StartRecording, w, cx| this.start_recording(w, cx)))
+            .on_action(cx.listener(|this, _: &StopRecording, w, cx| this.stop_recording(w, cx)))
+            .on_action(cx.listener(|this, _: &RecordingMarker, w, cx| this.recording_marker(w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleRecordingsPanel, w, cx| this.recording_stub(w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusRecordingsPanel, w, cx| this.recording_stub(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ExportRecording, w, cx| this.recording_stub(w, cx)))
             .on_action(cx.listener(|this, _: &NewSnippet, w, cx| this.new_snippet(w, cx)))
             .on_action(cx.listener(|this, _: &SaveSelectionAsSnippet, w, cx| {
                 this.save_selection_as_snippet(w, cx)
@@ -547,6 +558,35 @@ impl AppWindow {
 
     // ------------------------------------------------------------------ tab bar
 
+    /// The tab's chrome plus the recording dot when any of its panes records (gate on).
+    #[cfg(test)]
+    pub(crate) fn tab_chrome_for_test(
+        &self,
+        tab: &crate::app::TabView,
+        cx: &gpui::App,
+    ) -> crate::tab_chrome::TabChrome {
+        self.tab_chrome_for(tab, cx)
+    }
+
+    fn tab_chrome_for(
+        &self,
+        tab: &crate::app::TabView,
+        cx: &gpui::App,
+    ) -> crate::tab_chrome::TabChrome {
+        let chrome = crate::mux_host::tab_chrome(cx, tab.pane);
+        if !crate::recording::gate::RecordingGate::of_config(&self.cfg).enabled {
+            return chrome;
+        }
+        let running = crate::mux_host::host_ref(cx).store_recorders.running();
+        match running
+            .into_iter()
+            .find(|(p, _, _)| tab.panes.iter().any(|v| v.pane == *p))
+        {
+            Some((pane, _, elapsed)) => chrome.with_recording(pane, elapsed),
+            None => chrome,
+        }
+    }
+
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut bar = TabBar::new();
         for (i, tab) in self.tabs.iter().enumerate() {
@@ -561,7 +601,7 @@ impl AppWindow {
                     .tab_id(id)
                     .active(i == self.active_tab)
                     .dirty(tab.dirty)
-                    .chrome(crate::mux_host::tab_chrome(cx, tab.pane))
+                    .chrome(self.tab_chrome_for(tab, cx))
                     .editing(editing)
                     .draggable()
                     .on_drop_tab({
@@ -1313,6 +1353,16 @@ impl AppWindow {
             None
         };
         let prompt = copy.and_then(|(_, p)| p);
+        let rec = self.recording_pill(cx).map(|info| {
+            let text = format!(
+                "REC{} {}",
+                if info.input { " +INPUT" } else { "" },
+                crate::recording::ui::format_elapsed(info.elapsed)
+            );
+            RecPill::new("rec-pill", text)
+                .dim(self.rec_pulse && !crate::recording::ui::reduce_motion())
+                .on_click(cx.listener(|this, _: &ClickEvent, w, cx| this.stop_recording(w, cx)))
+        });
         div()
             .absolute()
             .top(px(8.))
@@ -1320,6 +1370,7 @@ impl AppWindow {
             .flex()
             .items_center()
             .gap_2()
+            .when_some(rec, |el, pill| el.child(pill))
             .when_some(prompt, |el, text| {
                 el.child(
                     div()
@@ -1693,7 +1744,14 @@ impl AppWindow {
             .items_end()
             .gap_2()
             .children(self.toasts.iter().map(|toast| {
-                let t = Toast::new(toast.kind, toast.text.clone());
+                let mut t = Toast::new(toast.kind, toast.text.clone());
+                for (i, b) in toast.buttons.iter().copied().enumerate() {
+                    t = t.action(
+                        ("toast-button", toast.id as usize * 8 + i),
+                        b.label(),
+                        cx.listener(move |this, _: &ClickEvent, w, cx| this.recording_stub(w, cx)),
+                    );
+                }
                 if toast.open_config {
                     t.action(
                         ("toast-open-config", toast.id as usize),

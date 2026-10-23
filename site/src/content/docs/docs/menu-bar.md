@@ -15,7 +15,7 @@ the chip updates after the [hot reload](/docs/hot-reload/). Linux has no global 
 |---|---|
 | microterm | About microterm, Settings…, Reload Config, Services, Hide, Hide Others, Show All, Quit |
 | Shell | New Tab, New Window, Split Right / Down / Left / Up, Close Tab, Close Pane, Close Window, Rename Tab, Reset Terminal, Show Launcher, Open Link at Mouse Cursor, New Tab in Domain ▸, Detach Workspace, Attach ▸ |
-| Edit | Copy, Paste, Paste Selection, Select All, Find…, Quick Select, Copy Mode, Clear Scrollback |
+| Edit | Copy, Paste, Paste Selection, Select All, Find…, Quick Select, Copy Mode, Clear Scrollback, Start/Stop Recording (only while `recording.enabled = true`) |
 | View | Command Palette, Increase / Decrease / Reset Font Size, Select Theme…, Toggle Fullscreen, Toggle Pane Zoom, Workspace Switcher |
 | Window | Minimize, Zoom, Next / Previous Tab, Go to Tab ▸, Focus Pane ▸, Swap Pane ▸, Rotate Panes, Next / Previous Workspace, Bring All to Front |
 | Help | Documentation, Release Notes, Report an Issue, Show Config Folder |

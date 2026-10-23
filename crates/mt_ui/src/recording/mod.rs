@@ -4,3 +4,7 @@
 pub mod engine;
 pub mod gate;
 pub mod ipc;
+pub mod ui;
+
+#[cfg(test)]
+mod tests;

@@ -160,6 +160,18 @@ action = "Disable"   # unbind a default
 | `OpenSnippetsFile` | **Open snippets file** — Open snippets.toml in your editor | — | — |
 | `InsertSnippet` | **Insert snippet** — Insert the snippet `id` into the focused pane; `run` overrides the snippet's own run setting | — | — |
 
+## Recording
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `ToggleRecording` | **Toggle recording** — Start or stop recording the focused pane (needs `recording.enabled = true`) | `⌘⌥R` | `Ctrl+Alt+R` |
+| `StartRecording` | **Start recording** — Start recording the focused pane | — | — |
+| `StopRecording` | **Stop recording** — Stop and save the focused pane's recording | — | — |
+| `RecordingMarker` | **Add recording marker** — Add a marker to the focused pane's recording | — | — |
+| `ToggleRecordingsPanel` | **Toggle recordings panel** — Open the recordings side panel (arrives with M12.4) | `⌘⇧Y` | `Ctrl+Shift+Y` |
+| `FocusRecordingsPanel` | **Focus recordings panel** — Move keyboard focus to the recordings panel (arrives with M12.4) | — | — |
+| `ExportRecording` | **Export recording** — Open the export dialog for the selected recording (arrives with M12.4) | — | — |
+
 ## Serial
 
 | Action | Description | macOS | Linux |

@@ -23,6 +23,8 @@ pub struct TabChrome {
     pub color: Option<crate::tab_color::TabColorChrome>,
     /// The status dot has the tab's color and gets a 1 px ring in the tab background.
     pub dot_ring: bool,
+    /// A pane of this tab is recording: the tooltip line ("Recording pane 12 — 00:42").
+    pub recording: Option<String>,
 }
 
 pub fn dot_of(state: StatusState) -> Option<StatusKind> {
@@ -65,10 +67,25 @@ pub fn tab_chrome(status: Option<&Status>, attention: Option<NotifyLevel>) -> Ta
         zoomed: false,
         color: None,
         dot_ring: false,
+        recording: None,
     }
 }
 
 impl TabChrome {
+    /// Marks the tab as holding a recording pane (SPEC §10.10.2); the tooltip gains a line.
+    pub fn with_recording(mut self, pane: u64, elapsed: std::time::Duration) -> Self {
+        let line = format!(
+            "Recording pane {pane} — {}",
+            crate::recording::ui::format_elapsed(elapsed)
+        );
+        self.tooltip = Some(match self.tooltip.take() {
+            Some(t) => format!("{t}\n{line}"),
+            None => line.clone(),
+        });
+        self.recording = Some(line);
+        self
+    }
+
     /// Adds the tab color: the tooltip gains the color name and source, and a status dot that
     /// would vanish into the color gets a ring.
     pub fn with_color(
@@ -119,6 +136,18 @@ mod tests {
             assert_eq!(c.dot, dot, "{state:?}");
             assert_eq!(c.badge, None);
         }
+    }
+
+    #[test]
+    fn recording_adds_a_dot_and_keeps_the_status_tooltip() {
+        let c = tab_chrome(Some(&st(StatusState::Working, "x", None)), None)
+            .with_recording(12, std::time::Duration::from_secs(42));
+        assert_eq!(c.recording.as_deref(), Some("Recording pane 12 — 00:42"));
+        assert_eq!(c.dot, Some(StatusKind::Accent));
+        assert_eq!(
+            c.tooltip.as_deref(),
+            Some("working: x\nRecording pane 12 — 00:42")
+        );
     }
 
     #[test]
