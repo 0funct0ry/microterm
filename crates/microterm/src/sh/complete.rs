@@ -54,6 +54,8 @@ pub struct CompCtx<'a> {
     pub aliases: &'a Aliases,
     /// Snippet ids, completed after `snippet show|expand|insert|rm` (empty while disabled).
     pub snippets: &'a [String],
+    /// Recording ids, completed after `recording show|stop|rename|rm|replay|export`.
+    pub recordings: &'a [String],
 }
 
 /// The selector keys of SPEC §12.3 with their meaning.
@@ -506,6 +508,7 @@ enum Positional {
     Selector(Kind),
     Workspace,
     SnippetId,
+    RecordingId,
     Path,
     None,
 }
@@ -533,6 +536,9 @@ fn positional_kind(argv: &[String], positionals_before: usize) -> Positional {
             }
             ["replay", ..] => return Positional::Path,
             ["snippet", "show" | "expand" | "insert" | "rm"] => return Positional::SnippetId,
+            ["recording", "show" | "stop" | "rename" | "rm" | "replay" | "export"] => {
+                return Positional::RecordingId
+            }
             _ => {}
         }
     }
@@ -640,6 +646,27 @@ pub fn complete(line: &str, pos: usize, cx: &CompCtx<'_>) -> Completion {
                     let v = STATES.iter().map(|s| Candidate::new(*s, "")).collect();
                     done.items = filter(v, cur, true)
                 }
+                "format" => {
+                    let v = mt_export::registry()
+                        .iter()
+                        .map(|e| Candidate::new(e.id(), e.label()))
+                        .collect();
+                    done.items = filter(v, cur, true)
+                }
+                "opt" => {
+                    let chosen = after
+                        .iter()
+                        .position(|w| w.as_str() == "--format")
+                        .and_then(|i| after.get(i + 1))
+                        .map(|w| w.as_str());
+                    let v = mt_export::registry()
+                        .iter()
+                        .filter(|e| chosen.is_none_or(|c| c == e.id()))
+                        .flat_map(|e| e.options())
+                        .map(|o| Candidate::new(format!("{}=", o.key), o.help))
+                        .collect();
+                    done.items = filter(v, cur, true)
+                }
                 "level" => {
                     let v = ["info", "attention", "error"]
                         .iter()
@@ -685,6 +712,16 @@ pub fn complete(line: &str, pos: usize, cx: &CompCtx<'_>) -> Completion {
         Positional::SnippetId => {
             done.items = filter(
                 cx.snippets
+                    .iter()
+                    .map(|id| Candidate::new(id.clone(), ""))
+                    .collect(),
+                cur,
+                true,
+            )
+        }
+        Positional::RecordingId => {
+            done.items = filter(
+                cx.recordings
                     .iter()
                     .map(|id| Candidate::new(id.clone(), ""))
                     .collect(),
@@ -801,6 +838,7 @@ mod tests {
             snap,
             aliases: &aliases,
             snippets: &[],
+            recordings: &[],
         };
         complete(line, line.len(), &cx)
             .items
@@ -869,6 +907,7 @@ mod tests {
             snap: Some(&snap),
             aliases: &aliases,
             snippets: &[],
+            recordings: &[],
         };
         let c = complete("pane get --pane ", 16, &cx);
         assert_eq!(c.start, 16);
@@ -937,6 +976,7 @@ mod tests {
                 snap: Some(&snap),
                 aliases: &aliases,
                 snippets: &[],
+                recordings: &[],
             };
             complete("pane list status:wor", 20, &cx)
         };
@@ -1004,6 +1044,7 @@ mod tests {
             snap: None,
             aliases: &aliases,
             snippets: &[],
+            recordings: &[],
         };
         let c = complete("l", 1, &cx);
         assert!(c.items.iter().any(|i| i.replacement == "ll"));
@@ -1044,6 +1085,26 @@ mod tests {
     }
 
     #[test]
+    fn recording_export_completes_ids_formats_and_option_keys() {
+        let ids = vec!["r_20260101_000000_aaaaaa".to_string()];
+        let aliases = Aliases::default();
+        let cx = CompCtx {
+            snap: None,
+            aliases: &aliases,
+            snippets: &[],
+            recordings: &ids,
+        };
+        let c = complete("recording export r_2", 20, &cx);
+        assert!(c.items[0].replacement.starts_with(&ids[0]));
+        let c = complete("recording export x --format v", 29, &cx);
+        assert!(c.items[0].replacement.starts_with("vhs"));
+        let c = complete("recording export x --format vhs --opt type", 42, &cx);
+        assert!(c.items[0].replacement.starts_with("type_gap_ms="));
+        let c = complete("recording export x --format cast --opt type", 43, &cx);
+        assert!(c.items.is_empty());
+    }
+
+    #[test]
     fn quoting_round_trips_through_the_lexer() {
         for raw in ["plain", "with space", "it's", "a;b", "title:x*", "~/x", ""] {
             let q = quote_arg(raw);
@@ -1069,6 +1130,7 @@ mod tests {
             snap: None,
             aliases: &aliases,
             snippets: &ids,
+            recordings: &[],
         };
         for verb in ["show", "expand", "insert", "rm"] {
             let line = format!("snippet {verb} k8");

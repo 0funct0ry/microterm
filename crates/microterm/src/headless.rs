@@ -778,7 +778,9 @@ impl Host {
             | Request::RecordingStop(_)
             | Request::RecordingMarker(_)
             | Request::RecordingRename(_)
-            | Request::RecordingRemove(_)) => self.recording(r),
+            | Request::RecordingRemove(_)
+            | Request::RecordingExport(_)
+            | Request::RecordingFormats) => self.recording(r),
             r @ (Request::SnippetList(_)
             | Request::SnippetGet(_)
             | Request::SnippetExpand(_)

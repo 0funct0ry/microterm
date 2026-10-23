@@ -243,6 +243,36 @@ EXAMPLES:
         #[arg(short, long)]
         force: bool,
     },
+    /// Export a recording to another format (cast, vhs).
+    ///
+    /// Writes `<title>.<ext>` into `recording.export.output_dir` (or the current directory)
+    /// unless -o is given, and never overwrites without -f. `vhs` needs a recording made with
+    /// input. Exit 12: the export is not possible for this recording, or an --opt is invalid.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl recording export r_20260101_101500_ab12cd --format vhs -o demo.tape
+  microterm ctl recording export ID --format cast --opt idle_limit=1 --opt strip_input=true
+  microterm ctl recording export --list-formats")]
+    Export {
+        /// Recording id.
+        #[arg(required_unless_present = "list_formats")]
+        id: Option<String>,
+        /// Exporter id (see --list-formats).
+        #[arg(long, required_unless_present = "list_formats")]
+        format: Option<String>,
+        /// Output path (default: <title>.<ext>).
+        #[arg(short, long, value_name = "PATH")]
+        output: Option<String>,
+        /// An exporter option: KEY=VALUE (repeatable).
+        #[arg(long = "opt", value_name = "KEY=VALUE", value_parser = parse_var)]
+        opts: Vec<(String, String)>,
+        /// Overwrite an existing output file.
+        #[arg(short, long)]
+        force: bool,
+        /// Print every exporter with its options, defaults and ranges.
+        #[arg(long)]
+        list_formats: bool,
+    },
     /// Play a recording into a new tab (same as `ctl replay FILE`).
     Replay {
         id: String,

@@ -177,7 +177,7 @@ deny: tool-cargo-deny ## Licence, advisory and source checks (cargo-deny)
 
 audit: deny ## Alias of deny
 
-lint: check-facade check-mux-gpui check-snippets-pure fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
+lint: check-facade check-mux-gpui check-snippets-pure check-export-pure fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
 
 # Facade rule (SPEC §3.3): only mt_term may mention alacritty_terminal.
 check-facade:
@@ -192,6 +192,10 @@ check-mux-gpui:
 check-snippets-pure: # mt_snippets stays free of GPUI and the terminal engine (SPEC §10.8, D12)
 	@if $(CARGO) tree -p mt_snippets 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
 		echo 'error: mt_snippets must not depend on gpui or alacritty_terminal'; exit 1; fi
+
+check-export-pure: # mt_export stays free of GPUI and the terminal engine (SPEC §10.10.6, D13)
+	@if $(CARGO) tree -p mt_export 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
+		echo 'error: mt_export must not depend on gpui or alacritty_terminal'; exit 1; fi
 
 themes: ## Validate the bundled themes (licence, 16 colours, contrast)
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-themes

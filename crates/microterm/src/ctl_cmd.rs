@@ -698,6 +698,68 @@ fn recording_verb(
                 Output::none()
             })
         }
+        RecordingCmd::Export {
+            id,
+            format,
+            output,
+            opts,
+            force,
+            list_formats,
+        } => {
+            if list_formats {
+                let v = call(Request::RecordingFormats)?;
+                if json {
+                    return Ok(Output::new(Body::Json(v)));
+                }
+                let mut text = String::new();
+                for f in v["formats"].as_array().into_iter().flatten() {
+                    text.push_str(&format!(
+                        "{}\t{} (.{}){}\n",
+                        f["id"].as_str().unwrap_or(""),
+                        f["label"].as_str().unwrap_or(""),
+                        f["extension"].as_str().unwrap_or(""),
+                        if f["requires_input"].as_bool().unwrap_or(false) {
+                            ", needs input"
+                        } else {
+                            ""
+                        }
+                    ));
+                    for o in f["options"].as_array().into_iter().flatten() {
+                        let range = match o["type"].as_str() {
+                            Some("int" | "float") => format!(" [{}..{}]", o["min"], o["max"]),
+                            Some("enum") => format!(" [{}]", o["values"]),
+                            _ => String::new(),
+                        };
+                        text.push_str(&format!(
+                            "\t{}={}{}\t{}\n",
+                            o["key"].as_str().unwrap_or(""),
+                            o["default"].as_str().unwrap_or(""),
+                            range,
+                            o["help"].as_str().unwrap_or("")
+                        ));
+                    }
+                }
+                return Ok(Output::new(Body::Raw(text)));
+            }
+            let cwd = std::env::current_dir()
+                .map_err(|e| CtlError::usage(format!("cannot read the current directory: {e}")))?;
+            let v = call(Request::RecordingExport(mt_proto::RecordingExportParams {
+                id: id.unwrap_or_default(),
+                format: format.unwrap_or_default(),
+                output,
+                cwd: cwd.to_string_lossy().into_owned(),
+                opts,
+                force,
+            }))?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let mut text = format!("{}\n", v["path"].as_str().unwrap_or(""));
+            for w in v["report"]["warnings"].as_array().into_iter().flatten() {
+                text.push_str(&format!("note: {}\n", w.as_str().unwrap_or("")));
+            }
+            Ok(Output::new(Body::Raw(text)))
+        }
         RecordingCmd::Replay {
             id,
             speed,

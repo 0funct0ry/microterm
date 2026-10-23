@@ -48,6 +48,9 @@ pub mod exit {
     pub const DISABLED: i32 = 10;
     /// A snippet needs prompt values that were not supplied.
     pub const MISSING_VARS: i32 = 11;
+    /// An export that cannot be produced for this recording (`vhs` without input events) or an
+    /// invalid `--opt` (`ctl recording export`).
+    pub const EXPORT_IMPOSSIBLE: i32 = 12;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +76,8 @@ pub enum ErrorCode {
     TemplateError,
     /// A snippet needs values for these prompts; the candidates list them (exit 11).
     MissingVars,
+    /// The export is not possible for this recording, or an option is invalid (exit 12).
+    ExportImpossible,
 }
 
 impl ErrorCode {
@@ -89,6 +94,7 @@ impl ErrorCode {
             ErrorCode::Disabled => exit::DISABLED,
             ErrorCode::TemplateError => exit::USAGE,
             ErrorCode::MissingVars => exit::MISSING_VARS,
+            ErrorCode::ExportImpossible => exit::EXPORT_IMPOSSIBLE,
         }
     }
 }
@@ -144,6 +150,9 @@ impl RpcError {
             candidates: labels,
             ..Self::new(ErrorCode::MissingVars, message)
         }
+    }
+    pub fn export_impossible(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ExportImpossible, message)
     }
     pub fn ambiguous(message: impl Into<String>, candidates: Vec<String>) -> Self {
         Self {
@@ -738,6 +747,23 @@ pub struct RecordingRemoveParams {
     pub force: bool,
 }
 
+/// `recording.export`: converts a stored recording with the exporter `format` (SPEC §10.10.6).
+/// `output` is the destination (default `<title-slug>.<ext>` in `recording.export.output_dir`,
+/// else in `cwd`, the client's working directory); a relative path is resolved against `cwd`.
+/// `opts` are `key=value` pairs validated against the exporter's option specs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingExportParams {
+    pub id: String,
+    pub format: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opts: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
+}
+
 /// Every IPC request (SPEC §12.2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -809,6 +835,8 @@ pub enum Request {
     RecordingMarker(RecordingMarkerParams),
     RecordingRename(RecordingRenameParams),
     RecordingRemove(RecordingRemoveParams),
+    RecordingExport(RecordingExportParams),
+    RecordingFormats,
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -868,6 +896,8 @@ pub const METHODS: &[&str] = &[
     "recording.marker",
     "recording.rename",
     "recording.remove",
+    "recording.export",
+    "recording.formats",
 ];
 
 impl Request {
@@ -921,6 +951,8 @@ impl Request {
             Request::RecordingMarker(_) => "recording.marker",
             Request::RecordingRename(_) => "recording.rename",
             Request::RecordingRemove(_) => "recording.remove",
+            Request::RecordingExport(_) => "recording.export",
+            Request::RecordingFormats => "recording.formats",
             Request::SnippetList(_) => "snippet.list",
             Request::SnippetGet(_) => "snippet.get",
             Request::SnippetExpand(_) => "snippet.expand",
@@ -946,6 +978,7 @@ impl Request {
             | Request::ConfigReload
             | Request::MenuList
             | Request::RecordingList
+            | Request::RecordingFormats
             | Request::MenuBarList => json!({}),
             Request::RecordingGet(p) => to(p),
             Request::RecordingStart(p) => to(p),
@@ -953,6 +986,7 @@ impl Request {
             Request::RecordingMarker(p) => to(p),
             Request::RecordingRename(p) => to(p),
             Request::RecordingRemove(p) => to(p),
+            Request::RecordingExport(p) => to(p),
             Request::MenuShow(p) => to(p),
             Request::MenuInvoke(p) => to(p),
             Request::SnippetList(p) => to(p),
@@ -1090,6 +1124,8 @@ impl Request {
             "recording.marker" => Request::RecordingMarker(p(method, params)?),
             "recording.rename" => Request::RecordingRename(p(method, params)?),
             "recording.remove" => Request::RecordingRemove(p(method, params)?),
+            "recording.export" => Request::RecordingExport(p(method, params)?),
+            "recording.formats" => Request::RecordingFormats,
             "snippet.list" => Request::SnippetList(p(method, params)?),
             "snippet.get" => Request::SnippetGet(p(method, params)?),
             "snippet.expand" => Request::SnippetExpand(p(method, params)?),
@@ -1988,6 +2024,15 @@ mod tests {
                 ids: vec!["r_a".into()],
                 force: true,
             }),
+            Request::RecordingExport(RecordingExportParams {
+                id: "r_a".into(),
+                format: "vhs".into(),
+                output: Some("demo.tape".into()),
+                cwd: "/tmp".into(),
+                opts: vec![("type_gap_ms".into(), "100".into())],
+                force: false,
+            }),
+            Request::RecordingFormats,
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -2030,7 +2075,7 @@ mod tests {
              record.start record.stop replay.start config.reload subscribe menu.list menubar.list menu.show \
              menu.invoke snippet.list snippet.get snippet.expand snippet.insert snippet.add snippet.remove \
              recording.list recording.get recording.start recording.stop recording.marker \
-             recording.rename recording.remove"
+             recording.rename recording.remove recording.export recording.formats"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(
@@ -2153,6 +2198,7 @@ mod tests {
         assert_eq!(ErrorCode::Busy.exit_code(), 9);
         assert_eq!(ErrorCode::Disabled.exit_code(), 10);
         assert_eq!(ErrorCode::MissingVars.exit_code(), 11);
+        assert_eq!(ErrorCode::ExportImpossible.exit_code(), 12);
         assert_eq!(ErrorCode::TemplateError.exit_code(), 1);
         assert_eq!(
             serde_json::to_value(RpcError::missing_vars("m", vec!["Pod (input)".into()])).unwrap(),

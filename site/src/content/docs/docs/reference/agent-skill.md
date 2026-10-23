@@ -54,6 +54,7 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 | 9 | pane busy (`run --in` while a command is already running) |
 | 10 | feature disabled by config (`ctl snippet …` while `snippets.enabled = false`) |
 | 11 | a snippet needs prompt values that were not given (`--var`); stderr lists every missing label |
+| 12 | export not possible for this recording (e.g. `vhs` without input events) or an invalid `--opt` |
 
 `pane run --in` and `pane get-text --last-command` need shell integration (`eval "$(microterm shell-integration zsh)"`).
 
@@ -119,6 +120,7 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl recording marker` — Add a marker to a running recording
 - `microterm ctl recording rename` — Rename a recording
 - `microterm ctl recording rm` — Delete recordings and their metadata. Needs --force
+- `microterm ctl recording export` — Export a recording to another format (cast, vhs)
 - `microterm ctl recording replay` — Play a recording into a new tab (same as `ctl replay FILE`)
 
 Run `microterm ctl <resource> <verb> --help` for flags.

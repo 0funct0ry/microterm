@@ -738,6 +738,12 @@ pub struct RecordingExport {
     pub gif_end_pause: f32,
     /// Abort an export that would exceed this many MB.
     pub gif_max_size_mb: u32,
+    /// Keys closer than this (ms) become one `Type` in a VHS tape.
+    pub vhs_type_gap_ms: u32,
+    /// Gaps shorter than this (ms) emit no `Sleep`.
+    pub vhs_min_sleep_ms: u32,
+    /// Longest `Sleep` emitted (ms).
+    pub vhs_sleep_cap_ms: u32,
 }
 
 impl Default for RecordingExport {
@@ -754,6 +760,9 @@ impl Default for RecordingExport {
             gif_chrome: "plain".into(),
             gif_end_pause: 2.0,
             gif_max_size_mb: 50,
+            vhs_type_gap_ms: 150,
+            vhs_min_sleep_ms: 400,
+            vhs_sleep_cap_ms: 3000,
         }
     }
 }

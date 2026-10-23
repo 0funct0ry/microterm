@@ -202,7 +202,74 @@ pub fn handle(h: &mut dyn RecordingHost, request: Request) -> Result<Value, RpcE
             }
             Ok(json!({"removed": p.ids}))
         }
+        Request::RecordingFormats => Ok(mt_export::formats_json()),
+        Request::RecordingExport(p) => export(&cfg, p),
         _ => Err(RpcError::bad_request("not a recording request")),
+    }
+}
+
+/// `recording.export`: runs the exporter to completion and returns the report. Text formats
+/// finish in milliseconds, so there is no job yet; the GUI panel (M12.4) will move this onto a
+/// worker thread with `export.progress` events.
+fn export(cfg: &Config, p: mt_proto::RecordingExportParams) -> Result<Value, RpcError> {
+    let exporter = mt_export::find(&p.format).ok_or_else(|| {
+        let ids: Vec<_> = mt_export::registry().iter().map(|e| e.id()).collect();
+        RpcError::export_impossible(format!(
+            "unknown export format \"{}\" (known: {})",
+            p.format,
+            ids.join(", ")
+        ))
+    })?;
+    let st = store()?;
+    let sidecar = st.load(&p.id).map_err(store_error)?;
+    let mut opts = mt_export::default_options(exporter, &cfg.recording.export);
+    opts.apply(&exporter.options(), &p.opts)
+        .map_err(map_export)?;
+    let cwd = std::path::PathBuf::from(&p.cwd);
+    let path = match &p.output {
+        Some(o) => cwd.join(o),
+        None => {
+            let dir = &cfg.recording.export.output_dir;
+            let dir = if dir.is_empty() { cwd } else { cwd.join(dir) };
+            dir.join(format!(
+                "{}.{}",
+                mt_export::slug(&sidecar.title),
+                exporter.extension()
+            ))
+        }
+    };
+    if exporter.id() == "vhs" && !p.opts.iter().any(|(k, _)| k == "output") {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
+        opts.set("output", mt_export::OptValue::Text(format!("{stem}.gif")));
+    }
+    let rec = mt_export::Recording::new(sidecar, st.cast_path(&p.id));
+    let report = mt_export::export_to_path(
+        exporter,
+        &rec,
+        &opts,
+        &path,
+        p.force,
+        &mt_export::NoProgress,
+    )
+    .map_err(map_export)?;
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "bytes": report.bytes,
+        "format": exporter.id(),
+        "report": {
+            "lines": report.lines,
+            "dropped": report.dropped,
+            "warnings": report.warnings,
+        },
+    }))
+}
+
+fn map_export(e: mt_export::ExportError) -> RpcError {
+    use mt_export::ExportError as E;
+    match e {
+        E::NotPossible(m) | E::BadOption(m) => RpcError::export_impossible(m),
+        E::Exists(_) => RpcError::bad_request(e.to_string()),
+        other => RpcError::internal(other.to_string()),
     }
 }
 

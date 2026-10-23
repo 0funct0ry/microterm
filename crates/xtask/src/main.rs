@@ -39,6 +39,10 @@ fn gen_docs(check: bool) -> ExitCode {
             mt_snippets::docs::REFERENCE_DOC_PATH,
             mt_snippets::docs::reference_markdown(),
         ),
+        (
+            mt_export::docs::REFERENCE_DOC_PATH,
+            mt_export::docs::reference_markdown(),
+        ),
     ];
     let mut stale = 0;
     for (rel, content) in pages {

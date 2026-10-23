@@ -22,6 +22,8 @@ pub struct Shared {
     queue: Mutex<Vec<String>>,
     /// Snippet ids for completion, refreshed at most every two seconds.
     snippets: Mutex<(Option<Instant>, Vec<String>)>,
+    /// Recording ids for completion, refreshed at most every two seconds.
+    recordings: Mutex<(Option<Instant>, Vec<String>)>,
 }
 
 /// Structural events only: `pane.output` would invalidate the snapshot on every byte.
@@ -71,6 +73,7 @@ impl Shared {
             last_try: Mutex::new(None),
             queue: Mutex::new(Vec::new()),
             snippets: Mutex::new((None, Vec::new())),
+            recordings: Mutex::new((None, Vec::new())),
         })
     }
 
@@ -114,6 +117,30 @@ impl Shared {
             })
             .and_then(|v| {
                 v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|s| s["id"].as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        *cache = (Some(Instant::now()), ids.clone());
+        ids
+    }
+
+    /// The stored recording ids (empty while recording is disabled or no instance answers).
+    pub fn recording_ids(&self) -> Vec<String> {
+        let mut cache = self.recordings.lock().expect("recordings lock");
+        if cache
+            .0
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+        {
+            return cache.1.clone();
+        }
+        let ids = connect(self.socket.as_deref())
+            .ok()
+            .and_then(|mut c| c.call(&Request::RecordingList).ok())
+            .and_then(|v| {
+                v["recordings"].as_array().map(|a| {
                     a.iter()
                         .filter_map(|s| s["id"].as_str().map(String::from))
                         .collect::<Vec<_>>()

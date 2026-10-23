@@ -45,6 +45,9 @@ and prints the pane id. The tab stays open after the replay so you can read the 
 like any tab. Replay feeds the recorded bytes to a normal terminal, so the final screen equals
 the screen that was recorded.
 
+See [Exporting recordings](/docs/exporting-recordings/) to convert a stored recording to a
+trimmed asciicast or a VHS tape.
+
 ## File layout
 
 ```json

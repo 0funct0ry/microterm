@@ -11,3 +11,4 @@ mt_theme = { path = "../mt_theme" }
 mt_ui = { path = "../mt_ui" }
 microterm = { path = "../microterm" }
 mt_snippets = { path = "../mt_snippets" }
+mt_export = { path = "../mt_export" }

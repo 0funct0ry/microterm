@@ -4148,6 +4148,7 @@ dependencies = [
  "clap_complete",
  "libc",
  "mt_config",
+ "mt_export",
  "mt_mux",
  "mt_proto",
  "mt_record",
@@ -4283,6 +4284,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt_export"
+version = "0.1.0"
+dependencies = [
+ "mt_config",
+ "mt_record",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "mt_mux"
 version = "0.1.0"
 dependencies = [
@@ -4408,6 +4420,7 @@ dependencies = [
  "fontdb 0.24.0",
  "gpui",
  "mt_config",
+ "mt_export",
  "mt_mux",
  "mt_patterns",
  "mt_proto",
@@ -9140,6 +9153,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "microterm",
+ "mt_export",
  "mt_snippets",
  "mt_term",
  "mt_theme",

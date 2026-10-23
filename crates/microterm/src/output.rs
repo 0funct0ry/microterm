@@ -159,6 +159,7 @@ impl CtlError {
             exit::BUSY => "busy",
             exit::DISABLED => "disabled",
             exit::MISSING_VARS => "missing_vars",
+            exit::EXPORT_IMPOSSIBLE => "export_impossible",
             _ => "bad_request",
         }
     }

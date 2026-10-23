@@ -31,6 +31,7 @@ const EXIT_CODES: &[(i32, &str)] = &[
     (mt_proto::exit::BUSY, "pane busy (`run --in` while a command is already running)"),
     (mt_proto::exit::DISABLED, "feature disabled by config (`ctl snippet …` while `snippets.enabled = false`)"),
     (mt_proto::exit::MISSING_VARS, "a snippet needs prompt values that were not given (`--var`); stderr lists every missing label"),
+    (mt_proto::exit::EXPORT_IMPOSSIBLE, "export not possible for this recording (e.g. `vhs` without input events) or an invalid `--opt`"),
 ];
 
 const SELECTORS: &str = "\

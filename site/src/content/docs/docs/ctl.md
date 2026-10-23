@@ -200,6 +200,8 @@ microterm ctl recording stop (--pane ID | ID | --all)
 microterm ctl recording marker --pane ID [--label L]
 microterm ctl recording rename ID TITLE
 microterm ctl recording rm ID… --force
+microterm ctl recording export ID --format cast|vhs [-o PATH] [--opt KEY=VALUE]… [-f]
+microterm ctl recording export --list-formats
 microterm ctl recording replay ID [--speed 1.0] [--new-window]
 ```
 

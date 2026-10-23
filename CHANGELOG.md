@@ -6,6 +6,14 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.3 — Exporter framework, asciicast and VHS.** New `mt_export` crate with a static registry
+  of exporters (typed, validated options shared by GUI and CLI). `cast` exports a verified copy or
+  a trimmed / idle-limited / input-stripped asciicast; `vhs` writes a VHS `.tape` from recorded
+  input (needs input events). `microterm ctl recording export ID --format cast|vhs [-o PATH]
+  [--opt K=V]… [-f] [--list-formats]` with `recording.export` / `recording.formats` IPC methods,
+  `sh` completion, and a generated "Export formats" reference. New exit code `12` for an export
+  that is not possible or an invalid `--opt`. New `[recording.export]` keys `vhs_type_gap_ms`,
+  `vhs_min_sleep_ms`, `vhs_sleep_cap_ms`.
 - **M12.2 — Recording mode.** With `recording.enabled = true`, `⌘⌥R` / `Ctrl+Alt+R`
   (`ToggleRecording`; also `StartRecording`, `StopRecording`, `RecordingMarker`) records the
   focused pane into the store. A `REC mm:ss` pill (`+INPUT` when input is captured, pulsing dot

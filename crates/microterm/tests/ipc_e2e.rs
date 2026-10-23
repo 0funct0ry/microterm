@@ -2900,6 +2900,8 @@ fn recording_verbs_exit_10_while_disabled_and_create_nothing() {
         &["recording", "rename", "r_x", "t"],
         &["recording", "rm", "r_x", "--force"],
         &["recording", "replay", "r_x"],
+        &["recording", "export", "r_x", "--format", "cast"],
+        &["recording", "export", "--list-formats"],
     ] {
         let (code, err) = i.ctl_err(args);
         assert_eq!(code, 10, "{args:?}: {err}");
@@ -3042,4 +3044,144 @@ fn turning_the_gate_off_by_reload_stops_and_saves_running_recordings() {
     assert_eq!(i.ctl_code(&["recording", "list"]), 10);
     assert!(std::path::Path::new(&format!("{}/{id}.cast", i.rec_dir())).is_file());
     assert!(!std::path::Path::new(&format!("{}/{id}.cast.partial", i.rec_dir())).exists());
+}
+
+// ---------------------------------------------------------------- exporters (M12.3)
+
+const WITH_INPUT: &str = concat!(
+    "{\"version\":2,\"width\":80,\"height\":24}\n",
+    "[0.5,\"o\",\"$ \"]\n",
+    "[1.0,\"i\",\"l\"]\n",
+    "[1.1,\"i\",\"s\"]\n",
+    "[1.2,\"i\",\"\\r\"]\n",
+    "[1.3,\"o\",\"ls\\r\\n\"]\n",
+    "[6.0,\"o\",\"done\\r\\n\"]\n",
+);
+const OUTPUT_ONLY: &str = concat!(
+    "{\"version\":2,\"width\":80,\"height\":24}\n",
+    "[0.5,\"o\",\"hello\\r\\n\"]\n",
+);
+
+impl Instance {
+    fn put_cast(&self, id: &str, body: &str) {
+        std::fs::create_dir_all(self.rec_dir()).unwrap();
+        std::fs::write(format!("{}/{id}.cast", self.rec_dir()), body).unwrap();
+    }
+}
+
+#[test]
+fn recording_export_cast_vhs_and_exit_12() {
+    let i = Instance::start_with(Some(REC_ON));
+    i.put_cast("r_20260101_000000_aaaaaa", WITH_INPUT);
+    i.put_cast("r_20260101_000001_bbbbbb", OUTPUT_ONLY);
+    let (a, b) = ("r_20260101_000000_aaaaaa", "r_20260101_000001_bbbbbb");
+    let dir = std::path::PathBuf::from(&i.home);
+
+    // cast without stripping is a byte-equal copy.
+    let out = dir.join("copy.cast");
+    i.ctl(&[
+        "recording",
+        "export",
+        a,
+        "--format",
+        "cast",
+        "-o",
+        out.to_str().unwrap(),
+        "--opt",
+        "strip_input=false",
+    ]);
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), WITH_INPUT);
+    // Refuses to overwrite without -f.
+    let args = [
+        "recording",
+        "export",
+        a,
+        "--format",
+        "cast",
+        "-o",
+        out.to_str().unwrap(),
+    ];
+    assert_eq!(i.ctl_code(&args), 1);
+    let mut forced = args.to_vec();
+    forced.push("-f");
+    i.ctl(&forced);
+    // Default strip_input drops the keystrokes; idle_limit shortens the 4.7 s pause.
+    let short = dir.join("short.cast");
+    i.ctl(&[
+        "recording",
+        "export",
+        a,
+        "--format",
+        "cast",
+        "-o",
+        short.to_str().unwrap(),
+        "--opt",
+        "idle_limit=1",
+    ]);
+    let text = std::fs::read_to_string(&short).unwrap();
+    assert!(!text.contains("\"i\""), "{text}");
+    assert!(text.contains("[2.3,\"o\",\"done"), "{text}");
+
+    let tape = dir.join("demo.tape");
+    i.ctl(&[
+        "recording",
+        "export",
+        a,
+        "--format",
+        "vhs",
+        "-o",
+        tape.to_str().unwrap(),
+    ]);
+    let t = std::fs::read_to_string(&tape).unwrap();
+    assert!(t.contains("Output demo.gif"), "{t}");
+    assert!(t.contains("Type@100ms \"ls\"\nEnter"), "{t}");
+
+    // Impossible and invalid exports exit 12; unknown ids exit 3.
+    let nope = dir.join("nope.tape");
+    let n = nope.to_str().unwrap();
+    assert_eq!(
+        i.ctl_code(&["recording", "export", b, "--format", "vhs", "-o", n]),
+        12
+    );
+    assert_eq!(
+        i.ctl_code(&[
+            "recording",
+            "export",
+            a,
+            "--format",
+            "cast",
+            "--opt",
+            "zzz=1",
+            "-o",
+            n
+        ]),
+        12
+    );
+    assert_eq!(
+        i.ctl_code(&[
+            "recording",
+            "export",
+            a,
+            "--format",
+            "cast",
+            "--opt",
+            "idle_limit=x",
+            "-o",
+            n
+        ]),
+        12
+    );
+    assert_eq!(
+        i.ctl_code(&["recording", "export", a, "--format", "gif", "-o", n]),
+        12
+    );
+    assert_eq!(
+        i.ctl_code(&["recording", "export", "r_nope", "--format", "cast", "-o", n]),
+        3
+    );
+    assert!(!nope.exists());
+
+    // --list-formats matches the registry.
+    let v = i.json(&["recording", "export", "--list-formats"]);
+    assert_eq!(v, mt_export::formats_json());
 }

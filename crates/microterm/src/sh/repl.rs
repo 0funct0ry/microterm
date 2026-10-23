@@ -44,6 +44,7 @@ impl ShHelper {
     fn comp(&self, line: &str, pos: usize) -> super::complete::Completion {
         let snap = self.shared.snapshot();
         let snippets = self.shared.snippet_ids();
+        let recordings = self.shared.recording_ids();
         complete(
             line,
             pos,
@@ -51,6 +52,7 @@ impl ShHelper {
                 snap: snap.as_ref(),
                 aliases: &self.aliases,
                 snippets: &snippets,
+                recordings: &recordings,
             },
         )
     }

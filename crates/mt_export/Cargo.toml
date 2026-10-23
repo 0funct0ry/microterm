@@ -1,0 +1,15 @@
+[package]
+name = "mt_export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mt_record = { path = "../mt_record" }
+mt_config = { path = "../mt_config" }
+thiserror = { workspace = true }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

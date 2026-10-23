@@ -1617,7 +1617,9 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         | Request::RecordingStop(_)
         | Request::RecordingMarker(_)
         | Request::RecordingRename(_)
-        | Request::RecordingRemove(_)) => {
+        | Request::RecordingRemove(_)
+        | Request::RecordingExport(_)
+        | Request::RecordingFormats) => {
             crate::recording::ipc::handle(&mut crate::recording::ipc::GuiHost(cx), r)
         }
         r @ (Request::SnippetList(_)

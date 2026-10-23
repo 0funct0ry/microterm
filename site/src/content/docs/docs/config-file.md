@@ -144,6 +144,9 @@ gif_scale = 1.0                  # 0.25-2.0
 gif_chrome = "plain"             # "none" | "plain" | "macos"
 gif_end_pause = 2.0
 gif_max_size_mb = 50
+vhs_type_gap_ms = 150            # keys closer than this become one Type
+vhs_min_sleep_ms = 400           # shorter gaps emit no Sleep
+vhs_sleep_cap_ms = 3000          # longest Sleep emitted
 ```
 
 Turning `enabled` off in a reload stops and saves every running recording. The other keys apply
