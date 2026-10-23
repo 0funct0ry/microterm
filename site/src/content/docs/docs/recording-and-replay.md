@@ -1,6 +1,6 @@
 ---
 title: Recording & replay
-description: Record a tab to an asciicast v2 file and play it back into a new tab.
+description: Record a pane to an asciicast v2 file or into the recordings store, and play it back into a new tab.
 ---
 
 microterm records terminals in the [asciicast v2](https://docs.asciinema.org/manual/asciicast/v2/)
@@ -54,4 +54,65 @@ the screen that was recorded.
 ```
 
 Times are seconds since the recording started. Invalid UTF-8 from a program is replaced with
-U+FFFD, as asciinema does. Resizes during a recording are not recorded in this version.
+U+FFFD, as asciinema does. Recordings made into the [store](#the-recordings-store) also hold
+resize events (`"r"`, `"120x34"`) and markers (`"m"`); `ctl record` files do not record resizes.
+
+## The recordings store
+
+Recording mode keeps recordings in a per-user store instead of a path you choose. It is **off by
+default**: with `recording.enabled = false` no recorder runs, the store directory is never read or
+created, and every `ctl recording` verb exits `10`. Turn it on in the config:
+
+```toml
+[recording]
+enabled = true
+```
+
+```sh
+microterm ctl recording start --pane $MICROTERM_PANE   # prints the new recording id
+microterm ctl recording marker --pane $MICROTERM_PANE --label "build done"
+microterm ctl recording stop --pane $MICROTERM_PANE
+microterm ctl recording list
+microterm ctl recording replay r_20261022_141503_ab12cd
+```
+
+The store is `$XDG_DATA_HOME/microterm/recordings/` (default
+`~/.local/share/microterm/recordings`, also on macOS), created `0700` when the first recording
+starts. Each recording is two files with files `0600`:
+
+```
+r_20261022_141503_ab12cd.cast    # asciicast v2, the source of truth: plays in any asciicast tool
+r_20261022_141503_ab12cd.json    # sidecar: title, duration, size, cols/rows, origin, markers, flags
+```
+
+The sidecar can always be rebuilt from the `.cast`. A missing or corrupt one is regenerated, and a
+`.cast` you copy into the folder by hand shows up in `ctl recording list`.
+
+- A pane has at most one recording at a time; several panes can record at once.
+- A recording ends when you stop it, the pane's process exits, its tab or window closes, a limit is
+  reached, the feature is turned off in the config (every running recording is saved first) or
+  microterm quits.
+- It keeps recording across SSH and serial reconnects. Time spent disconnected is not recorded, and the
+  screen redraw the daemon sends after an SSH reconnect is not recorded again.
+- **Crash safety.** Events stream to `<id>.cast.partial`, flushed every second. After a crash or
+  `kill -9` the next `ctl recording list` completes the file (a truncated last line is dropped) and
+  marks it `recovered`.
+
+### Limits
+
+`recording.max_duration_minutes` (default 60) and `recording.max_size_mb` (default 200) end a
+recording and save it; `0` means unlimited.
+
+### Privacy
+
+- Recordings contain **everything that was on screen**, including secrets a command printed.
+  They never leave the machine: nothing is uploaded or synced.
+- **Input** is recorded only with `recording.capture_input = true` or `ctl recording start
+  --input` (`--no-input` overrides the config). It is the bytes sent to the pane: keys, pasted
+  text, `send-text` and snippet inserts.
+- **Password prompts.** With `recording.redact_no_echo = true` (default), input is dropped while a
+  program on a local pane has echo turned off and reads a whole line (`sudo`, `ssh`, `passwd`);
+  one marker, `input paused (no echo)`, is written for each such stretch. This is best effort: a
+  program that reads secrets in raw mode (some TUIs) cannot be detected. SSH and serial panes
+  cannot be inspected and are recorded as typed; the metadata says `input_redacted = "n/a"`.
+- Snippet `secret` values are never recorded as input, whatever the setting.

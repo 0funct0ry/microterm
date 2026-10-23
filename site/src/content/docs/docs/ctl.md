@@ -190,6 +190,32 @@ microterm ctl replay FILE.cast [--speed 1.0] [--new-window]
 
 Plays the file into a new tab (or window) and prints `tab=… pane=… window=…`.
 
+## recording
+
+```sh
+microterm ctl recording list
+microterm ctl recording show ID
+microterm ctl recording start --pane ID [--input | --no-input] [--title T]
+microterm ctl recording stop (--pane ID | ID | --all)
+microterm ctl recording marker --pane ID [--label L]
+microterm ctl recording rename ID TITLE
+microterm ctl recording rm ID… --force
+microterm ctl recording replay ID [--speed 1.0] [--new-window]
+```
+
+Works on the [recordings store](/docs/recording-and-replay/#the-recordings-store). While
+`recording.enabled = false` every verb exits `10` and the store directory is not touched.
+
+- `start`, `stop` (by pane) and `marker` are input-class verbs: they need `--pane` or
+  `$MICROTERM_PANE` and never fall back to the focused pane. `start` prints the recording id; it
+  follows `recording.capture_input` unless `--input` or `--no-input` is given.
+- `stop` takes `--pane`, the recording id, or `--all`, and prints the saved ids.
+- `list` and `show` print the metadata (`--json` gives the sidecar plus the `.cast` `path`; `list`
+  also reports running recordings). An unknown id exits `3`.
+- `rm` never blocks on a dialog: without `--force` it exits `8` and deletes nothing; with it,
+  both files are removed for good (there is no trash).
+- `replay` plays the stored `.cast` into a new tab, like `ctl replay FILE`.
+
 ## menu
 
 ```sh

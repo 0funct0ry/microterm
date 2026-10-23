@@ -4324,6 +4324,7 @@ dependencies = [
 name = "mt_record"
 version = "0.1.0"
 dependencies = [
+ "mt_config",
  "mt_term",
  "serde",
  "serde_json",

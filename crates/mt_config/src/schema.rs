@@ -35,6 +35,7 @@ pub struct Config {
     pub ctl: Ctl,
     pub sh: Sh,
     pub snippets: Snippets,
+    pub recording: Recording,
     pub menu_bar: MenuBar,
     pub notifications: Notifications,
     pub terminal: Terminal,
@@ -80,6 +81,7 @@ impl Default for Config {
             ctl: Ctl::default(),
             sh: Sh::default(),
             snippets: Snippets::default(),
+            recording: Recording::default(),
             menu_bar: MenuBar::default(),
             notifications: Notifications::default(),
             terminal: Terminal::default(),
@@ -671,6 +673,87 @@ impl Default for Snippets {
             confirm_multiline: false,
             focus_terminal_after_insert: true,
             preview_lines: 2,
+        }
+    }
+}
+
+/// `[recording]`: recording mode, the recordings store and panel (SPEC §10.10, §8.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Recording {
+    /// Master switch; `false` leaves the feature fully inert.
+    pub enabled: bool,
+    /// Also record keystrokes and paste (needed by the VHS exporter).
+    pub capture_input: bool,
+    /// Drop input while the local PTY has ECHO off (password prompts).
+    pub redact_no_echo: bool,
+    /// Auto-stop a recording after this many minutes (0 = unlimited).
+    pub max_duration_minutes: u32,
+    /// Auto-stop a recording at this size in MB (0 = unlimited).
+    pub max_size_mb: u32,
+    /// Initial panel width in px (280-600).
+    pub panel_width: u32,
+    pub panel_open_on_start: bool,
+    pub confirm_delete: bool,
+    pub export: RecordingExport,
+}
+
+impl Default for Recording {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            capture_input: false,
+            redact_no_echo: true,
+            max_duration_minutes: 60,
+            max_size_mb: 200,
+            panel_width: 360,
+            panel_open_on_start: false,
+            confirm_delete: true,
+            export: RecordingExport::default(),
+        }
+    }
+}
+
+/// `[recording.export]`: defaults for the export dialog and `ctl recording export`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecordingExport {
+    /// `"gif"`, `"vhs"`, `"cast"` or any registered exporter id.
+    pub default_format: String,
+    /// Empty = ask in the GUI, current directory in ctl.
+    pub output_dir: String,
+    pub open_when_done: bool,
+    /// cast: drop input events from exports.
+    pub strip_input: bool,
+    /// 1-30.
+    pub gif_fps: u32,
+    /// Seconds; pauses are shortened to this (0 = off).
+    pub gif_idle_limit: f32,
+    pub gif_font_size: u32,
+    /// 0.25-2.0.
+    pub gif_scale: f32,
+    /// `"none"`, `"plain"` or `"macos"`.
+    pub gif_chrome: String,
+    /// Seconds on the last frame.
+    pub gif_end_pause: f32,
+    /// Abort an export that would exceed this many MB.
+    pub gif_max_size_mb: u32,
+}
+
+impl Default for RecordingExport {
+    fn default() -> Self {
+        Self {
+            default_format: "gif".into(),
+            output_dir: String::new(),
+            open_when_done: false,
+            strip_input: true,
+            gif_fps: 10,
+            gif_idle_limit: 2.0,
+            gif_font_size: 14,
+            gif_scale: 1.0,
+            gif_chrome: "plain".into(),
+            gif_end_pause: 2.0,
+            gif_max_size_mb: 50,
         }
     }
 }

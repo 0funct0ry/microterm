@@ -23,6 +23,9 @@ pub enum Effect {
     /// `snippets.enabled` / `snippets.templates` changed: register or tear down the panel,
     /// actions, palette provider, per-snippet keys and the `snippets.toml` watch (SPEC §10.8.1).
     Snippets,
+    /// `recording.enabled` changed: register or tear down recording mode; turning it off
+    /// stops and saves every running recording (SPEC §10.10.1).
+    Recording,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,6 +102,27 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
             || old.snippets.focus_terminal_after_insert != new.snippets.focus_terminal_after_insert
             || old.snippets.panel_open_on_start != new.snippets.panel_open_on_start,
         "snippets",
+        &[Repaint],
+    );
+    d.mark(
+        old.recording.enabled != new.recording.enabled,
+        "recording.enabled",
+        &[Recording, Keymap, Repaint, Relayout],
+    );
+    d.mark(
+        old.recording.panel_width != new.recording.panel_width,
+        "recording.panel_width",
+        &[Relayout],
+    );
+    d.mark(
+        old.recording.capture_input != new.recording.capture_input
+            || old.recording.redact_no_echo != new.recording.redact_no_echo
+            || old.recording.max_duration_minutes != new.recording.max_duration_minutes
+            || old.recording.max_size_mb != new.recording.max_size_mb
+            || old.recording.panel_open_on_start != new.recording.panel_open_on_start
+            || old.recording.confirm_delete != new.recording.confirm_delete
+            || old.recording.export != new.recording.export,
+        "recording",
         &[Repaint],
     );
     d.mark(old.bell != new.bell, "bell", &[Repaint]);
@@ -229,6 +253,51 @@ mod tests {
         for (key, edit, effect) in edits {
             let mut n = old.clone();
             edit(&mut n.snippets);
+            let d = diff(&old, &n);
+            assert!(!d.is_empty(), "{key} is not classified");
+            assert!(d.has(effect), "{key}: {:?}", d.effects);
+        }
+    }
+
+    #[test]
+    fn every_recording_key_is_classified() {
+        let old = Config::default();
+        type Edit = (&'static str, fn(&mut Recording), Effect);
+        let edits: [Edit; 10] = [
+            ("enabled", |r| r.enabled = true, Effect::Recording),
+            ("capture_input", |r| r.capture_input = true, Effect::Repaint),
+            (
+                "redact_no_echo",
+                |r| r.redact_no_echo = false,
+                Effect::Repaint,
+            ),
+            (
+                "max_duration_minutes",
+                |r| r.max_duration_minutes = 5,
+                Effect::Repaint,
+            ),
+            ("max_size_mb", |r| r.max_size_mb = 5, Effect::Repaint),
+            ("panel_width", |r| r.panel_width = 400, Effect::Relayout),
+            (
+                "panel_open_on_start",
+                |r| r.panel_open_on_start = true,
+                Effect::Repaint,
+            ),
+            (
+                "confirm_delete",
+                |r| r.confirm_delete = false,
+                Effect::Repaint,
+            ),
+            ("export.gif_fps", |r| r.export.gif_fps = 5, Effect::Repaint),
+            (
+                "export.default_format",
+                |r| r.export.default_format = "vhs".into(),
+                Effect::Repaint,
+            ),
+        ];
+        for (key, edit, effect) in edits {
+            let mut n = old.clone();
+            edit(&mut n.recording);
             let d = diff(&old, &n);
             assert!(!d.is_empty(), "{key} is not classified");
             assert!(d.has(effect), "{key}: {:?}", d.effects);

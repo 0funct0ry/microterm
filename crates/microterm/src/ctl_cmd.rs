@@ -23,8 +23,8 @@ use serde_json::Value;
 use crate::cli::RecordArgs;
 use crate::client::{Client, ClientError};
 use crate::ctl::{
-    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, PaneTarget, SnippetCmd, SnippetSource,
-    StatusCmd, TabCmd, TabTarget, WindowCmd, WindowTarget, WorkspaceCmd,
+    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, PaneTarget, RecordingCmd, SnippetCmd,
+    SnippetSource, StatusCmd, TabCmd, TabTarget, WindowCmd, WindowTarget, WorkspaceCmd,
 };
 use crate::output::{Body, ColKind, Column, CtlError, Output, Table};
 use crate::render::{render, render_error, RenderOpts};
@@ -492,6 +492,233 @@ fn snippet_verb(
         SnippetCmd::Rm { id } => quiet(call(Request::SnippetRemove(mt_proto::SnippetIdParams {
             id,
         }))?),
+    }
+}
+
+fn recording_verb(
+    call: &mut dyn FnMut(Request) -> Result<Value, CtlError>,
+    cmd: RecordingCmd,
+    ctx: &mut Ctx<'_>,
+) -> Result<Output, CtlError> {
+    let json = ctx.json;
+    let env = ctx.env;
+    let need_pane = |pane: Option<u64>| {
+        pane.or(env.pane).ok_or_else(|| {
+            CtlError::usage("no pane given: pass --pane ID (or run this inside a microterm pane)")
+        })
+    };
+    let secs = |ms: u64| {
+        let s = ms / 1000;
+        format!("{:02}:{:02}", s / 60, s % 60)
+    };
+    let mb = |b: u64| {
+        if b >= 1024 * 1024 {
+            format!("{:.1} MB", b as f64 / 1_048_576.0)
+        } else {
+            format!("{:.1} KB", b as f64 / 1024.0)
+        }
+    };
+    match cmd {
+        RecordingCmd::List => {
+            let v = call(Request::RecordingList)?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let rows = v["recordings"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .map(|r| {
+                    let t = |k: &str| r[k].as_str().unwrap_or_default().to_string();
+                    let mut flags = Vec::new();
+                    if r["has_input"].as_bool().unwrap_or(false) {
+                        flags.push("input");
+                    }
+                    if r["recovered"].as_bool().unwrap_or(false) {
+                        flags.push("recovered");
+                    }
+                    vec![
+                        t("id"),
+                        t("title"),
+                        secs(r["duration_ms"].as_u64().unwrap_or(0)),
+                        mb(r["size_bytes"].as_u64().unwrap_or(0)),
+                        flags.join(","),
+                    ]
+                })
+                .collect();
+            Ok(table(
+                vec![
+                    Column::new("ID", ColKind::Text),
+                    Column::new("TITLE", ColKind::Text),
+                    Column::low("DURATION", ColKind::Text, 1),
+                    Column::low("SIZE", ColKind::Text, 2),
+                    Column::low("FLAGS", ColKind::Text, 3),
+                ],
+                rows,
+                "recording",
+            ))
+        }
+        RecordingCmd::Show { id } => {
+            let v = call(Request::RecordingGet(mt_proto::RecordingIdParams { id }))?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let t = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+            let kv = vec![
+                ("id".to_string(), t("id")),
+                ("title".into(), t("title")),
+                ("path".into(), t("path")),
+                (
+                    "duration".into(),
+                    secs(v["duration_ms"].as_u64().unwrap_or(0)),
+                ),
+                ("size".into(), mb(v["size_bytes"].as_u64().unwrap_or(0))),
+                (
+                    "terminal".into(),
+                    format!(
+                        "{}x{}",
+                        v["cols"].as_u64().unwrap_or(0),
+                        v["rows"].as_u64().unwrap_or(0)
+                    ),
+                ),
+                (
+                    "input".into(),
+                    if v["has_input"].as_bool().unwrap_or(false) {
+                        format!("recorded (redaction: {})", t("input_redacted"))
+                    } else {
+                        "not recorded".into()
+                    },
+                ),
+                ("origin".into(), {
+                    let o = &v["origin"];
+                    let s = |k: &str| o[k].as_str().unwrap_or_default().to_string();
+                    format!("{} {} {}", s("kind"), s("name"), s("process"))
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }),
+                (
+                    "markers".into(),
+                    v["markers"].as_array().map_or(0, Vec::len).to_string(),
+                ),
+                (
+                    "recovered".into(),
+                    v["recovered"].as_bool().unwrap_or(false).to_string(),
+                ),
+            ];
+            Ok(Output::new(Body::Card(kv)))
+        }
+        RecordingCmd::Start {
+            pane,
+            input,
+            no_input,
+            title,
+        } => {
+            let v = call(Request::RecordingStart(mt_proto::RecordingStartParams {
+                pane: need_pane(pane)?,
+                input: if input {
+                    Some(true)
+                } else if no_input {
+                    Some(false)
+                } else {
+                    None
+                },
+                title,
+            }))?;
+            Ok(if json {
+                Output::new(Body::Json(v))
+            } else {
+                Output::new(Body::Raw(format!(
+                    "{}\n",
+                    v["id"].as_str().unwrap_or_default()
+                )))
+            })
+        }
+        RecordingCmd::Stop { id, pane, all } => {
+            let params = if all {
+                mt_proto::RecordingStopParams {
+                    all: true,
+                    ..Default::default()
+                }
+            } else if let Some(id) = id {
+                mt_proto::RecordingStopParams {
+                    id: Some(id),
+                    ..Default::default()
+                }
+            } else {
+                mt_proto::RecordingStopParams {
+                    pane: Some(need_pane(pane)?),
+                    ..Default::default()
+                }
+            };
+            let v = call(Request::RecordingStop(params))?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let lines: String = v["stopped"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .map(|r| format!("{}\n", r["id"].as_str().unwrap_or_default()))
+                .collect();
+            Ok(Output::new(Body::Raw(lines)))
+        }
+        RecordingCmd::Marker { pane, label } => {
+            let v = call(Request::RecordingMarker(mt_proto::RecordingMarkerParams {
+                pane: need_pane(pane)?,
+                label,
+            }))?;
+            Ok(if json {
+                Output::new(Body::Json(v))
+            } else {
+                Output::none()
+            })
+        }
+        RecordingCmd::Rename { id, title } => {
+            let v = call(Request::RecordingRename(mt_proto::RecordingRenameParams {
+                id,
+                title,
+            }))?;
+            Ok(if json {
+                Output::new(Body::Json(v))
+            } else {
+                Output::none()
+            })
+        }
+        RecordingCmd::Rm { ids, force } => {
+            let v = call(Request::RecordingRemove(mt_proto::RecordingRemoveParams {
+                ids,
+                force,
+            }))?;
+            Ok(if json {
+                Output::new(Body::Json(v))
+            } else {
+                Output::none()
+            })
+        }
+        RecordingCmd::Replay {
+            id,
+            speed,
+            new_window,
+        } => {
+            if !(speed.is_finite() && speed > 0.0) {
+                return Err(CtlError::usage("--speed must be greater than 0"));
+            }
+            let rec = call(Request::RecordingGet(mt_proto::RecordingIdParams { id }))?;
+            let path = rec["path"].as_str().unwrap_or_default().to_string();
+            let v = call(Request::ReplayStart(ReplayParams {
+                path,
+                speed,
+                new_window,
+            }))?;
+            if json {
+                Ok(Output::new(Body::Json(v)))
+            } else {
+                spawned("replay", v)
+            }
+        }
     }
 }
 
@@ -1233,6 +1460,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
             })
         }
         CtlAction::Snippet(cmd) => snippet_verb(&mut call, cmd, ctx),
+        CtlAction::Recording(cmd) => recording_verb(&mut call, cmd, ctx),
         CtlAction::Menu(MenuCmd::Show { menu, target }) => {
             let v = call(Request::MenuShow(mt_proto::MenuShowParams {
                 target: pane_target(target, env),

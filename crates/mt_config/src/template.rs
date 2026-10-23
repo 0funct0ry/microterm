@@ -156,6 +156,29 @@ confirm_multiline = false        # ask before inserting a multi-line snippet
 focus_terminal_after_insert = true
 preview_lines = 2                # body lines shown under each title in the panel (0-5)
 
+[recording]                      # recording mode, store and Recordings panel (SPEC §10.10)
+enabled = false                  # master switch; false = feature fully inert (no recorder, pill, panel or rows)
+capture_input = false            # also record keystrokes/paste (needed for the VHS exporter); opt-in
+redact_no_echo = true            # drop input while the local PTY has ECHO off (password prompts)
+max_duration_minutes = 60        # auto-stop a recording (0 = unlimited)
+max_size_mb = 200                # auto-stop a recording at this size (0 = unlimited)
+panel_width = 360                # px, 280-600
+panel_open_on_start = false
+confirm_delete = true
+
+[recording.export]               # defaults for the export dialog and `ctl recording export`
+default_format = "gif"           # "gif" | "vhs" | "cast" | any registered exporter id
+output_dir = ""                  # "" = ask (save panel) in the GUI, current directory in ctl
+open_when_done = false
+strip_input = true               # cast: drop input events from exports
+gif_fps = 10                     # 1-30
+gif_idle_limit = 2.0             # seconds; pauses are shortened to this (0 = off)
+gif_font_size = 14               # px
+gif_scale = 1.0                  # 0.25-2.0
+gif_chrome = "plain"             # "none" | "plain" | "macos"
+gif_end_pause = 2.0              # seconds on the last frame
+gif_max_size_mb = 50             # abort an export that would exceed this
+
 [menu_bar]                       # the macOS main menu bar
 enabled = true                   # false keeps only the microterm menu (with Quit)
 

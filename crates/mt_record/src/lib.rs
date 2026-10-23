@@ -4,6 +4,12 @@
 //! per event. Codes: `o` output, `i` input (opt-in: it captures keystrokes, including secrets),
 //! `r` resize (`"COLSxROWS"`), `m` marker.
 
+pub mod store;
+pub mod stream;
+
+pub use store::{Marker, Origin, Sidecar, Store, StoreError};
+pub use stream::{LimitHit, Limits, StartMeta, StreamWriter};
+
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 

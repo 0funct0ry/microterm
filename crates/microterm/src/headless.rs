@@ -28,6 +28,7 @@ struct Host {
     mux: Mux,
     panes: HashMap<Id, Arc<Terminal>>,
     recorders: Recorders,
+    store_recorders: mt_ui::recording::engine::StoreRecorders,
     socket: PathBuf,
     shell: String,
     term: String,
@@ -79,6 +80,36 @@ impl mt_ui::snippets::ipc::SnippetHost for HeadlessSnippets {
     fn reloaded(&mut self) {}
 }
 
+/// `recording.*` in a headless instance: no theme or font, and every pane is local unless
+/// it is a remote terminal.
+struct HeadlessRecording<'a> {
+    cfg: Arc<mt_config::Config>,
+    rows: Rows,
+    panes: &'a HashMap<Id, Arc<Terminal>>,
+    recorders: &'a mut mt_ui::recording::engine::StoreRecorders,
+}
+
+impl mt_ui::recording::ipc::RecordingHost for HeadlessRecording<'_> {
+    fn config(&self) -> Arc<mt_config::Config> {
+        self.cfg.clone()
+    }
+    fn rows(&mut self) -> Rows {
+        self.rows.clone()
+    }
+    fn terminal(&mut self, pane: u64) -> Option<Arc<Terminal>> {
+        self.panes.get(&pane).cloned()
+    }
+    fn recorders(&mut self) -> &mut mt_ui::recording::engine::StoreRecorders {
+        self.recorders
+    }
+    fn domain_kind(&mut self, _: u64) -> Option<mt_mux::DomainKind> {
+        None
+    }
+    fn theme_font(&mut self) -> (String, String) {
+        (String::new(), String::new())
+    }
+}
+
 /// The headless mux as pending `pane.run` / `pane.wait` calls see it.
 struct Access<'a> {
     mux: &'a Mux,
@@ -118,6 +149,7 @@ pub fn run(config: Option<PathBuf>) -> i32 {
         mux: Mux::new(),
         panes: HashMap::new(),
         recorders: Recorders::default(),
+        store_recorders: Default::default(),
         socket: server.path().to_path_buf(),
         shell: cfg.shell.clone(),
         term: cfg.term.clone(),
@@ -157,6 +189,7 @@ pub fn run(config: Option<PathBuf>) -> i32 {
         host.mux.expire_statuses(mt_term::now_ms());
         std::thread::sleep(Duration::from_millis(10));
     }
+    host.stop_recordings();
     drop(server);
     0
 }
@@ -290,6 +323,7 @@ impl Host {
         let term = self.panes.remove(&pane);
         self.runtime.forget(pane);
         self.recorders.finish(pane, term.as_deref());
+        self.store_recorders.finish(pane, term.as_deref());
         self.mux
             .kill_pane(pane)
             .map(|_| ())
@@ -543,6 +577,27 @@ impl Host {
         Ok(json!({ "closed": set.panes }))
     }
 
+    fn recording(&mut self, request: Request) -> Reply {
+        let mut host = HeadlessRecording {
+            cfg: self.cfg.clone(),
+            rows: self.rows(),
+            panes: &self.panes,
+            recorders: &mut self.store_recorders,
+        };
+        mt_ui::recording::ipc::handle(&mut host, request)
+    }
+
+    /// Stops and saves every running recording (gate turned off, shutdown).
+    fn stop_recordings(&mut self) {
+        let mut host = HeadlessRecording {
+            cfg: self.cfg.clone(),
+            rows: Rows::default(),
+            panes: &self.panes,
+            recorders: &mut self.store_recorders,
+        };
+        let _ = mt_ui::recording::ipc::stop_all(&mut host);
+    }
+
     fn snippets(&mut self, request: Request) -> Reply {
         let path = mt_config::load::snippets_path(&self.path);
         let set = if mt_ui::snippets::gate::SnippetsGate::of_config(&self.cfg).enabled {
@@ -703,6 +758,9 @@ impl Host {
                 // Only menus read the config after start-up; a broken file keeps the old one.
                 if let Ok(l) = mt_config::load::load(&self.path) {
                     self.cfg = Arc::new(l.config);
+                    if !mt_ui::recording::gate::RecordingGate::of_config(&self.cfg).enabled {
+                        self.stop_recordings();
+                    }
                 }
                 ok()
             }
@@ -714,6 +772,13 @@ impl Host {
                 mt_ui::menu::show(&self.cfg, &self.rows(), &p, &|id| panes.get(&id).cloned())
             }
             Request::MenuInvoke(p) => self.menu_invoke(&p),
+            r @ (Request::RecordingList
+            | Request::RecordingGet(_)
+            | Request::RecordingStart(_)
+            | Request::RecordingStop(_)
+            | Request::RecordingMarker(_)
+            | Request::RecordingRename(_)
+            | Request::RecordingRemove(_)) => self.recording(r),
             r @ (Request::SnippetList(_)
             | Request::SnippetGet(_)
             | Request::SnippetExpand(_)

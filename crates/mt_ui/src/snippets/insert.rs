@@ -13,11 +13,17 @@ pub struct Delivery {
     pub run: bool,
     /// Cursor-left presses after the paste.
     pub cursor_left: usize,
+    /// The text contains a `secret` prompt value; recordings must not see it (SPEC §10.10.3).
+    pub has_secret: bool,
 }
 
 /// A terminal as far as delivery is concerned.
 pub trait Sink {
     fn paste(&self, text: &str);
+    /// Like `paste`, invisible to recording taps. Defaults to `paste` for sinks with no tap.
+    fn paste_untapped(&self, text: &str) {
+        self.paste(text);
+    }
     fn write(&self, bytes: Vec<u8>);
     /// DECCKM: cursor keys send `SS3` instead of `CSI`.
     fn app_cursor(&self) -> bool;
@@ -26,6 +32,9 @@ pub trait Sink {
 impl Sink for mt_term::Terminal {
     fn paste(&self, text: &str) {
         mt_term::Terminal::paste(self, text);
+    }
+    fn paste_untapped(&self, text: &str) {
+        mt_term::Terminal::paste_untapped(self, text);
     }
     fn write(&self, bytes: Vec<u8>) {
         mt_term::Terminal::write(self, bytes);
@@ -50,12 +59,17 @@ pub fn plan(expanded: &Expanded, run: bool) -> Delivery {
         text,
         run,
         cursor_left,
+        has_secret: expanded.has_secret,
     }
 }
 
 pub fn deliver(sink: &dyn Sink, d: &Delivery) {
     if !d.text.is_empty() {
-        sink.paste(&d.text);
+        if d.has_secret {
+            sink.paste_untapped(&d.text);
+        } else {
+            sink.paste(&d.text);
+        }
     }
     if d.run {
         sink.write(b"\r".to_vec());
@@ -89,6 +103,9 @@ mod tests {
         fn paste(&self, text: &str) {
             self.log.borrow_mut().push(format!("paste:{text}"));
         }
+        fn paste_untapped(&self, text: &str) {
+            self.log.borrow_mut().push(format!("untapped:{text}"));
+        }
         fn write(&self, bytes: Vec<u8>) {
             self.log.borrow_mut().push(format!(
                 "write:{}",
@@ -106,6 +123,15 @@ mod tests {
             cursor,
             has_secret: false,
         }
+    }
+
+    #[test]
+    fn secret_text_takes_the_untapped_path() {
+        let r = Rec::default();
+        let mut e = ex("pw", None);
+        e.has_secret = true;
+        deliver(&r, &plan(&e, true));
+        assert_eq!(*r.log.borrow(), ["untapped:pw", "write:\\r"]);
     }
 
     #[test]

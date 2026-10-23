@@ -43,7 +43,8 @@ pub mod exit {
     pub const CONFIRM_REQUIRED: i32 = 8;
     /// `run --in` while a command is already running.
     pub const BUSY: i32 = 9;
-    /// A feature switched off in the config (`ctl snippet …` while `snippets.enabled = false`).
+    /// A feature switched off in the config (`ctl snippet …` while `snippets.enabled = false`,
+    /// `ctl recording …` while `recording.enabled = false`).
     pub const DISABLED: i32 = 10;
     /// A snippet needs prompt values that were not supplied.
     pub const MISSING_VARS: i32 = 11;
@@ -688,6 +689,55 @@ pub struct SnippetAddParams {
     pub replace: bool,
 }
 
+/// `recording.start`: record a pane into the store (SPEC §10.10.7). `input: None` follows
+/// `recording.capture_input`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingStartParams {
+    pub pane: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// `recording.stop`: by pane, by recording id, or every running recording.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingStopParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingMarkerParams {
+    pub pane: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// `recording.get`: one stored recording by id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingIdParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingRenameParams {
+    pub id: String,
+    pub title: String,
+}
+
+/// `recording.remove`: deletes recordings. Without `force` the call is refused (exit 8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingRemoveParams {
+    pub ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub force: bool,
+}
+
 /// Every IPC request (SPEC §12.2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -752,6 +802,13 @@ pub enum Request {
     SnippetInsert(SnippetUseParams),
     SnippetAdd(SnippetAddParams),
     SnippetRemove(SnippetIdParams),
+    RecordingList,
+    RecordingGet(RecordingIdParams),
+    RecordingStart(RecordingStartParams),
+    RecordingStop(RecordingStopParams),
+    RecordingMarker(RecordingMarkerParams),
+    RecordingRename(RecordingRenameParams),
+    RecordingRemove(RecordingRemoveParams),
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -804,6 +861,13 @@ pub const METHODS: &[&str] = &[
     "snippet.insert",
     "snippet.add",
     "snippet.remove",
+    "recording.list",
+    "recording.get",
+    "recording.start",
+    "recording.stop",
+    "recording.marker",
+    "recording.rename",
+    "recording.remove",
 ];
 
 impl Request {
@@ -850,6 +914,13 @@ impl Request {
             Request::MenuBarList => "menubar.list",
             Request::MenuShow(_) => "menu.show",
             Request::MenuInvoke(_) => "menu.invoke",
+            Request::RecordingList => "recording.list",
+            Request::RecordingGet(_) => "recording.get",
+            Request::RecordingStart(_) => "recording.start",
+            Request::RecordingStop(_) => "recording.stop",
+            Request::RecordingMarker(_) => "recording.marker",
+            Request::RecordingRename(_) => "recording.rename",
+            Request::RecordingRemove(_) => "recording.remove",
             Request::SnippetList(_) => "snippet.list",
             Request::SnippetGet(_) => "snippet.get",
             Request::SnippetExpand(_) => "snippet.expand",
@@ -874,7 +945,14 @@ impl Request {
             | Request::WorkspaceList
             | Request::ConfigReload
             | Request::MenuList
+            | Request::RecordingList
             | Request::MenuBarList => json!({}),
+            Request::RecordingGet(p) => to(p),
+            Request::RecordingStart(p) => to(p),
+            Request::RecordingStop(p) => to(p),
+            Request::RecordingMarker(p) => to(p),
+            Request::RecordingRename(p) => to(p),
+            Request::RecordingRemove(p) => to(p),
             Request::MenuShow(p) => to(p),
             Request::MenuInvoke(p) => to(p),
             Request::SnippetList(p) => to(p),
@@ -1005,6 +1083,13 @@ impl Request {
             "menubar.list" => Request::MenuBarList,
             "menu.show" => Request::MenuShow(p(method, params)?),
             "menu.invoke" => Request::MenuInvoke(p(method, params)?),
+            "recording.list" => Request::RecordingList,
+            "recording.get" => Request::RecordingGet(p(method, params)?),
+            "recording.start" => Request::RecordingStart(p(method, params)?),
+            "recording.stop" => Request::RecordingStop(p(method, params)?),
+            "recording.marker" => Request::RecordingMarker(p(method, params)?),
+            "recording.rename" => Request::RecordingRename(p(method, params)?),
+            "recording.remove" => Request::RecordingRemove(p(method, params)?),
             "snippet.list" => Request::SnippetList(p(method, params)?),
             "snippet.get" => Request::SnippetGet(p(method, params)?),
             "snippet.expand" => Request::SnippetExpand(p(method, params)?),
@@ -1879,6 +1964,30 @@ mod tests {
                 replace: true,
             }),
             Request::SnippetRemove(SnippetIdParams { id: "a".into() }),
+            Request::RecordingList,
+            Request::RecordingGet(RecordingIdParams { id: "r_a".into() }),
+            Request::RecordingStart(RecordingStartParams {
+                pane: 2,
+                input: Some(true),
+                title: Some("demo".into()),
+            }),
+            Request::RecordingStop(RecordingStopParams {
+                pane: Some(2),
+                id: None,
+                all: false,
+            }),
+            Request::RecordingMarker(RecordingMarkerParams {
+                pane: 2,
+                label: Some("x".into()),
+            }),
+            Request::RecordingRename(RecordingRenameParams {
+                id: "r_a".into(),
+                title: "T".into(),
+            }),
+            Request::RecordingRemove(RecordingRemoveParams {
+                ids: vec!["r_a".into()],
+                force: true,
+            }),
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -1919,7 +2028,9 @@ mod tests {
              pane.run pane.wait pane.notify pane.status_set pane.status_clear pane.status_get \
              pane.close pane.split pane.focus pane.zoom pane.resize pane.swap pane.rotate \
              record.start record.stop replay.start config.reload subscribe menu.list menubar.list menu.show \
-             menu.invoke snippet.list snippet.get snippet.expand snippet.insert snippet.add snippet.remove"
+             menu.invoke snippet.list snippet.get snippet.expand snippet.insert snippet.add snippet.remove \
+             recording.list recording.get recording.start recording.stop recording.marker \
+             recording.rename recording.remove"
         );
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(

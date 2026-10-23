@@ -436,6 +436,35 @@ const ROOT: &[(&str, K)] = &[
             ("preview_lines", K::Leaf),
         ]),
     ),
+    (
+        "recording",
+        K::Table(&[
+            ("enabled", K::Leaf),
+            ("capture_input", K::Leaf),
+            ("redact_no_echo", K::Leaf),
+            ("max_duration_minutes", K::Leaf),
+            ("max_size_mb", K::Leaf),
+            ("panel_width", K::Leaf),
+            ("panel_open_on_start", K::Leaf),
+            ("confirm_delete", K::Leaf),
+            (
+                "export",
+                K::Table(&[
+                    ("default_format", K::Leaf),
+                    ("output_dir", K::Leaf),
+                    ("open_when_done", K::Leaf),
+                    ("strip_input", K::Leaf),
+                    ("gif_fps", K::Leaf),
+                    ("gif_idle_limit", K::Leaf),
+                    ("gif_font_size", K::Leaf),
+                    ("gif_scale", K::Leaf),
+                    ("gif_chrome", K::Leaf),
+                    ("gif_end_pause", K::Leaf),
+                    ("gif_max_size_mb", K::Leaf),
+                ]),
+            ),
+        ]),
+    ),
     ("menu_bar", K::Table(&[("enabled", K::Leaf)])),
     ("context_menu", K::Map(MENU_CONFIG)),
     ("menu_groups", K::Map(&[("items", K::Array(MENU_ITEM))])),
@@ -878,6 +907,45 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
         err(
             &["snippets", "preview_lines"],
             "snippets.preview_lines must be between 0 and 5".into(),
+        );
+    }
+    if !(280..=600).contains(&c.recording.panel_width) {
+        err(
+            &["recording", "panel_width"],
+            "recording.panel_width must be between 280 and 600".into(),
+        );
+    }
+    if !(1..=30).contains(&c.recording.export.gif_fps) {
+        err(
+            &["recording", "export", "gif_fps"],
+            "recording.export.gif_fps must be between 1 and 30".into(),
+        );
+    }
+    if !(0.25..=2.0).contains(&c.recording.export.gif_scale) {
+        err(
+            &["recording", "export", "gif_scale"],
+            "recording.export.gif_scale must be between 0.25 and 2.0".into(),
+        );
+    }
+    if c.recording.export.gif_idle_limit.is_nan() || c.recording.export.gif_idle_limit < 0.0 {
+        err(
+            &["recording", "export", "gif_idle_limit"],
+            "recording.export.gif_idle_limit must not be negative".into(),
+        );
+    }
+    if c.recording.export.gif_end_pause.is_nan() || c.recording.export.gif_end_pause < 0.0 {
+        err(
+            &["recording", "export", "gif_end_pause"],
+            "recording.export.gif_end_pause must not be negative".into(),
+        );
+    }
+    if !matches!(
+        c.recording.export.gif_chrome.as_str(),
+        "none" | "plain" | "macos"
+    ) {
+        err(
+            &["recording", "export", "gif_chrome"],
+            "recording.export.gif_chrome must be \"none\", \"plain\" or \"macos\"".into(),
         );
     }
     if !(0.0..=1.0).contains(&c.window.opacity) {

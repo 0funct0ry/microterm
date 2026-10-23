@@ -2858,3 +2858,188 @@ fn mcp_snippet_tools_expand_insert_and_refuse_secrets() {
         "nothing was typed"
     );
 }
+
+// ---------------------------------------------------------------- recordings (M12.1)
+
+const REC_ON: &str = "[recording]\nenabled = true\n";
+
+impl Instance {
+    fn rec_dir(&self) -> String {
+        format!("{}/.local/share/microterm/recordings", self.home)
+    }
+
+    /// `kill -9` the instance and start a new one on the same `$HOME`.
+    fn restart_after_kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let mut child = Process::new(assert_cmd::cargo::cargo_bin("microterm"))
+            .arg("--headless")
+            .envs(Self::env(&self.home))
+            .env_remove("MICROTERM_UNIX_SOCKET")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        self.child = child;
+        self.socket = line.trim().to_string();
+    }
+}
+
+#[test]
+fn recording_verbs_exit_10_while_disabled_and_create_nothing() {
+    let i = Instance::start();
+    for args in [
+        &["recording", "list"][..],
+        &["recording", "show", "r_x"],
+        &["recording", "start", "--pane", "1"],
+        &["recording", "stop", "--all"],
+        &["recording", "marker", "--pane", "1"],
+        &["recording", "rename", "r_x", "t"],
+        &["recording", "rm", "r_x", "--force"],
+        &["recording", "replay", "r_x"],
+    ] {
+        let (code, err) = i.ctl_err(args);
+        assert_eq!(code, 10, "{args:?}: {err}");
+        assert!(err.contains("recording.enabled"), "{err}");
+    }
+    assert!(!std::path::Path::new(&i.rec_dir()).exists());
+}
+
+#[test]
+fn recording_start_stop_list_show_rename_rm_and_replay() {
+    let i = Instance::start_with(Some(REC_ON));
+    assert!(!std::path::Path::new(&i.rec_dir()).exists(), "lazy store");
+    assert_eq!(
+        i.json(&["recording", "list"])["recordings"],
+        serde_json::json!([])
+    );
+    let pane = i.spawn_sh("while :; do echo tick-$((1+1)); sleep 0.1; done", &[]);
+    let id = i.ctl(&["recording", "start", "--pane", &pane, "--title", "demo"]);
+    let id = id.trim().to_string();
+    assert!(id.starts_with("r_"), "{id}");
+    // A second start on the same pane is refused; a pane that is not recorded exits 3.
+    assert_eq!(i.ctl_code(&["recording", "start", "--pane", &pane]), 1);
+    i.ctl(&["recording", "marker", "--pane", &pane, "--label", "halfway"]);
+    std::thread::sleep(Duration::from_millis(500));
+    let stopped = i.ctl(&["recording", "stop", "--pane", &pane]);
+    assert_eq!(stopped.trim(), id);
+    assert_eq!(i.ctl_code(&["recording", "stop", "--pane", &pane]), 3);
+
+    let dir = i.rec_dir();
+    assert!(std::path::Path::new(&format!("{dir}/{id}.cast")).is_file());
+    assert!(std::path::Path::new(&format!("{dir}/{id}.json")).is_file());
+    assert!(!std::path::Path::new(&format!("{dir}/{id}.cast.partial")).exists());
+
+    let list = i.json(&["recording", "list"]);
+    let rows = list["recordings"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], id.as_str());
+    assert_eq!(rows[0]["title"], "demo");
+    assert!(i.ctl(&["recording", "list"]).contains(&id));
+    let shown = i.json(&["recording", "show", &id]);
+    assert_eq!(shown["markers"][0]["label"], "halfway");
+    assert_eq!(shown["has_input"], false);
+    assert_eq!(i.ctl_code(&["recording", "show", "r_nope"]), 3);
+
+    i.ctl(&["recording", "rename", &id, "renamed"]);
+    assert_eq!(i.json(&["recording", "show", &id])["title"], "renamed");
+
+    // It plays back, as an ordinary asciicast.
+    let text = std::fs::read_to_string(format!("{dir}/{id}.cast")).unwrap();
+    assert!(text.contains("tick-2"), "{text}");
+    let replay = i.ctl(&["recording", "replay", &id, "--speed", "20"]);
+    let rp = parse_ids(&replay).1;
+    i.wait_text(&rp, "tick-2");
+
+    // rm needs --force (exit 8) and unknown ids exit 3.
+    assert_eq!(i.ctl_code(&["recording", "rm", &id]), 8);
+    assert!(std::path::Path::new(&format!("{dir}/{id}.cast")).exists());
+    assert_eq!(i.ctl_code(&["recording", "rm", "r_nope", "--force"]), 3);
+    i.ctl(&["recording", "rm", &id, "--force"]);
+    assert!(!std::path::Path::new(&format!("{dir}/{id}.cast")).exists());
+    assert!(!std::path::Path::new(&format!("{dir}/{id}.json")).exists());
+}
+
+#[test]
+fn recording_start_needs_a_pane_and_stop_all_saves_everything() {
+    let i = Instance::start_with(Some(REC_ON));
+    assert_eq!(i.ctl_code(&["recording", "start"]), 1);
+    let a = i.spawn_sh("while :; do echo a; sleep 0.1; done", &[]);
+    let b = i.spawn_sh("while :; do echo b; sleep 0.1; done", &[]);
+    i.ctl(&["recording", "start", "--pane", &a]);
+    i.ctl(&["recording", "start", "--pane", &b]);
+    assert_eq!(
+        i.json(&["recording", "list"])["running"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let out = i.ctl(&["recording", "stop", "--all"]);
+    assert_eq!(out.lines().count(), 2, "{out}");
+    assert_eq!(
+        i.json(&["recording", "list"])["recordings"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn recording_a_password_prompt_with_input_leaves_a_marker_and_no_bytes() {
+    let i = Instance::start_with(Some(REC_ON));
+    let pane = i.spawn_sh("stty -echo; echo ready-$((1+1)); sleep 30", &[]);
+    i.wait_text(&pane, "ready-2");
+    let id = i.ctl(&["recording", "start", "--pane", &pane, "--input"]);
+    let id = id.trim().to_string();
+    i.ctl(&["pane", "send-text", "--pane", &pane, "hunter2\n"]);
+    std::thread::sleep(Duration::from_millis(300));
+    i.ctl(&["recording", "stop", &id]);
+    let text = std::fs::read_to_string(format!("{}/{id}.cast", i.rec_dir())).unwrap();
+    assert!(!text.contains("hunter2"), "{text}");
+    assert_eq!(text.matches("input paused (no echo)").count(), 1, "{text}");
+    assert_eq!(
+        i.json(&["recording", "show", &id])["input_redacted"],
+        "no_echo"
+    );
+}
+
+#[test]
+fn kill_9_while_recording_leaves_a_partial_that_is_recovered() {
+    let mut i = Instance::start_with(Some(REC_ON));
+    let pane = i.spawn_sh("while :; do echo alive-$((1+1)); sleep 0.1; done", &[]);
+    let id = i.ctl(&["recording", "start", "--pane", &pane]);
+    let id = id.trim().to_string();
+    std::thread::sleep(Duration::from_millis(1600));
+    i.restart_after_kill();
+    let partial = format!("{}/{id}.cast.partial", i.rec_dir());
+    assert!(
+        std::path::Path::new(&partial).exists(),
+        "partial left behind"
+    );
+    let list = i.json(&["recording", "list"]);
+    let rows = list["recordings"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{list}");
+    assert_eq!(rows[0]["id"], id.as_str());
+    assert_eq!(rows[0]["recovered"], true);
+    assert!(!std::path::Path::new(&partial).exists());
+    let text = std::fs::read_to_string(format!("{}/{id}.cast", i.rec_dir())).unwrap();
+    assert!(text.contains("alive-2"), "{text}");
+}
+
+#[test]
+fn turning_the_gate_off_by_reload_stops_and_saves_running_recordings() {
+    let i = Instance::start_with(Some(REC_ON));
+    let pane = i.spawn_sh("while :; do echo x; sleep 0.1; done", &[]);
+    let id = i.ctl(&["recording", "start", "--pane", &pane]);
+    let id = id.trim().to_string();
+    std::fs::write(format!("{}/cfg/microterm/microterm.toml", i.home), "").unwrap();
+    i.ctl(&["reload-config"]);
+    assert_eq!(i.ctl_code(&["recording", "list"]), 10);
+    assert!(std::path::Path::new(&format!("{}/{id}.cast", i.rec_dir())).is_file());
+    assert!(!std::path::Path::new(&format!("{}/{id}.cast.partial", i.rec_dir())).exists());
+}

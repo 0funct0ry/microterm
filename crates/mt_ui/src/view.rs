@@ -126,7 +126,7 @@ impl Render for AppWindow {
         if let Some(top) = self.overlays.top() {
             root = root.child(self.focus_node(top, cx));
         }
-        root.on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+        root.on_action(cx.listener(|_, _: &Quit, _, cx| crate::recording::ipc::quit(cx)))
             .on_action(cx.listener(|this, _: &SpawnTab, w, cx| this.on_action_spawn_tab(w, cx)))
             .on_action(cx.listener(|this, _: &CloseTab, w, cx| this.on_action_close_tab(w, cx)))
             .on_action(cx.listener(|this, _: &SplitHorizontal, w, cx| {

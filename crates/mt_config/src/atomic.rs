@@ -82,3 +82,27 @@ pub fn write_atomic(
     fs::rename(&tmp, &target)?;
     Ok(out)
 }
+
+/// Writes `bytes` to `path` atomically (temp file + fsync + rename) with `mode` on Unix.
+/// Unlike `write_atomic` it keeps no `.bak` and does no staleness check; it is for
+/// machine-written files such as recording sidecars (SPEC §10.10.4).
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let mut tmp = path.to_path_buf().into_os_string();
+    tmp.push(".tmp");
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    fs::rename(&tmp, path)
+}

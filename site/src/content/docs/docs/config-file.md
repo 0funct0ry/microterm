@@ -116,6 +116,39 @@ preview_lines = 2                # body lines under each title in the panel (0-5
 The snippets themselves are in `snippets.toml`, next to this file. Changing `enabled` applies at
 once in every window; `templates` applies to the next insert.
 
+## Recording
+
+`[recording]` turns on [recording mode](/docs/recording-and-replay/#the-recordings-store) and the
+recordings store; it is off by default.
+
+```toml
+[recording]
+enabled = false                  # master switch; false = fully inert, `ctl recording` exits 10
+capture_input = false            # also record keystrokes and paste; opt-in
+redact_no_echo = true            # drop input while the local PTY has echo off (password prompts)
+max_duration_minutes = 60        # auto-stop a recording (0 = unlimited)
+max_size_mb = 200                # auto-stop a recording at this size (0 = unlimited)
+panel_width = 360                # px, 280-600
+panel_open_on_start = false
+confirm_delete = true
+
+[recording.export]               # defaults for exports (used by the export milestones)
+default_format = "gif"           # "gif" | "vhs" | "cast"
+output_dir = ""
+open_when_done = false
+strip_input = true
+gif_fps = 10                     # 1-30
+gif_idle_limit = 2.0
+gif_font_size = 14
+gif_scale = 1.0                  # 0.25-2.0
+gif_chrome = "plain"             # "none" | "plain" | "macos"
+gif_end_pause = 2.0
+gif_max_size_mb = 50
+```
+
+Turning `enabled` off in a reload stops and saves every running recording. The other keys apply
+to the next recording.
+
 ## Errors
 
 - **Syntax and type errors** are errors. microterm keeps the last valid config.

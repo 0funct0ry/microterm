@@ -68,9 +68,39 @@ impl Default for SpawnOptions {
     }
 }
 
+/// One event of the recording tap (SPEC §10.10.3). `at` is stamped where the bytes arrive, so
+/// playback timing does not depend on how busy the consumer is.
+#[derive(Debug, Clone)]
+pub struct TapEvent {
+    pub at: std::time::Instant,
+    pub kind: TapKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum TapKind {
+    /// Raw bytes the child (or remote) printed, before any width filtering.
+    Output(Vec<u8>),
+    /// Bytes sent to the pane. `hidden` is whether the local PTY was in a no-echo prompt
+    /// (`ECHO` clear, `ICANON` set) at that moment; `None` for SSH and serial panes, which
+    /// cannot be inspected.
+    Input {
+        bytes: Vec<u8>,
+        hidden: Option<bool>,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    /// A marker request (`ctl recording marker`), ordered with the bytes around it.
+    /// Empty = the recorder picks "mark N".
+    Marker(String),
+}
+
 /// Optional copies of the byte streams, for recording (`mt_record`).
 #[derive(Default)]
 struct Taps {
+    /// The M12.1 recording tap: one channel of timestamped events for every kind.
+    record: std::sync::Mutex<Option<std::sync::mpsc::Sender<TapEvent>>>,
     output: std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
     input: std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
     /// Unix milliseconds of the last PTY read (`pane wait --idle`). Zero before any output.
@@ -78,6 +108,25 @@ struct Taps {
 }
 
 impl Taps {
+    fn send_record(&self, kind: impl FnOnce() -> TapKind) {
+        let mut g = self.record.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = g.as_ref() {
+            let ev = TapEvent {
+                at: std::time::Instant::now(),
+                kind: kind(),
+            };
+            if tx.send(ev).is_err() {
+                *g = None;
+            }
+        }
+    }
+
+    /// Output reaching the parser: both the M9 byte tap and the recording tap.
+    fn output_bytes(&self, bytes: &[u8]) {
+        Self::send(&self.output, bytes);
+        self.send_record(|| TapKind::Output(bytes.to_vec()));
+    }
+
     fn send(slot: &std::sync::Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>, bytes: &[u8]) {
         let mut g = slot.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(tx) = g.as_ref() {
@@ -85,6 +134,19 @@ impl Taps {
                 *g = None; // the receiver went away
             }
         }
+    }
+}
+
+/// `ECHO` clear and `ICANON` set in the PTY master's termios (a password prompt).
+fn pty_input_hidden(fd: RawFd) -> Option<bool> {
+    // SAFETY: `termios` is plain data and `tcgetattr` only writes into it; `fd` is the master
+    // fd the terminal owns for as long as the backend lives.
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut t) != 0 {
+            return None;
+        }
+        Some(t.c_lflag & libc::ECHO == 0 && t.c_lflag & libc::ICANON != 0)
     }
 }
 
@@ -313,10 +375,24 @@ impl Terminal {
 
     /// Parses bytes that arrived from the daemon (remote terminals only).
     pub fn feed(&self, bytes: &[u8]) {
+        self.feed_inner(bytes, true);
+    }
+
+    /// Like [`feed`](Self::feed) for the VT replay the daemon sends after a reconnect: the
+    /// screen it redraws is already in any running recording, so only the M9 tap sees it
+    /// (SPEC §10.10.2).
+    pub fn feed_replay(&self, bytes: &[u8]) {
+        self.feed_inner(bytes, false);
+    }
+
+    fn feed_inner(&self, bytes: &[u8], record: bool) {
         let Backend::Remote { feed, .. } = &self.backend else {
             return;
         };
         Taps::send(&self.taps.output, bytes);
+        if record {
+            self.taps.send_record(|| TapKind::Output(bytes.to_vec()));
+        }
         let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
         let f = &mut *f;
         f.sniffer.feed(bytes);
@@ -401,6 +477,18 @@ impl Terminal {
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let bytes = bytes.into();
         Taps::send(&self.taps.input, &bytes);
+        let hidden = self.input_hidden();
+        self.taps.send_record(|| TapKind::Input {
+            bytes: bytes.to_vec(),
+            hidden,
+        });
+        self.write_untapped(bytes);
+    }
+
+    /// Like [`write`](Self::write) but invisible to every input tap. Used for snippet inserts
+    /// that contain a `secret` (SPEC §10.8.5, §10.10.3).
+    pub fn write_untapped(&self, bytes: impl Into<Cow<'static, [u8]>>) {
+        let bytes = bytes.into();
         match &self.backend {
             Backend::Local { input, .. } => {
                 let _ = input.send(bytes);
@@ -416,6 +504,27 @@ impl Terminal {
     }
 
     /// Copies every byte written to the child (keystrokes, pastes) to `tx`.
+    /// Starts or stops the timestamped recording tap (SPEC §10.10.3).
+    pub fn set_record_tap(&self, tx: Option<std::sync::mpsc::Sender<TapEvent>>) {
+        *self.taps.record.lock().unwrap_or_else(|e| e.into_inner()) = tx;
+    }
+
+    /// Adds a marker to the running recording, if any, at the current time.
+    pub fn record_marker(&self, label: Option<&str>) {
+        self.taps
+            .send_record(|| TapKind::Marker(label.unwrap_or_default().to_string()));
+    }
+
+    /// True while a program on the local PTY reads a password: `ECHO` clear with `ICANON`
+    /// still set. Line editors (readline, zle) clear both, so ordinary prompts are not
+    /// hidden. `None` for remote panes or when the termios query fails.
+    pub fn input_hidden(&self) -> Option<bool> {
+        match &self.backend {
+            Backend::Local { master_fd, .. } => pty_input_hidden(*master_fd),
+            Backend::Remote { .. } => None,
+        }
+    }
+
     pub fn set_input_tap(&self, tx: Option<std::sync::mpsc::Sender<Vec<u8>>>) {
         *self.taps.input.lock().unwrap_or_else(|e| e.into_inner()) = tx;
     }
@@ -433,6 +542,12 @@ impl Terminal {
         self.write(encode_paste(text, bracketed));
     }
 
+    /// [`paste`](Self::paste) that no input tap sees.
+    pub fn paste_untapped(&self, text: &str) {
+        let bracketed = self.modes().bracketed_paste;
+        self.write_untapped(encode_paste(text, bracketed));
+    }
+
     pub fn resize(&self, cols: u16, rows: u16, cell_width: u16, cell_height: u16) {
         let ws = WindowSize {
             num_lines: rows,
@@ -441,6 +556,7 @@ impl Terminal {
             cell_height,
         };
         *self.shared.size.lock().unwrap() = ws;
+        self.taps.send_record(|| TapKind::Resize { cols, rows });
         {
             let mut term = self.term.lock();
             term.resize(Size {
@@ -780,7 +896,7 @@ impl io::Read for FilterReader {
                 return Ok(held.len());
             }
             let n = self.file.read(buf)?;
-            Taps::send(&self.taps.output, &buf[..n]);
+            self.taps.output_bytes(&buf[..n]);
             self.sniffer.feed(&buf[..n]);
             self.touch();
             return Ok(n);
@@ -800,7 +916,7 @@ impl io::Read for FilterReader {
                 return Ok(held.len());
             }
             self.out.clear();
-            Taps::send(&self.taps.output, &self.raw[..n]);
+            self.taps.output_bytes(&self.raw[..n]);
             self.sniffer.feed(&self.raw[..n]);
             self.touch();
             self.filter.filter(&self.raw[..n], &mut self.out);
@@ -1051,6 +1167,79 @@ mod tests {
                 return rows;
             }
         }
+    }
+
+    #[test]
+    fn record_tap_carries_output_input_echo_and_resize() {
+        let (t, rx) = spawn_sh("echo tapready");
+        let (tx, trx) = mpsc::channel();
+        t.set_record_tap(Some(tx));
+        t.write(b"echo second-$((1+1))\n".to_vec());
+        t.resize(100, 7, 8, 16);
+        wait_for(&t, &rx, "second-2");
+        t.set_record_tap(None);
+        let evs: Vec<TapEvent> = trx.try_iter().collect();
+        assert!(evs.iter().any(|e| matches!(&e.kind, TapKind::Output(b)
+            if String::from_utf8_lossy(b).contains("second-2"))));
+        assert!(evs.iter().any(|e| matches!(&e.kind,
+            TapKind::Input { bytes, hidden: Some(false) } if bytes == b"echo second-$((1+1))\n")));
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e.kind, TapKind::Resize { cols: 100, rows: 7 })));
+        assert!(evs.windows(2).all(|w| w[0].at <= w[1].at));
+    }
+
+    #[test]
+    fn echo_flag_follows_the_pty_and_untapped_writes_are_invisible() {
+        // A password prompt: ECHO off while the program holds the tty in canonical mode.
+        let (t, rx) = spawn_sh("stty -echo; echo noecho-$((1+1)); sleep 5");
+        wait_for(&t, &rx, "noecho-2");
+        assert_eq!(t.input_hidden(), Some(true));
+        let (tx, trx) = mpsc::channel();
+        t.set_record_tap(Some(tx));
+        t.write(b"hunter2\n".to_vec());
+        t.write_untapped(b"SECRET\n".to_vec());
+        t.paste_untapped("PASTED");
+        t.write(vec![3]); // ^C ends the sleep
+        t.set_record_tap(None);
+        let inputs: Vec<(Vec<u8>, Option<bool>)> = trx
+            .try_iter()
+            .filter_map(|e| match e.kind {
+                TapKind::Input { bytes, hidden } => Some((bytes, hidden)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inputs[0], (b"hunter2\n".to_vec(), Some(true)));
+        assert_eq!(inputs.len(), 2);
+        assert!(inputs
+            .iter()
+            .all(|(b, _)| !String::from_utf8_lossy(b).contains("SECRET")
+                && !String::from_utf8_lossy(b).contains("PASTED")));
+    }
+
+    #[test]
+    fn replay_bytes_skip_the_record_tap_only() {
+        let t = Terminal::remote(
+            SpawnOptions {
+                cols: 20,
+                rows: 3,
+                ..Default::default()
+            },
+            RemoteIo {
+                input: Box::new(|_| {}),
+                resize: Box::new(|_, _| {}),
+            },
+            || {},
+        );
+        let (tx, trx) = mpsc::channel();
+        let (otx, orx) = mpsc::channel();
+        t.set_record_tap(Some(tx));
+        t.set_output_tap(Some(otx));
+        t.feed_replay(b"replayed");
+        t.feed(b"live");
+        assert_eq!(trx.try_iter().count(), 1);
+        assert_eq!(orx.try_iter().count(), 2);
+        assert_eq!(t.input_hidden(), None);
     }
 
     #[test]

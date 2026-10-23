@@ -49,5 +49,5 @@ pub use snapshot::{
     Cell, CellColor, CellFlags, Cursor, CursorShape, Damage, Hyperlink, Modes, RenderSnapshot,
     Underline,
 };
-pub use terminal::{RemoteIo, SpawnOptions, Terminal};
+pub use terminal::{RemoteIo, SpawnOptions, TapEvent, TapKind, Terminal};
 pub use vt::{ColorReport, VtConfig, VtSeq, VtView, MAX_OSC_PAYLOAD};

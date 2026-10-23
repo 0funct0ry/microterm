@@ -482,6 +482,8 @@ impl AppWindow {
         } else {
             for t in &self.tabs {
                 for p in &t.panes {
+                    let term = p.session.as_ref().map(|s| s.term.clone());
+                    host.store_recorders.finish(p.pane, term.as_deref());
                     host.pending.remove(&p.pane);
                 }
             }
@@ -1925,6 +1927,7 @@ impl AppWindow {
             for (pane, term) in &panes {
                 // Finish a running recording while the file is still ours to complete.
                 host.recorders.finish(*pane, term.as_deref());
+                host.store_recorders.finish(*pane, term.as_deref());
                 host.pending.remove(pane);
             }
             host.mux.close_tab(self.mux_window, id).unwrap_or(false)
@@ -1958,6 +1961,7 @@ impl AppWindow {
         {
             let host = mux_host::host(cx);
             host.recorders.finish(pane, term.as_deref());
+            host.store_recorders.finish(pane, term.as_deref());
             host.pending.remove(&pane);
             let _ = host.mux.close_pane(pane);
         }
@@ -2816,6 +2820,12 @@ impl AppWindow {
         }
         if diff.has(mt_config::Effect::Snippets) {
             self.snippets_changed(window, cx);
+        }
+        if diff.has(mt_config::Effect::Recording)
+            && !crate::recording::gate::RecordingGate::of_config(&cfg).enabled
+        {
+            // Gate off: stop and save every running recording (SPEC §10.10.1).
+            crate::recording::ipc::stop_all(&mut crate::recording::ipc::GuiHost(cx));
         }
         self.links = crate::mouse_input::build_links(&cfg);
         self.mouse.link_cache.clear();

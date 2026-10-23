@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **M12.1 — Recording engine and store.** New opt-in `[recording]` config (`enabled = false` by
+  default: no recorder runs and the store is never read or created) and `microterm ctl recording
+  list|show|start|stop|marker|rename|rm|replay`. Recordings are asciicast v2 files in
+  `$XDG_DATA_HOME/microterm/recordings/` (`0700`/`0600`) with a rebuildable JSON sidecar, streamed
+  through `<id>.cast.partial` and flushed every second, so a crash leaves a recording that is
+  recovered and listed at the next `list`. `max_duration_minutes` and `max_size_mb` end a
+  recording; resizes and markers are recorded. `capture_input` records keys, paste, `send-text`
+  and snippet inserts (never snippet secrets); `redact_no_echo` replaces password-prompt input on
+  local panes with one marker. SSH reconnect replays are not recorded twice. `recording.*` IPC
+  methods; exit `10` while disabled, `3` for an unknown recording, `8` for `rm` without `--force`.
 - **M12 — Serial ports.** `microterm serial PORT [--baud N --data-bits 5-8 --parity none|odd|even
   --stop-bits 1|2 --flow none|software|hardware --local-echo --line-ending cr|lf|crlf]` opens a
   serial device in a tab (`microterm serial --list` shows the ports with USB VID:PID and product

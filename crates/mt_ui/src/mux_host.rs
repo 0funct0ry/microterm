@@ -33,6 +33,8 @@ pub struct MuxHost {
     open: HashMap<Id, WindowHandle<AppWindow>>,
     /// `record.start` sessions.
     pub(crate) recorders: Recorders,
+    /// Store recordings (`recording.*`, SPEC §10.10).
+    pub(crate) store_recorders: crate::recording::engine::StoreRecorders,
     /// Path of the IPC socket, exported to panes as `MICROTERM_UNIX_SOCKET`.
     pub(crate) socket: Option<PathBuf>,
     /// SSH domain connections.
@@ -65,6 +67,7 @@ impl MuxHost {
             pending: HashMap::new(),
             open: HashMap::new(),
             recorders: Recorders::default(),
+            store_recorders: Default::default(),
             socket: None,
             ssh: SshHub::default(),
             serial: SerialHub::default(),
@@ -844,6 +847,7 @@ fn kill_pane(cx: &mut App, pane: Id) -> Reply {
     let term = terminal(cx, pane);
     let h = host(cx);
     h.recorders.finish(pane, term.as_deref());
+    h.store_recorders.finish(pane, term.as_deref());
     h.runtime.forget(pane);
     h.pending.remove(&pane);
     let (window, tab, closed) = h
@@ -1571,6 +1575,15 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
             &cx.global::<Settings>().config.clone(),
         )),
         Request::MenuBarList => Ok(crate::menu_bar::current(cx).json()),
+        r @ (Request::RecordingList
+        | Request::RecordingGet(_)
+        | Request::RecordingStart(_)
+        | Request::RecordingStop(_)
+        | Request::RecordingMarker(_)
+        | Request::RecordingRename(_)
+        | Request::RecordingRemove(_)) => {
+            crate::recording::ipc::handle(&mut crate::recording::ipc::GuiHost(cx), r)
+        }
         r @ (Request::SnippetList(_)
         | Request::SnippetGet(_)
         | Request::SnippetExpand(_)

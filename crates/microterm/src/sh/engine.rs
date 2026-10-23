@@ -17,8 +17,8 @@ use super::live::Shared;
 use super::session::{parse_meta, Meta, Session, Switch, META_HELP, META_WORDS};
 use crate::client::Client;
 use crate::ctl::{
-    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, SkillCmd, SnippetCmd, StatusCmd, TabCmd,
-    WindowCmd, WorkspaceCmd,
+    CtlAction, CtlArgs, MenuBarCmd, MenuCmd, PaneCmd, RecordingCmd, SkillCmd, SnippetCmd,
+    StatusCmd, TabCmd, WindowCmd, WorkspaceCmd,
 };
 use crate::ctl_cmd::{self, Ctx};
 use crate::output::{Body, CtlError, Output};
@@ -87,6 +87,7 @@ pub fn readonly_allows(a: &CtlAction) -> bool {
             | CtlAction::Snippet(
                 SnippetCmd::List { .. } | SnippetCmd::Show { .. } | SnippetCmd::Expand { .. }
             )
+            | CtlAction::Recording(RecordingCmd::List | RecordingCmd::Show { .. })
             | CtlAction::Menu(
                 MenuCmd::List
                     | MenuCmd::Show { .. }
@@ -387,6 +388,14 @@ impl Engine {
             CtlAction::Record { input: true, .. } => (
                 "record-input",
                 "record --input also captures keystrokes, including passwords typed in that pane",
+            ),
+            CtlAction::Recording(RecordingCmd::Start { input: true, .. }) => (
+                "recording-input",
+                "recording start --input also captures keystrokes; password prompts on local panes are replaced by a marker, SSH and serial panes are recorded as typed",
+            ),
+            CtlAction::Recording(RecordingCmd::Rm { force: true, .. }) => (
+                "recording-rm",
+                "recording rm deletes the recording and its metadata for good; there is no trash",
             ),
             _ => return,
         };

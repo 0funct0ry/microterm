@@ -30,6 +30,7 @@ pub mod picker_state;
 pub mod platform;
 pub mod pointer_shape;
 pub mod quick_select;
+pub mod recording;
 pub mod search;
 pub mod serial_host;
 pub mod session;
@@ -100,7 +101,7 @@ pub fn run(opts: RunOptions) {
             snippets::library::sync(cx);
             settings::apply_theme(cx);
             settings::install_keymap(cx);
-            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_action(|_: &Quit, cx| recording::ipc::quit(cx));
             cx.set_menus(vec![gpui::Menu {
                 name: "microterm".into(),
                 items: vec![gpui::MenuItem::action("Quit microterm", Quit)],
@@ -110,7 +111,7 @@ pub fn run(opts: RunOptions) {
                 // Closing the last window of a workspace falls back to one that still has
                 // windows (their shells were parked) before quitting.
                 if cx.windows().is_empty() && !mux_host::reopen_parked_workspace(cx) {
-                    cx.quit();
+                    recording::ipc::quit(cx);
                 }
             })
             .detach();

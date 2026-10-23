@@ -166,6 +166,93 @@ EXAMPLES:
     /// prompt value exits 11 and lists every label that still needs one.
     #[command(subcommand)]
     Snippet(SnippetCmd),
+
+    /// Recordings: list, show, start, stop, marker, rename, rm, replay (SPEC §10.10).
+    ///
+    /// Needs `[recording] enabled = true`; while it is off every verb exits 10. Recordings
+    /// are asciicast files in the per-user store. A recording that does not exist exits 3,
+    /// `rm` without --force exits 8.
+    #[command(subcommand)]
+    Recording(RecordingCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RecordingCmd {
+    /// List stored recordings (id, title, duration, size, flags) and running ones.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl recording list
+  microterm ctl recording list --json | jq '.recordings[].id'")]
+    List,
+    /// Show one recording's metadata.
+    Show {
+        /// Recording id (r_YYYYMMDD_HHMMSS_xxxxxx).
+        id: String,
+    },
+    /// Start recording a pane into the store (never the focused pane: --pane or $MICROTERM_PANE).
+    ///
+    /// Output only unless --input is given (or `recording.capture_input = true`). Input
+    /// recording captures keystrokes; with `recording.redact_no_echo` (default) password
+    /// prompts on local panes are replaced by a marker. Prints the new recording id.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl recording start --pane $MICROTERM_PANE
+  microterm ctl recording start --pane 3 --input --title 'deploy run'")]
+    Start {
+        /// Pane to record (default: $MICROTERM_PANE).
+        #[arg(long, value_name = "ID")]
+        pane: Option<u64>,
+        /// Also record keys, pastes and send-text.
+        #[arg(long, conflicts_with = "no_input")]
+        input: bool,
+        /// Do not record input, whatever `recording.capture_input` says.
+        #[arg(long)]
+        no_input: bool,
+        /// Title (default: PROCESS — date time).
+        #[arg(long)]
+        title: Option<String>,
+    },
+    /// Stop a recording and save it (--pane ID, a recording id, or --all).
+    Stop {
+        /// Recording id.
+        #[arg(value_name = "ID", conflicts_with_all = ["pane", "all"])]
+        id: Option<String>,
+        /// Stop the recording of this pane (default: $MICROTERM_PANE).
+        #[arg(long, value_name = "ID", conflicts_with = "all")]
+        pane: Option<u64>,
+        /// Stop every running recording.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Add a marker to a running recording.
+    Marker {
+        /// Pane being recorded (default: $MICROTERM_PANE).
+        #[arg(long, value_name = "ID")]
+        pane: Option<u64>,
+        /// Label (default: "mark N").
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Rename a recording.
+    Rename { id: String, title: String },
+    /// Delete recordings and their metadata. Needs --force.
+    Rm {
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
+        /// Delete without confirmation (exit 8 without it).
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Play a recording into a new tab (same as `ctl replay FILE`).
+    Replay {
+        id: String,
+        /// Playback speed multiplier.
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Open the replay in a new window instead of a new tab.
+        #[arg(long)]
+        new_window: bool,
+    },
 }
 
 /// How an `expand`/`insert` names its snippet and supplies prompt values.

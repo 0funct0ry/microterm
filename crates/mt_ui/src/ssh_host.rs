@@ -230,9 +230,17 @@ fn handle_event(cx: &mut App, domain: DomainId, ev: LinkEvent) {
             let _ = host.mux.set_domain_state(domain, state_of(&s));
             mux_host::notify_windows(cx);
         }
-        LinkEvent::Bytes { pane, bytes, .. } => {
+        LinkEvent::Bytes {
+            pane,
+            bytes,
+            replay,
+        } => {
             if let Some(t) = terminal_of(cx, domain, pane) {
-                t.feed(&bytes);
+                if replay {
+                    t.feed_replay(&bytes);
+                } else {
+                    t.feed(&bytes);
+                }
             }
         }
         LinkEvent::Title { .. } => {} // titles arrive in the byte stream (OSC 2) and in replays
