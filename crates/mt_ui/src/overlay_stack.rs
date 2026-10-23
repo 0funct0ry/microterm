@@ -23,6 +23,8 @@ pub enum OverlayKind {
     MenuConfirm,
     /// Values for a snippet's `input`/`choice`/`secret` tags (SPEC §10.8.5).
     SnippetFill,
+    /// The recordings export dialog (SPEC §10.10.5).
+    ExportDialog,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -52,7 +54,8 @@ impl OverlayKind {
             | Self::SshPrompt
             | Self::WorkspaceDesigner
             | Self::MenuConfirm
-            | Self::SnippetFill => Class::Dialog,
+            | Self::SnippetFill
+            | Self::ExportDialog => Class::Dialog,
         }
     }
 }
@@ -62,7 +65,7 @@ impl OverlayKind {
 pub enum FocusTarget {
     /// No overlay is open: the terminal viewport.
     Viewport,
-    /// The snippets side panel (not an overlay: `overlays.is_empty()` stays true).
+    /// A right side panel, snippets or recordings (not an overlay: `overlays.is_empty()` stays true).
     Panel,
     Overlay(OverlayKind),
 }

@@ -31,6 +31,7 @@ pub mod platform;
 pub mod pointer_shape;
 pub mod quick_select;
 pub mod recording;
+pub mod right_panel;
 pub mod search;
 pub mod serial_host;
 pub mod session;

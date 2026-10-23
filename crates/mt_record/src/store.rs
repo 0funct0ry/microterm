@@ -376,11 +376,71 @@ impl Store {
         Ok(Some(sc))
     }
 
+    /// Sets the sidecar title and the `title` in the cast header (SPEC §10.10.5), so an
+    /// exported or shared copy carries the new name.
     pub fn rename(&self, id: &str, title: &str) -> Result<Sidecar, StoreError> {
         let mut sc = self.load(id)?;
+        self.rewrite_header_title(id, title)?;
         sc.title = title.to_string();
+        sc.size_bytes = fs::metadata(self.cast_path(id)).map_or(sc.size_bytes, |m| m.len());
         self.write_sidecar(&sc)?;
         Ok(sc)
+    }
+
+    fn rewrite_header_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
+        let path = self.cast_path(id);
+        let data = fs::read(&path)?;
+        let nl = data.iter().position(|b| *b == b'\n').unwrap_or(data.len());
+        let mut header: serde_json::Value = serde_json::from_slice(&data[..nl])
+            .map_err(|e| StoreError::Format(format!("bad cast header: {e}")))?;
+        let obj = header
+            .as_object_mut()
+            .ok_or_else(|| StoreError::Format("cast header is not an object".into()))?;
+        obj.insert("title".into(), title.into());
+        let mut out = serde_json::to_vec(&header).map_err(io::Error::from)?;
+        out.extend_from_slice(&data[nl..]);
+        mt_config::atomic::write_bytes_atomic(&path, &out, 0o600)?;
+        Ok(())
+    }
+
+    /// Sum of the `.cast` sizes, for the panel header.
+    pub fn total_size(&self) -> u64 {
+        fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".cast"))
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum()
+    }
+
+    /// Copies an asciicast file into the store with a regenerated sidecar. The file stem is
+    /// kept as the id when it is safe and free, otherwise a fresh id is generated.
+    pub fn import(&self, src: &Path) -> Result<Sidecar, StoreError> {
+        let stem = src
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        self.ensure_dir()?;
+        let id = if valid_id(&stem) && !self.cast_path(&stem).exists() {
+            stem
+        } else {
+            new_id(unix_now())
+        };
+        let dest = self.cast_path(&id);
+        fs::copy(src, &dest)?;
+        match self.sidecar_from_cast(&id) {
+            Ok(sc) => {
+                self.write_sidecar(&sc)?;
+                Ok(sc)
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&dest);
+                Err(e)
+            }
+        }
     }
 
     /// Removes both files. No trash.
@@ -460,6 +520,49 @@ mod tests {
         s.remove("r_a").unwrap();
         assert!(matches!(s.load("r_a"), Err(StoreError::NotFound(_))));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn rename_rewrites_the_cast_header_title() {
+        let d = tmp("rename-header");
+        let s = Store::new(&d);
+        s.ensure_dir().unwrap();
+        fs::write(
+            d.join("r_h.cast"),
+            "{\"version\":2,\"width\":80,\"height\":24}\n[0.5,\"o\",\"hi\"]\n",
+        )
+        .unwrap();
+        s.rename("r_h", "Demo").unwrap();
+        let text = fs::read_to_string(d.join("r_h.cast")).unwrap();
+        assert!(text.lines().next().unwrap().contains("\"title\":\"Demo\""));
+        assert!(text.contains("[0.5,\"o\",\"hi\"]"));
+        assert_eq!(s.load("r_h").unwrap().title, "Demo");
+        // The cast alone now rebuilds the same title.
+        assert_eq!(s.sidecar_from_cast("r_h").unwrap().title, "Demo");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn import_copies_with_a_fresh_sidecar_and_total_size_sums() {
+        let d = tmp("import");
+        let src = tmp("import-src");
+        fs::create_dir_all(&src).unwrap();
+        let s = Store::new(&d);
+        let cast = "{\"version\":2,\"width\":90,\"height\":20}\n[1.0,\"o\",\"x\"]\n";
+        fs::write(src.join("mine.cast"), cast).unwrap();
+        let sc = s.import(&src.join("mine.cast")).unwrap();
+        assert_eq!((sc.id.as_str(), sc.cols), ("mine", 90));
+        assert!(d.join("mine.json").is_file());
+        // The same stem again gets a generated id instead of overwriting.
+        let again = s.import(&src.join("mine.cast")).unwrap();
+        assert!(again.id.starts_with("r_"), "{}", again.id);
+        assert_eq!(s.total_size(), 2 * cast.len() as u64);
+        // A non-cast file is rejected and leaves nothing behind.
+        fs::write(src.join("bad.cast"), "nope").unwrap();
+        assert!(s.import(&src.join("bad.cast")).is_err());
+        assert!(!d.join("bad.cast").exists());
+        let _ = fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&src);
     }
 
     #[test]

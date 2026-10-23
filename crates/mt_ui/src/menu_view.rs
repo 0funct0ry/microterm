@@ -459,6 +459,10 @@ impl AppWindow {
                 self.focus_pane(pane, window, cx);
                 self.toggle_recording(window, cx);
             }
+            Builtin::Recordings => {
+                self.focus_pane(pane, window, cx);
+                self.focus_recordings_panel(window, cx);
+            }
             Builtin::Zoom => self.toggle_zoom_of(pane, window, cx),
             Builtin::Swap(d) => self.swap_pane_of(pane, d, window, cx),
             Builtin::Rotate => self.rotate_panes_of(pane, window, cx),

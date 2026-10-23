@@ -38,11 +38,15 @@ pub fn save_window_size(dir: &Path, width: f32, height: f32) -> std::io::Result<
 
 const UI_FILE: &str = "ui.json";
 
-/// Per-window UI state kept between runs (best effort): the snippets side panel.
+/// Per-window UI state kept between runs (best effort): the right-hand side panels. The
+/// unprefixed keys are the snippets panel (kept for files written before M12.4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct UiState {
     pub panel_open: Option<bool>,
     pub panel_width: Option<f32>,
+    pub recordings_open: Option<bool>,
+    pub recordings_width: Option<f32>,
 }
 
 /// `ui.json`; a missing or corrupt file means defaults.
@@ -71,11 +75,21 @@ mod tests {
         let s = UiState {
             panel_open: Some(true),
             panel_width: Some(333.0),
+            recordings_open: Some(false),
+            recordings_width: Some(410.0),
         };
         save_ui(&d, &s).unwrap();
         assert_eq!(load_ui(&d), s);
         std::fs::write(d.join(UI_FILE), "{ not json").unwrap();
         assert_eq!(load_ui(&d), UiState::default());
+        // A file from before the recordings panel keeps the snippets values.
+        std::fs::write(
+            d.join(UI_FILE),
+            r#"{"panel_open":true,"panel_width":300.0}"#,
+        )
+        .unwrap();
+        let old = load_ui(&d);
+        assert_eq!((old.panel_open, old.recordings_open), (Some(true), None));
         let _ = std::fs::remove_dir_all(d);
     }
 

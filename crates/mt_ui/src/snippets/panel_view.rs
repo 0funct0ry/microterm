@@ -55,7 +55,7 @@ impl Render for Ghost {
     }
 }
 
-fn menu_row(id: &str, label: &str, icon: Option<&str>) -> MenuRow {
+pub(crate) fn menu_row(id: &str, label: &str, icon: Option<&str>) -> MenuRow {
     MenuRow {
         id: id.into(),
         label: label.into(),
@@ -66,7 +66,7 @@ fn menu_row(id: &str, label: &str, icon: Option<&str>) -> MenuRow {
     }
 }
 
-fn separator(id: &str) -> MenuRow {
+pub(crate) fn separator(id: &str) -> MenuRow {
     MenuRow {
         id: id.into(),
         label: String::new(),
@@ -78,7 +78,12 @@ fn separator(id: &str) -> MenuRow {
 }
 
 /// A single-line field: text, selection and caret.
-fn line_field(t: &Theme, edit: &TextEdit, focused: bool, placeholder: &str) -> gpui::Div {
+pub(crate) fn line_field(
+    t: &Theme,
+    edit: &TextEdit,
+    focused: bool,
+    placeholder: &str,
+) -> gpui::Div {
     let text = edit.text();
     let (a, b) = edit.selection().unwrap_or((edit.caret(), edit.caret()));
     let caret_bar = || div().w(px(1.)).h(px(14.)).bg(t.accent);
@@ -1143,7 +1148,7 @@ impl AppWindow {
     }
 }
 
-fn field_box(t: &Theme, focused: bool, inner: gpui::Div) -> gpui::Div {
+pub(crate) fn field_box(t: &Theme, focused: bool, inner: gpui::Div) -> gpui::Div {
     div()
         .flex()
         .items_center()
@@ -1157,7 +1162,7 @@ fn field_box(t: &Theme, focused: bool, inner: gpui::Div) -> gpui::Div {
 }
 
 /// A small on/off switch.
-fn toggle(t: &Theme, on: bool) -> gpui::Div {
+pub(crate) fn toggle(t: &Theme, on: bool) -> gpui::Div {
     div()
         .w(px(28.))
         .h(px(16.))

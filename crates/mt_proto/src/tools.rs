@@ -279,6 +279,63 @@ pub const TOOLS: &[ToolDef] = &[
         },
     },
     ToolDef {
+        name: "microterm_recording_list",
+        description: "List saved recordings (id, title, duration, size, whether input was captured) and the ones still running. Only available while recording is enabled in the config.",
+        method: "recording.list",
+        kind: ToolKind::Call,
+        schema: || obj(json!({}), &[]),
+    },
+    ToolDef {
+        name: "microterm_recording_start",
+        description: "Start recording a pane into the recordings store. Keystrokes are NOT captured unless `input` is true (they can contain passwords). Stop it with microterm_recording_stop.",
+        method: "recording.start",
+        kind: ToolKind::Call,
+        schema: || {
+            obj(
+                json!({
+                    "pane": {"type":"integer","description":"Pane id. Default: the caller's own pane ($MICROTERM_PANE) if the MCP server runs inside one."},
+                    "input": {"type":"boolean","description":"Also capture typed input (default false)"},
+                    "title": {"type":"string"}
+                }),
+                &[],
+            )
+        },
+    },
+    ToolDef {
+        name: "microterm_recording_stop",
+        description: "Stop and save a running recording, by pane or by recording id; `all` stops every running recording.",
+        method: "recording.stop",
+        kind: ToolKind::Call,
+        schema: || {
+            obj(
+                json!({
+                    "pane": {"type":"integer"},
+                    "id": {"type":"string"},
+                    "all": {"type":"boolean"}
+                }),
+                &[],
+            )
+        },
+    },
+    ToolDef {
+        name: "microterm_recording_export",
+        description: "Convert a saved recording with an exporter: `cast` (asciicast, with trim and idle limit) or `vhs` (a VHS .tape of the typed input; needs a recording made with input). Writes `output`, or `<title>.<ext>` in the configured export folder.",
+        method: "recording.export",
+        kind: ToolKind::Call,
+        schema: || {
+            obj(
+                json!({
+                    "id": {"type":"string"},
+                    "format": {"type":"string","description":"Exporter id, e.g. cast or vhs"},
+                    "output": {"type":"string","description":"Destination file"},
+                    "opts": {"type":"object","additionalProperties":{"type":["string","number","boolean"]},"description":"Exporter options, e.g. {\"idle_limit\": 1}"},
+                    "force": {"type":"boolean","description":"Replace an existing output file"}
+                }),
+                &["id", "format"],
+            )
+        },
+    },
+    ToolDef {
         name: "microterm_events_next",
         description: "Long-poll for mux events (command finished, notification, status changed, …). Returns the events seen within `timeout_ms` as a JSON array (possibly empty). The first call starts the subscription; events between calls are buffered.",
         method: "subscribe",
@@ -301,6 +358,11 @@ pub const TOOLS: &[ToolDef] = &[
 /// The snippet tools are listed only while `snippets.enabled = true` (SPEC §12.5).
 pub fn is_snippet_tool(name: &str) -> bool {
     name.starts_with("microterm_snippet_")
+}
+
+/// The recording tools are listed only while `recording.enabled = true` (SPEC §10.10.7).
+pub fn is_recording_tool(name: &str) -> bool {
+    name.starts_with("microterm_recording_")
 }
 
 pub fn find(name: &str) -> Option<&'static ToolDef> {
@@ -355,6 +417,29 @@ fn parse<T: for<'de> Deserialize<'de>>(args: &Value) -> Result<T, String> {
 pub fn request(name: &str, args: &Value, env: CallerEnv) -> Result<Request, String> {
     let def = find(name).ok_or_else(|| format!("unknown tool {name:?}"))?;
     check_keys(def, args)?;
+    #[derive(Deserialize, Default)]
+    struct RecordingStart {
+        pane: Option<u64>,
+        input: Option<bool>,
+        title: Option<String>,
+    }
+    #[derive(Deserialize, Default)]
+    struct RecordingStop {
+        pane: Option<u64>,
+        id: Option<String>,
+        #[serde(default)]
+        all: bool,
+    }
+    #[derive(Deserialize)]
+    struct RecordingExport {
+        id: String,
+        format: String,
+        output: Option<String>,
+        #[serde(default)]
+        opts: std::collections::BTreeMap<String, Value>,
+        #[serde(default)]
+        force: bool,
+    }
     #[derive(Deserialize, Default)]
     struct TabNew {
         title: Option<String>,
@@ -637,6 +722,58 @@ pub fn request(name: &str, args: &Value, env: CallerEnv) -> Result<Request, Stri
                 Request::SnippetExpand(p)
             }
         }
+        "microterm_recording_list" => Request::RecordingList,
+        "microterm_recording_start" => {
+            let a: RecordingStart = parse(args)?;
+            let pane = PaneSel {
+                pane: a.pane,
+                expr: None,
+            }
+            .target(env, false, false)
+            .pane
+            .ok_or("microterm_recording_start needs `pane` (or run inside a microterm pane)")?;
+            Request::RecordingStart(crate::RecordingStartParams {
+                pane,
+                // Typed input can hold secrets, so agents opt in explicitly.
+                input: Some(a.input.unwrap_or(false)),
+                title: a.title,
+            })
+        }
+        "microterm_recording_stop" => {
+            let a: RecordingStop = parse(args)?;
+            if a.pane.is_none() && a.id.is_none() && !a.all {
+                return Err("invalid arguments: give `pane`, `id` or `all`".into());
+            }
+            Request::RecordingStop(crate::RecordingStopParams {
+                pane: a.pane,
+                id: a.id,
+                all: a.all,
+            })
+        }
+        "microterm_recording_export" => {
+            let a: RecordingExport = parse(args)?;
+            let opts = a
+                .opts
+                .into_iter()
+                .map(|(k, v)| {
+                    let v = match v {
+                        Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                    (k, v)
+                })
+                .collect();
+            Request::RecordingExport(crate::RecordingExportParams {
+                id: a.id,
+                format: a.format,
+                output: a.output,
+                cwd: std::env::current_dir()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| ".".into()),
+                opts,
+                force: a.force,
+            })
+        }
         other => return Err(format!("unknown tool {other:?}")),
     })
 }
@@ -796,9 +933,79 @@ mod tests {
                 "microterm_snippet_list",
                 "microterm_snippet_expand",
                 "microterm_snippet_insert",
+                "microterm_recording_list",
+                "microterm_recording_start",
+                "microterm_recording_stop",
+                "microterm_recording_export",
                 "microterm_events_next",
             ]
         );
+    }
+
+    #[test]
+    fn recording_start_never_captures_input_unless_asked() {
+        let env = CallerEnv {
+            pane: Some(7),
+            ..Default::default()
+        };
+        match request("microterm_recording_start", &json!({}), env).unwrap() {
+            Request::RecordingStart(p) => {
+                assert_eq!((p.pane, p.input), (7, Some(false)));
+            }
+            r => panic!("{r:?}"),
+        }
+        match request(
+            "microterm_recording_start",
+            &json!({"pane": 2, "input": true, "title": "t"}),
+            env,
+        )
+        .unwrap()
+        {
+            Request::RecordingStart(p) => {
+                assert_eq!(
+                    (p.pane, p.input, p.title.as_deref()),
+                    (2, Some(true), Some("t"))
+                );
+            }
+            r => panic!("{r:?}"),
+        }
+        assert!(request(
+            "microterm_recording_start",
+            &json!({}),
+            CallerEnv::default()
+        )
+        .is_err());
+        assert!(request("microterm_recording_start", &json!({"match":"x"}), env).is_err());
+    }
+
+    #[test]
+    fn recording_stop_and_export_map_their_arguments() {
+        let env = CallerEnv::default();
+        assert!(request("microterm_recording_stop", &json!({}), env).is_err());
+        match request("microterm_recording_stop", &json!({"all": true}), env).unwrap() {
+            Request::RecordingStop(p) => assert!(p.all),
+            r => panic!("{r:?}"),
+        }
+        match request(
+            "microterm_recording_export",
+            &json!({"id":"r_1","format":"cast","opts":{"idle_limit":1,"strip_input":true,"title":"x"}}),
+            env,
+        )
+        .unwrap()
+        {
+            Request::RecordingExport(p) => {
+                assert_eq!((p.id.as_str(), p.format.as_str()), ("r_1", "cast"));
+                assert!(p.opts.contains(&("idle_limit".into(), "1".into())));
+                assert!(p.opts.contains(&("strip_input".into(), "true".into())));
+                assert!(p.opts.contains(&("title".into(), "x".into())));
+            }
+            r => panic!("{r:?}"),
+        }
+        assert!(request("microterm_recording_export", &json!({"id":"a"}), env).is_err());
+        assert!(matches!(
+            request("microterm_recording_list", &json!({}), env).unwrap(),
+            Request::RecordingList
+        ));
     }
 
     #[test]

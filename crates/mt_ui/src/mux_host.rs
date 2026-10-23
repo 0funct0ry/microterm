@@ -1039,7 +1039,7 @@ fn delete_workspace(cx: &mut App, name: &str, force: bool) -> Reply {
     Ok(json!({}))
 }
 
-fn replay(cx: &mut App, p: &mt_proto::ReplayParams) -> Reply {
+pub(crate) fn replay(cx: &mut App, p: &mt_proto::ReplayParams) -> Reply {
     let file = std::fs::File::open(&p.path)
         .map_err(|e| RpcError::not_found(format!("cannot open {}: {e}", p.path)))?;
     mt_record::Reader::new(std::io::BufReader::new(file))

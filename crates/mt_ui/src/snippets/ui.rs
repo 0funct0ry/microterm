@@ -138,12 +138,27 @@ impl AppWindow {
         self.snippets.panel.open && SnippetsGate::of_config(&self.cfg).enabled
     }
 
+    /// Which side panel owns the right slot (SPEC §10.10.5: one at a time).
+    pub(crate) fn right_panel(&self) -> Option<crate::right_panel::RightPanel> {
+        use crate::right_panel::RightPanel;
+        if self.panel_visible() {
+            Some(RightPanel::Snippets)
+        } else if self.recordings_visible() {
+            Some(RightPanel::Recordings)
+        } else {
+            None
+        }
+    }
+
     /// Where keyboard focus belongs: an overlay, else the panel, else the terminal.
     pub(crate) fn focus_target(&self) -> crate::overlay_stack::FocusTarget {
         use crate::overlay_stack::FocusTarget;
         match self.overlays.top() {
             Some(k) => FocusTarget::Overlay(k),
             None if self.panel_visible() && self.snippets.panel.focused => FocusTarget::Panel,
+            None if self.recordings_visible() && self.recordings.panel.focused => {
+                FocusTarget::Panel
+            }
             None => FocusTarget::Viewport,
         }
     }
@@ -156,6 +171,7 @@ impl AppWindow {
         if self.snippets.panel.toggle() == Toggled::Closed {
             self.snippets.panel.close();
         } else {
+            self.recordings.close_panel();
             self.snippets.panel.reconcile(&library::set(cx));
         }
         self.after_panel_change(window, cx);
@@ -167,6 +183,7 @@ impl AppWindow {
             return;
         }
         self.snippets.panel.focus();
+        self.recordings.close_panel();
         self.snippets.panel.reconcile(&library::set(cx));
         self.after_panel_change(window, cx);
     }
@@ -182,6 +199,8 @@ impl AppWindow {
                 &crate::state::UiState {
                     panel_open: Some(self.snippets.panel.open),
                     panel_width: Some(self.snippets.panel.width),
+                    recordings_open: Some(self.recordings.panel.open),
+                    recordings_width: Some(self.recordings.panel.width),
                 },
             );
         }

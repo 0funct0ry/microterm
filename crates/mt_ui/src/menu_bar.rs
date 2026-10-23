@@ -279,20 +279,27 @@ pub fn build_menu_bar(
     };
     let view = MenuModel {
         title: "View".into(),
-        entries: vec![
-            c.on("Command Palette", "ShowCommandPalette"),
-            Entry::Separator,
-            c.on("Increase Font Size", "IncreaseFontSize"),
-            c.on("Decrease Font Size", "DecreaseFontSize"),
-            c.on("Reset Font Size", "ResetFontSize"),
-            Entry::Separator,
-            c.on("Select Theme…", "SelectTheme"),
-            Entry::Separator,
-            c.on("Toggle Fullscreen", "ToggleFullscreen"),
-            c.item("Toggle Pane Zoom", "TogglePaneZoom", many_panes),
-            Entry::Separator,
-            c.on("Workspace Switcher", "ShowWorkspaceSwitcher"),
-        ],
+        entries: {
+            let mut entries = vec![
+                c.on("Command Palette", "ShowCommandPalette"),
+                Entry::Separator,
+                c.on("Increase Font Size", "IncreaseFontSize"),
+                c.on("Decrease Font Size", "DecreaseFontSize"),
+                c.on("Reset Font Size", "ResetFontSize"),
+                Entry::Separator,
+                c.on("Select Theme…", "SelectTheme"),
+                Entry::Separator,
+                c.on("Toggle Fullscreen", "ToggleFullscreen"),
+                c.item("Toggle Pane Zoom", "TogglePaneZoom", many_panes),
+                Entry::Separator,
+                c.on("Workspace Switcher", "ShowWorkspaceSwitcher"),
+            ];
+            // Hidden while the recording gate is off (SPEC §10.7, §10.10.1).
+            if crate::recording::gate::RecordingGate::of_config(config).enabled {
+                entries.push(c.on("Recordings", "ToggleRecordingsPanel"));
+            }
+            entries
+        },
     };
     let go_to = (1..=9)
         .map(|n| {

@@ -248,6 +248,7 @@ pub enum Builtin {
     RenameTab,
     SaveAsSnippet,
     ToggleRecording,
+    Recordings,
 }
 
 impl Builtin {
@@ -262,6 +263,7 @@ impl Builtin {
             ("viewport", "clear_scrollback") => Builtin::ClearScrollback,
             ("viewport", "save_as_snippet") => Builtin::SaveAsSnippet,
             ("viewport", "toggle_recording") => Builtin::ToggleRecording,
+            ("viewport", "recordings") => Builtin::Recordings,
             ("viewport", "zoom") => Builtin::Zoom,
             ("viewport", "swap_left") => Builtin::Swap(Dir::Left),
             ("viewport", "swap_right") => Builtin::Swap(Dir::Right),
@@ -324,6 +326,7 @@ impl Builtin {
             | Builtin::Search
             | Builtin::SaveAsSnippet
             | Builtin::ToggleRecording
+            | Builtin::Recordings
             | Builtin::CloseOtherTabs
             | Builtin::RenameTab => return None,
         })
@@ -379,7 +382,7 @@ fn builtin_row(b: &'static BuiltinDef, f: &Facts) -> Option<MenuRow> {
     if b.id == "save_as_snippet" && !f.snippets_enabled {
         return None;
     }
-    if b.id == "toggle_recording" && !f.recording_enabled {
+    if matches!(b.id, "toggle_recording" | "recordings") && !f.recording_enabled {
         return None;
     }
     let holds = f.holds(b.when);

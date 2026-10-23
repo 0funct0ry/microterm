@@ -26,6 +26,7 @@ Right-click in a pane's terminal grid. Acts on the pane under the pointer.
 - `search`: Search for selection, enabled when `selection`
 - `save_as_snippet`: Save selection as snippet…, shown when `selection`, chip of `SaveSelectionAsSnippet`
 - `toggle_recording`: Start/Stop recording, chip of `ToggleRecording`
+- `recordings`: Recordings…, chip of `ToggleRecordingsPanel`
 - `clear_scrollback`: Clear scrollback, chip of `ClearScrollback`
 - `panes`: Panes (group)
   - `zoom`: Toggle zoom, chip of `TogglePaneZoom`

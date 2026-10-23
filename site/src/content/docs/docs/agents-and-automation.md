@@ -97,6 +97,17 @@ appear and disappear with the config). Give a value in `vars` for every prompt t
 labels. Snippets that ask for a `secret` are always refused over MCP, so secrets never pass
 through an agent. `insert` needs an explicit pane like `microterm_pane_send_text`.
 
+### Recording tools
+
+While `recording.enabled = true` the server also lists `microterm_recording_list`,
+`microterm_recording_start`, `microterm_recording_stop` and `microterm_recording_export`
+(checked on every `tools/list`, like the snippet tools). `start` records a pane (default: the
+caller's own) **without** capturing typed input unless the call passes `input: true`, because
+keystrokes can contain secrets. `stop` takes a `pane`, a recording `id` or `all`. `export` takes
+an `id`, a `format` (`cast` or `vhs`), an optional `output` path, an `opts` object with the same
+keys as `--opt` and `force`; a recording that cannot be exported in that format fails with exit
+code 12.
+
 ## Security: read this before enabling it
 
 `ctl`, the socket and the MCP server are, by design, remote control of every pane. The only

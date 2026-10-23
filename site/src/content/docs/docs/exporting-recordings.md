@@ -21,6 +21,26 @@ directory). An existing file is never overwritten without `-f`. `--json` prints
 which. Options, ranges and defaults for every format are in
 [Export formats](/docs/reference/export-formats/).
 
+## The export dialog
+
+In the [Recordings panel](/docs/recording-and-replay/#the-recordings-panel) press `⌘E` /
+`Ctrl+E`, click **Export**, pick **Export…** from a row's menu, run `ExportRecording` or click
+**Export…** on the "Saved" toast. The dialog is built from the same exporter registry as
+`ctl recording export`, so it lists every registered format with its own option fields (booleans
+toggle with `Space`, enums with `←` / `→`, numbers and text are typed), validates them with the
+same rules, and starts from the same `[recording.export]` defaults. A format that cannot export
+this recording, such as `vhs` for a recording without input, is shown greyed out with the reason.
+
+The output field defaults to `<title>.<ext>` in `recording.export.output_dir` (your home folder
+when empty) and follows the chosen format until you edit it; **Browse…** opens the system save
+panel. **Open when done** (`recording.export.open_when_done`) opens the file when the export
+finishes. `Enter` exports, `Tab` moves between fields and `Esc` cancels. If the file exists, the
+first `Enter` asks and the second replaces it.
+
+Exports run on a background thread. Each one gets a progress line with a cancel button at the
+bottom of the panel (a cancelled export leaves no partial file), several can run at once, and
+the result is a toast with **Reveal** and **Open**.
+
 ## asciicast (`cast`)
 
 A verified copy of the stored file, optionally transformed: `trim_start` / `trim_end` (seconds

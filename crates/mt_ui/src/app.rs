@@ -261,17 +261,24 @@ pub struct ToastItem {
 }
 
 /// Toast buttons that are not "Open config".
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToastButton {
     OpenPanel,
-    Export,
+    /// Opens the export dialog for this recording id.
+    Export(String),
+    /// Shows a finished export in the file manager.
+    Reveal(std::path::PathBuf),
+    /// Opens a finished export with the default application.
+    Open(std::path::PathBuf),
 }
 
 impl ToastButton {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::OpenPanel => "Open panel",
-            Self::Export => "Export…",
+            Self::Export(_) => "Export…",
+            Self::Reveal(_) => "Reveal",
+            Self::Open(_) => "Open",
         }
     }
 }
@@ -293,6 +300,7 @@ pub struct AppWindow {
     pub(crate) designer: Option<crate::designer::Designer>,
     /// The snippets panel, fill dialog and editor (SPEC §10.8).
     pub(crate) snippets: crate::snippets::ui::SnippetsUi,
+    pub(crate) recordings: crate::recording::panel::RecordingsUi,
     /// Where each designer text field's text was painted, for mouse hit-testing.
     pub(crate) designer_layout: crate::designer_view::FieldLayouts,
     /// The designer field a left-button drag is selecting in.
@@ -417,6 +425,11 @@ impl AppWindow {
             .remove(&mux_window)
             .unwrap_or_default();
         let snippets = crate::snippets::ui::SnippetsUi::new(&cfg, cx.focus_handle());
+        let mut recordings = crate::recording::panel::RecordingsUi::new(&cfg, cx.focus_handle());
+        if snippets.panel.open {
+            // One right panel at a time; the snippets panel wins a tie at startup.
+            recordings.close_panel();
+        }
         let mut this = Self {
             viewport_focus,
             overlay_focus,
@@ -430,6 +443,7 @@ impl AppWindow {
             prompt: None,
             designer: None,
             snippets,
+            recordings,
             designer_layout: Default::default(),
             designer_drag: None,
             last_window_title: String::new(),
@@ -1232,7 +1246,13 @@ impl AppWindow {
     pub(crate) fn sync_focus(&self, window: &mut Window) {
         match self.focus_target() {
             crate::overlay_stack::FocusTarget::Viewport => window.focus(&self.viewport_focus),
-            crate::overlay_stack::FocusTarget::Panel => window.focus(&self.snippets.focus),
+            crate::overlay_stack::FocusTarget::Panel => {
+                if self.recordings_visible() && self.recordings.panel.focused {
+                    window.focus(&self.recordings.focus)
+                } else {
+                    window.focus(&self.snippets.focus)
+                }
+            }
             crate::overlay_stack::FocusTarget::Overlay(_) => window.focus(&self.overlay_focus),
         }
     }
@@ -1294,6 +1314,7 @@ impl AppWindow {
             | OverlayKind::NamePrompt
             | OverlayKind::WorkspaceDesigner
             | OverlayKind::SnippetFill
+            | OverlayKind::ExportDialog
             | OverlayKind::SshPrompt => {}
         }
     }
@@ -1365,6 +1386,7 @@ impl AppWindow {
                 self.snippets.pending = None;
             }
             OverlayKind::SnippetFill => self.snippets.fill = None,
+            OverlayKind::ExportDialog => self.recordings.dialog = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
             OverlayKind::MenuConfirm => self.menu_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
@@ -1551,18 +1573,9 @@ impl AppWindow {
             // The snippet actions are absent while the feature is off (SPEC §10.8.1).
             .filter(|(_, d)| snippets_on || d.category() != "Snippets")
             // Recording rows are absent while the gate is off (SPEC §10.10.1); one row covers
-            // start and stop, and the panel rows wait for M12.4.
+            // start and stop.
             .filter(|(_, d)| recording_on || d.category() != "Recording")
-            .filter(|(_, d)| {
-                !matches!(
-                    d.name,
-                    "StartRecording"
-                        | "StopRecording"
-                        | "ToggleRecordingsPanel"
-                        | "FocusRecordingsPanel"
-                        | "ExportRecording"
-                )
-            })
+            .filter(|(_, d)| !matches!(d.name, "StartRecording" | "StopRecording"))
         {
             let mut e = Entry::new(Target::Action(i), format!("action:{}", def.name));
             e.detail = Some(def.description.to_string());
@@ -2744,6 +2757,7 @@ impl AppWindow {
             Some(OverlayKind::NamePrompt) => self.prompt_key(ev, window, cx),
             Some(OverlayKind::WorkspaceDesigner) => self.designer_key(ev, window, cx),
             Some(OverlayKind::SnippetFill) => self.fill_key(ev, window, cx),
+            Some(OverlayKind::ExportDialog) => self.export_key(ev, window, cx),
             None => {}
         }
     }
@@ -2872,6 +2886,7 @@ impl AppWindow {
             // Gate off: stop and save every running recording (SPEC §10.10.1).
             let done = crate::recording::ipc::stop_all(&mut self.window_host(cx));
             self.report_finished(done, true, cx);
+            self.recordings_gate_changed(window, cx);
         }
         self.links = crate::mouse_input::build_links(&cfg);
         self.mouse.link_cache.clear();

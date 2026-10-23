@@ -118,13 +118,45 @@ are also available as actions.
 - **Tab dot.** Every tab with a recording pane shows a 6 px red dot before its title; the tooltip
   reads `Recording pane 12 — 00:42`. It sits beside the tab color, status dot and badge.
 - **Toasts.** Start, stop ("Saved ‹title› · 00:42 · 1.2 MB" with **Open panel** and **Export…**,
-  which do nothing until the Recordings panel arrives), a reached limit, and "Recording stopped:
-  disabled in config" when you turn the feature off.
+  which open the [Recordings panel](#the-recordings-panel) and the
+  [export dialog](/docs/exporting-recordings/#the-export-dialog)), a reached limit, and
+  "Recording stopped: disabled in config" when you turn the feature off.
 - **One recorder per pane.** Starting a second one on the same pane only shows a toast; other
   panes can record at the same time. Closing the pane or tab saves its recording.
 
 With the default config the key, palette and menu rows are absent or only show "Recording is
 disabled — set `recording.enabled = true`" with an **Open config** button.
+
+### The recordings panel
+
+`⌘⇧Y` / `Ctrl+Shift+Y` (`ToggleRecordingsPanel`), **View ▸ Recordings**, the palette row
+"Toggle recordings panel" and the toast's **Open panel** button open a side panel on the right
+that lists the store. It behaves like the [snippets panel](/docs/snippets/): the first press
+opens it and focuses the search field, a second press with focus elsewhere focuses it, a third
+closes it, and `FocusRecordingsPanel` opens or focuses without ever closing. The right side holds
+one panel at a time: opening Recordings closes Snippets and the other way round. Each remembers
+its own width (drag the left edge; `recording.panel_width`, 280–600) and whether it was open
+(`ui.json`; `recording.panel_open_on_start`). Turning `recording.enabled` off closes it.
+
+The header shows the total size of the store, a record button for the focused pane and a `…` menu
+with **Reveal store folder**, **Import .cast…** (copies a file into the store and rebuilds its
+sidecar) and **Refresh**. The search box ranks recordings by title, origin, command, folder and
+date. Without a query the list is grouped as **Recording now**, **Today**, **Yesterday** and
+**Earlier** (days are UTC, like the ids). A row shows the title, `00:42 · 1.2 MB · 120×34`, the
+age, a pulsing red dot while it is still being recorded and badges: `input`, `input not
+redacted`, `ssh: host`, `serial`, `recovered`.
+
+| Gesture | Effect |
+|---|---|
+| click, `↑` / `↓` | select; the footer shows the date and folder |
+| `Enter`, double-click | replay in a new tab (`⌥Enter` replays at 2×) |
+| `⌘E` / `Ctrl+E`, **Export** | open the [export dialog](/docs/exporting-recordings/#the-export-dialog) |
+| `F2` | rename in place; writes the sidecar title and the title in the `.cast` header |
+| `Delete`, `Backspace` on an empty search | delete after a confirmation (`recording.confirm_delete = false` skips it) |
+| right-click | Replay, Replay at 2×, Export…, Rename, Copy path, Reveal in Finder / file manager, Delete… |
+
+A running recording offers only **Stop**: it cannot be replayed, renamed, exported or deleted
+until it is saved. `Esc` clears the search, then returns focus to the terminal.
 
 ### Limits
 

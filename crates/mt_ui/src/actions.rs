@@ -75,7 +75,7 @@ actions!(
         SaveSelectionAsSnippet,
         SaveLastCommandAsSnippet,
         OpenSnippetsFile,
-        // Recording mode (M12.2); the panel and export actions are stubs until M12.4.
+        // Recording mode (M12.2) and the recordings panel and export dialog (M12.4).
         ToggleRecording,
         StartRecording,
         StopRecording,
@@ -1044,7 +1044,7 @@ pub static ACTIONS: &[ActionDef] = &[
     def!(
         "ToggleRecordingsPanel",
         "Toggle recordings panel",
-        "Open the recordings side panel (arrives with M12.4)",
+        "Open the recordings side panel; press again to focus it, and again to close it",
         &["cmd-shift-y"],
         &["ctrl-shift-y"],
         ToggleRecordingsPanel
@@ -1052,7 +1052,7 @@ pub static ACTIONS: &[ActionDef] = &[
     def!(
         "FocusRecordingsPanel",
         "Focus recordings panel",
-        "Move keyboard focus to the recordings panel (arrives with M12.4)",
+        "Open the recordings side panel if needed and move keyboard focus to it",
         &[],
         &[],
         FocusRecordingsPanel
@@ -1060,7 +1060,7 @@ pub static ACTIONS: &[ActionDef] = &[
     def!(
         "ExportRecording",
         "Export recording",
-        "Open the export dialog for the selected recording (arrives with M12.4)",
+        "Open the export dialog for the selected recording",
         &[],
         &[],
         ExportRecording

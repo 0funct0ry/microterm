@@ -168,9 +168,9 @@ action = "Disable"   # unbind a default
 | `StartRecording` | **Start recording** — Start recording the focused pane | — | — |
 | `StopRecording` | **Stop recording** — Stop and save the focused pane's recording | — | — |
 | `RecordingMarker` | **Add recording marker** — Add a marker to the focused pane's recording | — | — |
-| `ToggleRecordingsPanel` | **Toggle recordings panel** — Open the recordings side panel (arrives with M12.4) | `⌘⇧Y` | `Ctrl+Shift+Y` |
-| `FocusRecordingsPanel` | **Focus recordings panel** — Move keyboard focus to the recordings panel (arrives with M12.4) | — | — |
-| `ExportRecording` | **Export recording** — Open the export dialog for the selected recording (arrives with M12.4) | — | — |
+| `ToggleRecordingsPanel` | **Toggle recordings panel** — Open the recordings side panel; press again to focus it, and again to close it | `⌘⇧Y` | `Ctrl+Shift+Y` |
+| `FocusRecordingsPanel` | **Focus recordings panel** — Open the recordings side panel if needed and move keyboard focus to it | — | — |
+| `ExportRecording` | **Export recording** — Open the export dialog for the selected recording | — | — |
 
 ## Serial
 

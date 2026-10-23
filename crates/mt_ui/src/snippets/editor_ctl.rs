@@ -39,6 +39,7 @@ impl AppWindow {
         self.snippets.editor = Some(Editor::open(snippet, id, base));
         self.snippets.preview = None;
         self.snippets.panel.focus();
+        self.recordings.close_panel();
         self.after_panel_change(window, cx);
         self.schedule_preview(cx);
     }
@@ -49,6 +50,7 @@ impl AppWindow {
         }
         if self.snippets.editor.is_some() {
             self.snippets.panel.focus();
+            self.recordings.close_panel();
             self.after_panel_change(window, cx);
             return;
         }
@@ -447,6 +449,9 @@ impl AppWindow {
         use crate::designer_view::Clip;
         if self.focus_target() != crate::overlay_stack::FocusTarget::Panel {
             return false;
+        }
+        if !self.panel_visible() {
+            return self.recordings_clipboard(clip, cx);
         }
         let paste = || cx.read_from_clipboard().and_then(|i| i.text());
         if let Some(ed) = self.snippets.editor.as_mut() {

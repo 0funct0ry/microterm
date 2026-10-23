@@ -68,7 +68,11 @@ impl Render for AppWindow {
             root = root.child(self.tab_bar(cx));
         }
         let viewport = self.viewport(&t, window, cx);
-        let side_panel = self.snippets_panel(&t, cx);
+        let side_panel = match self.right_panel() {
+            Some(crate::right_panel::RightPanel::Snippets) => self.snippets_panel(&t, cx),
+            Some(crate::right_panel::RightPanel::Recordings) => self.recordings_panel(&t, cx),
+            None => None,
+        };
         root = root.child(
             div()
                 .flex()
@@ -96,6 +100,12 @@ impl Render for AppWindow {
         }
         if let Some(m) = self.fill_modal(&t, cx) {
             root = root.child(m);
+        }
+        if let Some(m) = self.export_modal(&t, cx) {
+            root = root.child(m);
+        }
+        if let Some(menu) = self.render_recording_menu(cx) {
+            root = root.child(menu);
         }
         if let Some(tip) = self.link_tooltip(&t) {
             root = root.child(tip);
@@ -325,13 +335,15 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &StartRecording, w, cx| this.start_recording(w, cx)))
             .on_action(cx.listener(|this, _: &StopRecording, w, cx| this.stop_recording(w, cx)))
             .on_action(cx.listener(|this, _: &RecordingMarker, w, cx| this.recording_marker(w, cx)))
+            .on_action(cx.listener(|this, _: &ToggleRecordingsPanel, w, cx| {
+                this.toggle_recordings_panel(w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FocusRecordingsPanel, w, cx| {
+                this.focus_recordings_panel(w, cx)
+            }))
             .on_action(
-                cx.listener(|this, _: &ToggleRecordingsPanel, w, cx| this.recording_stub(w, cx)),
+                cx.listener(|this, _: &ExportRecording, w, cx| this.export_recording(None, w, cx)),
             )
-            .on_action(
-                cx.listener(|this, _: &FocusRecordingsPanel, w, cx| this.recording_stub(w, cx)),
-            )
-            .on_action(cx.listener(|this, _: &ExportRecording, w, cx| this.recording_stub(w, cx)))
             .on_action(cx.listener(|this, _: &NewSnippet, w, cx| this.new_snippet(w, cx)))
             .on_action(cx.listener(|this, _: &SaveSelectionAsSnippet, w, cx| {
                 this.save_selection_as_snippet(w, cx)
@@ -1745,11 +1757,14 @@ impl AppWindow {
             .gap_2()
             .children(self.toasts.iter().map(|toast| {
                 let mut t = Toast::new(toast.kind, toast.text.clone());
-                for (i, b) in toast.buttons.iter().copied().enumerate() {
+                for (i, b) in toast.buttons.iter().cloned().enumerate() {
+                    let label = b.label();
                     t = t.action(
                         ("toast-button", toast.id as usize * 8 + i),
-                        b.label(),
-                        cx.listener(move |this, _: &ClickEvent, w, cx| this.recording_stub(w, cx)),
+                        label,
+                        cx.listener(move |this, _: &ClickEvent, w, cx| {
+                            this.toast_button(b.clone(), w, cx)
+                        }),
                     );
                 }
                 if toast.open_config {

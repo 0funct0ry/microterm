@@ -467,6 +467,8 @@ const VIEWPORT_BUILTINS: &[BuiltinDef] = &[
         "Start/Stop recording",
         Some("ToggleRecording"),
     ),
+    // Hidden while `recording.enabled = false` (SPEC §10.10.5).
+    b("recordings", "Recordings…", Some("ToggleRecordingsPanel")),
     b(
         "clear_scrollback",
         "Clear scrollback",

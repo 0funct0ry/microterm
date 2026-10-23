@@ -260,18 +260,6 @@ impl AppWindow {
         }
     }
 
-    /// Panel and export actions arrive with M12.4; until then they only explain themselves.
-    pub(crate) fn recording_stub(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.recording_guard(cx) {
-            return;
-        }
-        self.toast(
-            ToastKind::Info,
-            "The recordings panel and export arrive in a later release",
-            cx,
-        );
-    }
-
     fn recording_error(&mut self, e: RpcError, cx: &mut Context<Self>) {
         self.toast(
             ToastKind::Error,
@@ -280,10 +268,11 @@ impl AppWindow {
         );
     }
 
-    fn toast_saved(&mut self, s: &Sidecar, cx: &mut Context<Self>) {
+    pub(crate) fn toast_saved(&mut self, s: &Sidecar, cx: &mut Context<Self>) {
         self.toast(ToastKind::Success, saved_text(s), cx);
+        self.recordings_changed(Some(s.id.clone()), cx);
         if let Some(t) = self.toasts.last_mut() {
-            t.buttons = vec![ToastButton::OpenPanel, ToastButton::Export];
+            t.buttons = vec![ToastButton::OpenPanel, ToastButton::Export(s.id.clone())];
         }
     }
 

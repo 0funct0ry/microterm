@@ -152,14 +152,20 @@ impl Server {
 
 impl Server {
     /// The tools to list. The snippet tools appear only while `snippets.enabled = true`, which
-    /// `snippet.list` answers (SPEC §12.5); no instance or a `disabled` error hides them.
+    /// `snippet.list` answers (SPEC §12.5), and the recording tools only while
+    /// `recording.enabled = true` (`recording.list`, SPEC §10.10.7); no instance or a `disabled`
+    /// error hides them.
     fn tool_list(&mut self) -> Vec<Value> {
         let snippets_on = (self.connect)()
             .and_then(|mut c| c.call(&Request::SnippetList(Default::default())))
             .is_ok();
+        let recording_on = (self.connect)()
+            .and_then(|mut c| c.call(&Request::RecordingList))
+            .is_ok();
         tools::TOOLS
             .iter()
             .filter(|t| snippets_on || !tools::is_snippet_tool(t.name))
+            .filter(|t| recording_on || !tools::is_recording_tool(t.name))
             .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema()}))
             .collect()
     }
@@ -234,8 +240,11 @@ mod tests {
             json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}),
         );
         let tools = l["result"]["tools"].as_array().unwrap();
-        // No instance answers `snippet.list`, so the snippet tools are not offered.
-        assert_eq!(tools.len(), mt_proto::tools::TOOLS.len() - 3);
+        // No instance answers `snippet.list` or `recording.list`, so those tools are not offered.
+        assert_eq!(tools.len(), mt_proto::tools::TOOLS.len() - 3 - 4);
+        assert!(!tools.iter().any(|t| t["name"]
+            .as_str()
+            .is_some_and(mt_proto::tools::is_recording_tool)));
         assert!(!tools.iter().any(|t| t["name"]
             .as_str()
             .is_some_and(mt_proto::tools::is_snippet_tool)));

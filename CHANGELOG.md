@@ -6,6 +6,17 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.4 — Recordings panel and export dialog.** With `recording.enabled = true`, `⌘⇧Y` /
+  `Ctrl+Shift+Y` (`ToggleRecordingsPanel`, also View ▸ Recordings and the palette) opens a right
+  side panel listing the store: search, groups (Recording now / Today / Yesterday / Earlier),
+  badges, replay (`Enter`, double-click, 2×), inline rename (`F2`, also rewrites the `.cast`
+  title), delete with confirmation, copy path, reveal, import `.cast`, and Stop for the running
+  row. The right side now holds one panel at a time (Snippets or Recordings), each with its own
+  width and open state in `ui.json`. The export dialog (`ExportRecording`, the panel's Export
+  button and the saved-recording toast) is generated from the exporter registry, disables formats
+  that do not fit with the reason, runs exports in the background with progress, cancel and a
+  Reveal / Open toast. New "Recordings…" pane context-menu item (`recordings`) and MCP tools
+  `microterm_recording_list|start|stop|export`. The M12.2 toast buttons are now live.
 - **M12.3 — Exporter framework, asciicast and VHS.** New `mt_export` crate with a static registry
   of exporters (typed, validated options shared by GUI and CLI). `cast` exports a verified copy or
   a trimmed / idle-limited / input-stripped asciicast; `vhs` writes a VHS `.tape` from recorded
