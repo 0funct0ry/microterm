@@ -692,6 +692,21 @@ impl Terminal {
         self.shared.drain()
     }
 
+    /// A byte stream that, fed to a fresh emulator of the same size, redraws the visible screen
+    /// (and at most `max_history` scrollback rows), cursor, modes and title (SPEC D6). Recordings
+    /// start with it so they do not begin blank.
+    pub fn replay_bytes(&self, max_history: usize) -> Vec<u8> {
+        let term = self.term.lock();
+        crate::replay::synthesize(
+            &term,
+            self.shared.title().as_deref(),
+            self.sgr_pixels.load(Ordering::Relaxed),
+            max_history,
+            &self.tracker(),
+            &self.shared.vt.lock().unwrap(),
+        )
+    }
+
     /// Copies the visible rows; the terminal lock is held only for the copy.
     pub fn snapshot(&self) -> RenderSnapshot {
         let mut term = self.term.lock();

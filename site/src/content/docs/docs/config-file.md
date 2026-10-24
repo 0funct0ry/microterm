@@ -138,12 +138,12 @@ output_dir = ""
 open_when_done = false
 strip_input = true
 gif_fps = 10                     # 1-30
-gif_idle_limit = 2.0
-gif_font_size = 14
-gif_scale = 1.0                  # 0.25-2.0
-gif_chrome = "plain"             # "none" | "plain" | "macos"
-gif_end_pause = 2.0
-gif_max_size_mb = 50
+gif_idle_limit = 2.0             # seconds; longer pauses are shortened (0 = off)
+gif_font_size = 16               # px, before gif_scale
+gif_scale = 2.0                  # 0.25-3.0 (2 = sharp on Retina)
+gif_chrome = "macos"             # "none" | "plain" | "macos"
+gif_end_pause = 2.0              # seconds on the last frame
+gif_max_size_mb = 50             # abort a GIF export that would be larger
 vhs_type_gap_ms = 150            # keys closer than this become one Type
 vhs_min_sleep_ms = 400           # shorter gaps emit no Sleep
 vhs_sleep_cap_ms = 3000          # longest Sleep emitted

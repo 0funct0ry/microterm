@@ -24,6 +24,10 @@ pub trait RecordingHost {
     fn domain_kind(&mut self, pane: u64) -> Option<DomainKind>;
     /// `(theme name, font family)` at start; empty where the host has no GUI.
     fn theme_font(&mut self) -> (String, String);
+    /// Bundled plus user themes for the `gif` exporter; `None` = bundled only.
+    fn themes(&self) -> Option<Arc<mt_theme::Registry>> {
+        None
+    }
 }
 
 pub fn store_error(e: StoreError) -> RpcError {
@@ -203,7 +207,7 @@ pub fn handle(h: &mut dyn RecordingHost, request: Request) -> Result<Value, RpcE
             Ok(json!({"removed": p.ids}))
         }
         Request::RecordingFormats => Ok(mt_export::formats_json()),
-        Request::RecordingExport(p) => export(&cfg, p),
+        Request::RecordingExport(p) => export(&cfg, h.themes(), p),
         _ => Err(RpcError::bad_request("not a recording request")),
     }
 }
@@ -211,7 +215,11 @@ pub fn handle(h: &mut dyn RecordingHost, request: Request) -> Result<Value, RpcE
 /// `recording.export`: runs the exporter to completion and returns the report. Text formats
 /// finish in milliseconds, so there is no job yet; the GUI panel (M12.4) will move this onto a
 /// worker thread with `export.progress` events.
-fn export(cfg: &Config, p: mt_proto::RecordingExportParams) -> Result<Value, RpcError> {
+fn export(
+    cfg: &Config,
+    themes: Option<Arc<mt_theme::Registry>>,
+    p: mt_proto::RecordingExportParams,
+) -> Result<Value, RpcError> {
     let exporter = mt_export::find(&p.format).ok_or_else(|| {
         let ids: Vec<_> = mt_export::registry().iter().map(|e| e.id()).collect();
         RpcError::export_impossible(format!(
@@ -242,7 +250,10 @@ fn export(cfg: &Config, p: mt_proto::RecordingExportParams) -> Result<Value, Rpc
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
         opts.set("output", mt_export::OptValue::Text(format!("{stem}.gif")));
     }
-    let rec = mt_export::Recording::new(sidecar, st.cast_path(&p.id));
+    let mut rec = mt_export::Recording::new(sidecar, st.cast_path(&p.id));
+    if let Some(t) = themes {
+        rec = rec.with_themes(t);
+    }
     let report = mt_export::export_to_path(
         exporter,
         &rec,
@@ -259,6 +270,7 @@ fn export(cfg: &Config, p: mt_proto::RecordingExportParams) -> Result<Value, Rpc
         "report": {
             "lines": report.lines,
             "dropped": report.dropped,
+            "fallback_cells": report.fallback_cells,
             "warnings": report.warnings,
         },
     }))
@@ -279,6 +291,14 @@ pub struct GuiHost<'a>(pub &'a mut gpui::App);
 impl RecordingHost for GuiHost<'_> {
     fn config(&self) -> Arc<Config> {
         self.0.global::<crate::settings::Settings>().config.clone()
+    }
+    fn themes(&self) -> Option<Arc<mt_theme::Registry>> {
+        Some(
+            self.0
+                .global::<crate::settings::Settings>()
+                .registry
+                .clone(),
+        )
     }
     fn rows(&mut self) -> Rows {
         crate::mux_host::rows(self.0)

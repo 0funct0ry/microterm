@@ -1,8 +1,10 @@
 //! Recording exporters (SPEC §10.10.6, D13): small pure converters from a stored recording to
-//! one output file, found through a static registry. No GPUI, no terminal engine, no processes.
+//! one output file, found through a static registry. No GPUI, no processes; `gif` replays
+//! through the headless `mt_term` emulator.
 
 mod cast;
 pub mod docs;
+mod gif;
 mod options;
 mod vhs;
 
@@ -11,6 +13,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use mt_record::{Event, Header, Reader, Sidecar};
 
@@ -79,6 +82,8 @@ pub struct ExportReport {
     pub lines: u64,
     /// Dropped byte classes and how many times each occurred.
     pub dropped: BTreeMap<String, u64>,
+    /// `gif`: most cells drawn as a fallback box in one frame.
+    pub fallback_cells: u64,
     pub warnings: Vec<String>,
 }
 
@@ -86,6 +91,8 @@ pub struct ExportReport {
 pub struct Recording {
     pub sidecar: Sidecar,
     pub path: PathBuf,
+    /// Themes `gif` resolves names against (bundled plus user themes); `None` = bundled only.
+    pub themes: Option<Arc<mt_theme::Registry>>,
 }
 
 impl Recording {
@@ -93,7 +100,13 @@ impl Recording {
         Self {
             sidecar,
             path: path.into(),
+            themes: None,
         }
+    }
+
+    pub fn with_themes(mut self, themes: Arc<mt_theme::Registry>) -> Self {
+        self.themes = Some(themes);
+        self
     }
 
     pub fn reader(&self) -> Result<Reader<BufReader<File>>, ExportError> {
@@ -125,7 +138,7 @@ pub trait Exporter: Send + Sync {
     ) -> Result<ExportReport, ExportError>;
 }
 
-static REGISTRY: [&dyn Exporter; 2] = [&cast::Cast, &vhs::Vhs];
+static REGISTRY: [&dyn Exporter; 3] = [&cast::Cast, &vhs::Vhs, &gif::Gif];
 
 pub fn registry() -> &'static [&'static dyn Exporter] {
     &REGISTRY
@@ -151,6 +164,16 @@ pub fn default_options(exporter: &dyn Exporter, cfg: &mt_config::RecordingExport
             o.set("type_gap_ms", ms(cfg.vhs_type_gap_ms));
             o.set("min_sleep_ms", ms(cfg.vhs_min_sleep_ms));
             o.set("sleep_cap_ms", ms(cfg.vhs_sleep_cap_ms));
+        }
+        "gif" => {
+            let secs = |v: f32| OptValue::Float(f64::from(v));
+            o.set("fps", ms(cfg.gif_fps));
+            o.set("idle_limit", secs(cfg.gif_idle_limit));
+            o.set("font_size", ms(cfg.gif_font_size));
+            o.set("scale", secs(cfg.gif_scale));
+            o.set("chrome", OptValue::Text(cfg.gif_chrome.clone()));
+            o.set("end_pause", secs(cfg.gif_end_pause));
+            o.set("max_size_mb", ms(cfg.gif_max_size_mb));
         }
         _ => {}
     }
@@ -283,9 +306,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_lists_cast_and_vhs() {
+    fn registry_lists_cast_vhs_and_gif() {
         let ids: Vec<_> = registry().iter().map(|e| e.id()).collect();
-        assert_eq!(ids, ["cast", "vhs"]);
+        assert_eq!(ids, ["cast", "vhs", "gif"]);
         assert!(find("vhs").is_some());
         assert!(find("nope").is_none());
         assert_eq!(find("vhs").unwrap().requires(), Requires::INPUT);

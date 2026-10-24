@@ -1332,6 +1332,14 @@ impl AppWindow {
         if self.overlays.top() == Some(OverlayKind::WorkspaceDesigner) && self.designer_escape(cx) {
             return;
         }
+        // The export dialog's theme list is a sheet over it: Esc closes the sheet first.
+        if self.overlays.top() == Some(OverlayKind::ExportDialog) {
+            if let Some(d) = self.recordings.dialog.as_mut().filter(|d| d.theme_open) {
+                d.theme_open = false;
+                cx.notify();
+                return;
+            }
+        }
         if let Some(kind) = self.overlays.dismiss_top() {
             self.teardown(kind, true, cx);
         }

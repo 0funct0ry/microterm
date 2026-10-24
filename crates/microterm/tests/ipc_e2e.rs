@@ -3172,7 +3172,7 @@ fn recording_export_cast_vhs_and_exit_12() {
         12
     );
     assert_eq!(
-        i.ctl_code(&["recording", "export", a, "--format", "gif", "-o", n]),
+        i.ctl_code(&["recording", "export", a, "--format", "svg", "-o", n]),
         12
     );
     assert_eq!(

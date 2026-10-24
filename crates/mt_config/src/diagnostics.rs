@@ -924,10 +924,10 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
             "recording.export.gif_fps must be between 1 and 30".into(),
         );
     }
-    if !(0.25..=2.0).contains(&c.recording.export.gif_scale) {
+    if !(0.25..=3.0).contains(&c.recording.export.gif_scale) {
         err(
             &["recording", "export", "gif_scale"],
-            "recording.export.gif_scale must be between 0.25 and 2.0".into(),
+            "recording.export.gif_scale must be between 0.25 and 3.0".into(),
         );
     }
     if c.recording.export.gif_idle_limit.is_nan() || c.recording.export.gif_idle_limit < 0.0 {

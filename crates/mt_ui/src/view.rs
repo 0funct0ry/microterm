@@ -210,9 +210,7 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, _: &SpawnWindow, _, cx| this.on_action_spawn_window(cx)))
             .on_action(cx.listener(|_, _: &ToggleFullscreen, window, _| window.toggle_fullscreen()))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
-                if this.designer_clipboard(Clip::Copy, cx)
-                    || this.snippets_clipboard(Clip::Copy, cx)
-                {
+                if this.text_clipboard(Clip::Copy, cx) {
                     return;
                 }
                 if !this.copy_selection(cx) {
@@ -220,24 +218,18 @@ impl Render for AppWindow {
                 }
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
-                if !this.designer_clipboard(Clip::SelectAll, cx)
-                    && !this.snippets_clipboard(Clip::SelectAll, cx)
-                {
+                if !this.text_clipboard(Clip::SelectAll, cx) {
                     this.select_all(cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &SearchSelection, w, cx| this.search_selection(w, cx)))
             .on_action(cx.listener(|this, _: &Paste, w, cx| {
-                if !this.designer_clipboard(Clip::Paste, cx)
-                    && !this.snippets_clipboard(Clip::Paste, cx)
-                {
+                if !this.text_clipboard(Clip::Paste, cx) {
                     this.paste(w, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &PastePrimary, w, cx| {
-                if !this.designer_clipboard(Clip::Paste, cx)
-                    && !this.snippets_clipboard(Clip::Paste, cx)
-                {
+                if !this.text_clipboard(Clip::Paste, cx) {
                     this.paste_primary(w, cx)
                 }
             }))

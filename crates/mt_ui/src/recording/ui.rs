@@ -82,6 +82,14 @@ impl RecordingHost for WindowHost<'_> {
             .config
             .clone()
     }
+    fn themes(&self) -> Option<std::sync::Arc<mt_theme::Registry>> {
+        Some(
+            self.app
+                .global::<crate::settings::Settings>()
+                .registry
+                .clone(),
+        )
+    }
     fn rows(&mut self) -> mt_mux::ctl::Rows {
         let terms = self.terms.clone();
         let leased = crate::mux_host::Leased {

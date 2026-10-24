@@ -212,6 +212,15 @@ impl StoreRecorders {
         };
         let (tx, rx) = mpsc::channel();
         let t0 = Instant::now();
+        // The pane already shows a prompt and maybe more: seed the recording with the visible
+        // screen as its first event, so replays and exports do not start blank.
+        let seed = term.replay_bytes(0);
+        if !seed.is_empty() {
+            let _ = tx.send(TapEvent {
+                at: t0,
+                kind: TapKind::Output(seed),
+            });
+        }
         let (capture, redact) = (opts.input, opts.redact_no_echo);
         let handle = std::thread::Builder::new()
             .name("microterm-recording".into())
@@ -361,6 +370,8 @@ mod tests {
         assert!(sc.markers.iter().any(|m| m.label == "here"));
         let text = cast(&s, &sc.id);
         assert!(text.contains("typed-7") && text.contains("\"i\""));
+        // What was on screen before recording started is the first event.
+        assert!(text.contains("ready-2"), "{text}");
         assert!(r.stop(7, Some(&t)).is_err());
         let _ = fs::remove_dir_all(s.dir());
     }

@@ -120,7 +120,7 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl recording marker` — Add a marker to a running recording
 - `microterm ctl recording rename` — Rename a recording
 - `microterm ctl recording rm` — Delete recordings and their metadata. Needs --force
-- `microterm ctl recording export` — Export a recording to another format (cast, vhs)
+- `microterm ctl recording export` — Export a recording to another format (cast, vhs, gif)
 - `microterm ctl recording replay` — Play a recording into a new tab (same as `ctl replay FILE`)
 
 Run `microterm ctl <resource> <verb> --help` for flags.

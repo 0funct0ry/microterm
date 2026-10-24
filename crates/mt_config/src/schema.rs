@@ -730,7 +730,7 @@ pub struct RecordingExport {
     /// Seconds; pauses are shortened to this (0 = off).
     pub gif_idle_limit: f32,
     pub gif_font_size: u32,
-    /// 0.25-2.0.
+    /// 0.25-3.0.
     pub gif_scale: f32,
     /// `"none"`, `"plain"` or `"macos"`.
     pub gif_chrome: String,
@@ -755,9 +755,9 @@ impl Default for RecordingExport {
             strip_input: true,
             gif_fps: 10,
             gif_idle_limit: 2.0,
-            gif_font_size: 14,
-            gif_scale: 1.0,
-            gif_chrome: "plain".into(),
+            gif_font_size: 16,
+            gif_scale: 2.0,
+            gif_chrome: "macos".into(),
             gif_end_pause: 2.0,
             gif_max_size_mb: 50,
             vhs_type_gap_ms: 150,

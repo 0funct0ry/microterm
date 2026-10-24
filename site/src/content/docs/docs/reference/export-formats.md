@@ -30,3 +30,30 @@ Default extension: `.tape`. Needs a recording made with input (`capture_input` o
 | `sleep_cap_ms` | int 0–600000 | `3000` | Longest Sleep emitted |
 | `font_size` | int 6–96 | `14` | Set FontSize in the tape header |
 | `output` | text | `demo.gif` | Name of the file the tape asks VHS to write |
+
+## `gif` — Animated GIF (.gif)
+
+Default extension: `.gif`.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `title` | text | `` | Text in the window's title bar (empty = the recording's name) |
+| `theme` | text | `` | Colour scheme of the terminal (default: the one the recording was made with) |
+| `chrome` | none \| plain \| macos | `macos` | none, plain (rounded border and title) or macos (plus traffic lights) |
+| `margin_fill` | text | `` | Backdrop colour as #rrggbb (empty = a shade of the theme background) |
+| `margin` | int 0–200 | `32` | Backdrop around the window (0 = none, corners transparent) |
+| `padding` | int 0–64 | `16` | Space around the grid |
+| `scale` | float 0.25–3 | `2` | Multiplies every pixel size (2 = sharp on Retina screens) |
+| `shadow` | bool | `true` | Soft drop shadow under the window (needs a margin) |
+| `font_size` | int 6–48 | `16` | Terminal font size before scaling |
+| `line_height` | float 0.8–2 | `1.1` | Multiplies the font's line height |
+| `fps` | int 1–30 | `10` | Sampling rate of the replay |
+| `speed` | float 0.1–10 | `1` | Playback speed (2 = twice as fast) |
+| `idle_limit` | float 0–1000000 | `2` | Shorten pauses to this many seconds (0 = off) |
+| `end_pause` | float 0–60 | `2` | How long the last frame stays |
+| `trim_start` | float 0–1000000 | `0` | Skip this many seconds from the start |
+| `trim_end` | float 0–1000000 | `0` | Drop this many seconds from the end |
+| `loop` | int 0–1000 | `0` | How many times the GIF plays (0 = forever) |
+| `max_size_mb` | int 1–1000 | `50` | Abort instead of writing a larger file |
+| `cursor` | bool | `true` | Draw the cursor |
+| `crop` | bool | `true` | Show only the part of the terminal the recording uses, so the text fills the picture (off = the whole recorded window) |

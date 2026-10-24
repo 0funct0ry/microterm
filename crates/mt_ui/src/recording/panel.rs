@@ -2,7 +2,7 @@
 //! focus state machine, row actions, import, and the export dialog and its jobs. Rendering is
 //! in [`super::panel_view`]; the pure list logic is in [`super::panel_state`].
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use gpui::{Context, FocusHandle, KeyDownEvent, Window};
@@ -47,7 +47,19 @@ pub struct RecordingsUi {
     pub job_seq: u64,
     /// The most recent recording saved in this window, for `ExportRecording` without a selection.
     pub last_saved: Option<String>,
+    /// Shaped text of the export dialog's text fields (by focus index), measured at paint time
+    /// so a click or drag can be turned into a caret position.
+    pub field_layout: ExportLayouts,
+    /// The export field a mouse drag started in.
+    pub field_drag: Option<usize>,
 }
+
+/// Focus index to the field's bounds and shaped line.
+pub type ExportLayouts = std::rc::Rc<
+    std::cell::RefCell<
+        std::collections::HashMap<usize, (gpui::Bounds<gpui::Pixels>, gpui::ShapedLine)>,
+    >,
+>;
 
 impl RecordingsUi {
     pub fn new(cfg: &mt_config::Config, focus: FocusHandle) -> Self {
@@ -82,6 +94,8 @@ impl RecordingsUi {
             jobs: Vec::new(),
             job_seq: 0,
             last_saved: None,
+            field_layout: Default::default(),
+            field_drag: None,
         }
     }
 
@@ -121,6 +135,10 @@ pub(crate) fn edit_key(
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(t.to_string()));
             }
         }
+        "x" if secondary => match edit.take_selection() {
+            Some(t) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(t)),
+            None => return false,
+        },
         _ => match typed_text(ev, platform) {
             Some(t) => edit.insert(t),
             None => return false,
@@ -339,6 +357,98 @@ impl AppWindow {
             }
         }
         cx.notify();
+    }
+
+    /// Copy / Paste / Select all in the export dialog's focused text field. Consumed (returns
+    /// true) whenever the dialog is on top, also with no text field focused, so nothing leaks
+    /// to the terminal pane behind it.
+    pub(crate) fn export_clipboard(&mut self, clip: Clip, cx: &mut Context<Self>) -> bool {
+        if self.overlays.top() != Some(crate::overlay_stack::OverlayKind::ExportDialog) {
+            return false;
+        }
+        let paste = cx.read_from_clipboard().and_then(|i| i.text());
+        if let Some(d) = self.recordings.dialog.as_mut() {
+            if let Some(edit) = d.field_mut() {
+                match clip {
+                    Clip::Copy => {
+                        if let Some(t) = edit.selected_text() {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(t.to_string()));
+                        }
+                    }
+                    Clip::Paste => {
+                        if let Some(t) = paste {
+                            edit.insert(&t);
+                            d.touched();
+                        }
+                    }
+                    Clip::SelectAll => edit.select_all(),
+                }
+            }
+        }
+        cx.notify();
+        true
+    }
+
+    /// Copy / Paste / Select all for whichever text field owns the keyboard: the designer, the
+    /// export dialog, or a side panel.
+    pub(crate) fn text_clipboard(&mut self, clip: Clip, cx: &mut Context<Self>) -> bool {
+        self.designer_clipboard(clip, cx)
+            || self.export_clipboard(clip, cx)
+            || self.snippets_clipboard(clip, cx)
+    }
+
+    /// Mouse down in an export text field: place the caret, select a word (double click) or
+    /// everything (triple click).
+    pub(crate) fn export_field_down(
+        &mut self,
+        ix: usize,
+        ev: &gpui::MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let idx = self.export_index_at(ix, ev.position.x);
+        let Some(d) = self.recordings.dialog.as_mut() else {
+            return;
+        };
+        let was = d.focus == ix;
+        d.focus = ix;
+        d.theme_open = false;
+        if let Some(edit) = d.edit_at(ix) {
+            match ev.click_count {
+                2 => edit.select_word_at(idx),
+                n if n >= 3 => edit.select_all(),
+                _ => edit.set_caret(idx, ev.modifiers.shift && was),
+            }
+        }
+        self.recordings.field_drag = (ev.click_count == 1).then_some(ix);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Dragging with the button held extends the selection.
+    pub(crate) fn export_field_drag(
+        &mut self,
+        ix: usize,
+        ev: &gpui::MouseMoveEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recordings.field_drag != Some(ix)
+            || ev.pressed_button != Some(gpui::MouseButton::Left)
+        {
+            return;
+        }
+        let idx = self.export_index_at(ix, ev.position.x);
+        if let Some(edit) = self.recordings.dialog.as_mut().and_then(|d| d.edit_at(ix)) {
+            edit.set_caret(idx, true);
+            cx.notify();
+        }
+    }
+
+    /// Byte offset in field `ix`'s text under window x `x`.
+    fn export_index_at(&self, ix: usize, x: gpui::Pixels) -> usize {
+        match self.recordings.field_layout.borrow().get(&ix) {
+            Some((bounds, line)) => line.closest_index_for_x(x - bounds.origin.x),
+            None => usize::MAX,
+        }
     }
 
     /// Copy / Paste / Select all while the panel owns focus.
@@ -641,7 +751,13 @@ impl AppWindow {
         let Some(st) = store() else { return };
         match st.load(&id) {
             Ok(sc) => {
-                self.recordings.dialog = Some(ExportDialog::new(sc, st.cast_path(&id), &self.cfg));
+                let themes = cx
+                    .global::<crate::settings::Settings>()
+                    .registry
+                    .all()
+                    .to_vec();
+                self.recordings.dialog =
+                    Some(ExportDialog::new(sc, st.cast_path(&id), &self.cfg).with_themes(themes));
                 self.open_overlay(OverlayKind::ExportDialog, window, cx);
             }
             Err(e) => self.toast(ToastKind::Error, format!("Cannot export: {e}"), cx),
@@ -661,9 +777,16 @@ impl AppWindow {
             return;
         };
         match key {
+            // The theme list is a sheet over the dialog: Esc and Enter close it first.
+            "escape" if d.theme_open => d.theme_open = false,
+            "enter" if d.theme_open => d.theme_open = false,
             "escape" => return self.close_export_dialog(window, cx),
-            "tab" => d.move_focus(if shift { -1 } else { 1 }),
+            "tab" => {
+                d.theme_open = false;
+                d.move_focus(if shift { -1 } else { 1 })
+            }
             "enter" => return self.submit_export(window, cx),
+            "space" | " " if d.is_theme_focus() => d.toggle_theme_sheet(),
             "up" if d.focus == 0 => d.cycle_format(-1),
             "down" if d.focus == 0 => d.cycle_format(1),
             "left" | "right" | "space" | " " if d.focus == 0 || d.is_toggle() => {
@@ -710,7 +833,18 @@ impl AppWindow {
         );
         self.recordings.job_seq += 1;
         let n = self.recordings.job_seq;
-        let job = ExportJob::spawn(n, exporter, sidecar, cast, opts, path, true, open);
+        let themes = cx.global::<crate::settings::Settings>().registry.clone();
+        let job = ExportJob::spawn(
+            n,
+            exporter,
+            sidecar,
+            cast,
+            opts,
+            path,
+            true,
+            open,
+            Some(themes),
+        );
         self.recordings.jobs.push(job);
         self.close_export_dialog(window, cx);
         self.watch_exports(cx);
@@ -721,23 +855,13 @@ impl AppWindow {
         let Some(d) = self.recordings.dialog.as_ref() else {
             return;
         };
-        let current = PathBuf::from(d.path.text());
-        let dir = current
-            .parent()
-            .filter(|p| p.is_dir())
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let name = current
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned());
-        let rx = cx.prompt_for_new_path(&dir, name.as_deref());
+        let (dir, name) = d.browse_start();
+        let rx = cx.prompt_for_new_path(&dir, Some(&name));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(p))) = rx.await {
                 let _ = this.update(cx, |this, cx| {
                     if let Some(d) = this.recordings.dialog.as_mut() {
-                        d.path = TextEdit::new(p.to_string_lossy().into_owned());
-                        d.path_dirty = true;
-                        d.overwrite_armed = false;
-                        d.error = None;
+                        d.set_path(p.to_string_lossy().into_owned());
                     }
                     cx.notify();
                 });

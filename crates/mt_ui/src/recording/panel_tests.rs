@@ -287,6 +287,150 @@ fn import_copies_a_cast_into_the_store(cx: &mut TestAppContext) {
     let _ = std::fs::remove_file(src);
 }
 
+/// Opens the export dialog on GIF with the title field focused; returns its focus index.
+fn open_title_field(
+    view: &gpui::Entity<AppWindow>,
+    cx: &mut gpui::VisualTestContext,
+    id: &str,
+) -> usize {
+    cx.dispatch_action(ToggleRecordingsPanel);
+    select(view, cx, id);
+    cx.simulate_keystrokes("secondary-e");
+    view.update_in(cx, |t, _, _| {
+        let d = t.recordings.dialog.as_mut().unwrap();
+        let ix = d.spec_ix("title").unwrap() + 1;
+        d.focus = ix;
+        ix
+    })
+}
+
+fn title_state(
+    view: &gpui::Entity<AppWindow>,
+    cx: &mut gpui::VisualTestContext,
+) -> (String, Option<(usize, usize)>) {
+    view.read_with(cx, |t, _| {
+        let d = t.recordings.dialog.as_ref().unwrap();
+        let ix = d.spec_ix("title").unwrap();
+        let e = &d.fields[d.format][ix];
+        (e.text().to_string(), e.selection())
+    })
+}
+
+#[gpui::test]
+fn select_all_copy_and_paste_act_on_the_focused_export_field(cx: &mut TestAppContext) {
+    let _s = serial();
+    let (view, cx) = boot(cx, config("panel-export-clip", ON));
+    seed("r_ui_clip", "Clip me", 30, false);
+    open_title_field(&view, cx, "r_ui_clip");
+    assert_eq!(title_state(&view, cx).0, "Clip me");
+    // Select all must not reach the terminal pane behind the dialog.
+    cx.dispatch_action(SelectAll);
+    assert_eq!(title_state(&view, cx).1, Some((0, 7)));
+    assert!(view.read_with(cx, |t, _| t
+        .live()
+        .and_then(|s| s.term.selection_text(false))
+        .is_none()));
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("Release".into()));
+    cx.dispatch_action(Paste);
+    assert_eq!(title_state(&view, cx), ("Release".into(), None));
+    cx.dispatch_action(SelectAll);
+    cx.dispatch_action(Copy);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|i| i.text()).as_deref(),
+        Some("Release")
+    );
+    // Cut removes the selection and puts it on the clipboard.
+    cx.simulate_keystrokes("secondary-x");
+    assert_eq!(title_state(&view, cx).0, "");
+}
+
+#[gpui::test]
+fn export_text_fields_select_with_the_mouse(cx: &mut TestAppContext) {
+    let _s = serial();
+    let (view, cx) = boot(cx, config("panel-export-mouse", ON));
+    seed("r_ui_mouse", "Mouse me now", 30, false);
+    let ix = open_title_field(&view, cx, "r_ui_mouse");
+    cx.run_until_parked();
+    let (bounds, _) = view
+        .read_with(cx, |t, _| {
+            t.recordings.field_layout.borrow().get(&ix).cloned()
+        })
+        .expect("the field was measured when it was painted");
+    let at = |frac: f32, clicks: usize| gpui::MouseDownEvent {
+        position: gpui::point(
+            bounds.origin.x + bounds.size.width * frac,
+            bounds.origin.y + bounds.size.height / 2.,
+        ),
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: clicks,
+        first_mouse: false,
+    };
+    let down = |cx: &mut gpui::VisualTestContext, frac: f32, clicks: usize| {
+        let ev = at(frac, clicks);
+        view.update(cx, |t, cx| t.export_field_down(ix, &ev, cx));
+    };
+    // Triple click selects everything.
+    down(cx, 0.05, 3);
+    assert_eq!(title_state(&view, cx).1, Some((0, 12)));
+    // A single click collapses the selection to a caret.
+    down(cx, 0.05, 1);
+    assert_eq!(title_state(&view, cx).1, None);
+    // Dragging selects from the press to the pointer.
+    let drag = gpui::MouseMoveEvent {
+        position: at(0.9, 1).position,
+        pressed_button: Some(gpui::MouseButton::Left),
+        modifiers: gpui::Modifiers::default(),
+    };
+    view.update(cx, |t, cx| t.export_field_drag(ix, &drag, cx));
+    let sel = title_state(&view, cx)
+        .1
+        .expect("a selection after dragging");
+    assert_eq!(sel.1, 12, "{sel:?}");
+    // Double click selects the word under the pointer.
+    down(cx, 0.05, 2);
+    assert_eq!(title_state(&view, cx).1, Some((0, 5)));
+}
+
+#[gpui::test]
+fn export_dialog_theme_sheet_closes_before_the_dialog(cx: &mut TestAppContext) {
+    let _s = serial();
+    let (view, cx) = boot(cx, config("panel-export-theme", ON));
+    seed("r_ui_theme", "Theme me", 30, false);
+    cx.dispatch_action(ToggleRecordingsPanel);
+    select(&view, cx, "r_ui_theme");
+    cx.simulate_keystrokes("secondary-e");
+    let state = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |t, _| {
+            t.recordings.dialog.as_ref().map(|d| {
+                (
+                    d.theme_open,
+                    d.focus,
+                    d.value("theme").to_string(),
+                    d.path.text().to_string(),
+                )
+            })
+        })
+    };
+    // The dialog opens on GIF with an empty output path.
+    let (open, _, _, path) = state(cx).expect("dialog");
+    assert!(!open && path.is_empty());
+    view.update_in(cx, |t, _, _| {
+        let d = t.recordings.dialog.as_mut().unwrap();
+        d.focus = d.spec_ix("theme").unwrap() + 1;
+    });
+    cx.simulate_keystrokes("space");
+    assert!(state(cx).unwrap().0, "space opens the theme list");
+    cx.simulate_keystrokes("right");
+    let picked = state(cx).unwrap().2;
+    assert!(!picked.is_empty(), "right picks the next theme");
+    cx.simulate_keystrokes("escape");
+    let (open, _, still, _) = state(cx).expect("Esc closed only the sheet");
+    assert!(!open && still == picked);
+    cx.simulate_keystrokes("escape");
+    assert!(state(cx).is_none(), "the second Esc closes the dialog");
+}
+
 #[gpui::test]
 fn export_dialog_disables_vhs_without_input_and_exports_cast(cx: &mut TestAppContext) {
     let _s = serial();
@@ -310,7 +454,15 @@ fn export_dialog_disables_vhs_without_input_and_exports_cast(cx: &mut TestAppCon
         (d.unavailable(vhs), d.exporter().id())
     });
     assert!(reason.unwrap().contains("Needs input"));
-    assert_eq!(format, "cast");
+    assert_eq!(format, "gif");
+    view.update_in(cx, |t, _, _| {
+        let d = t.recordings.dialog.as_mut().unwrap();
+        let cast = mt_export::registry()
+            .iter()
+            .position(|e| e.id() == "cast")
+            .unwrap();
+        assert!(d.select_format(cast));
+    });
     // A bad option stays in the dialog with a message.
     view.update_in(cx, |t, _, _| {
         let d = t.recordings.dialog.as_mut().unwrap();

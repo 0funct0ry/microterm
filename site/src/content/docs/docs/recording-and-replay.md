@@ -148,7 +148,7 @@ redacted`, `ssh: host`, `serial`, `recovered`.
 
 | Gesture | Effect |
 |---|---|
-| click, `↑` / `↓` | select; the footer shows the date and folder |
+| click, `↑` / `↓` | select |
 | `Enter`, double-click | replay in a new tab (`⌥Enter` replays at 2×) |
 | `⌘E` / `Ctrl+E`, **Export** | open the [export dialog](/docs/exporting-recordings/#the-export-dialog) |
 | `F2` | rename in place; writes the sidecar title and the title in the `.cast` header |

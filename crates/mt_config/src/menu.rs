@@ -542,6 +542,7 @@ pub const ICON_NAMES: &[&str] = &[
     "git-commit-horizontal",
     "git-pull-request",
     "globe",
+    "house",
     "info",
     "layers",
     "link",

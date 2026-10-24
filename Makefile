@@ -155,8 +155,9 @@ test-serial: ## Serial reconnect test over a socat pty pair (Linux; skipped with
 test-ssh-local: mux ## SSH integration tests against a throw-away local sshd (no Docker, no root)
 	scripts/test-ssh.sh --local
 
-bench: ## Headless 100 MB throughput baseline -> bench/results/ (vtebench: see bench/README.md)
+bench: ## Headless 100 MB throughput + GIF export baselines -> bench/results/ (vtebench: see bench/README.md)
 	bench/throughput.sh
+	bench/gif.sh
 
 # ------------------------------------------------------------------------------ quality
 
@@ -193,9 +194,9 @@ check-snippets-pure: # mt_snippets stays free of GPUI and the terminal engine (S
 	@if $(CARGO) tree -p mt_snippets 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
 		echo 'error: mt_snippets must not depend on gpui or alacritty_terminal'; exit 1; fi
 
-check-export-pure: # mt_export stays free of GPUI and the terminal engine (SPEC §10.10.6, D13)
-	@if $(CARGO) tree -p mt_export 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
-		echo 'error: mt_export must not depend on gpui or alacritty_terminal'; exit 1; fi
+check-export-pure: # mt_export stays free of GPUI; gif replays via mt_term, never alacritty directly (SPEC §10.10.6, D13)
+	@if $(CARGO) tree -p mt_export 2>/dev/null | grep -Ei 'gpui'; then \
+		echo 'error: mt_export must not depend on gpui'; exit 1; fi
 
 themes: ## Validate the bundled themes (licence, 16 colours, contrast)
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-themes

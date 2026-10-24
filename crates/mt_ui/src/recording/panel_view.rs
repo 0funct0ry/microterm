@@ -10,6 +10,7 @@ use gpui::{
 use mt_export::OptKind;
 
 use super::{
+    export::{ExportDialog, SWATCHES},
     panel_state::{self, Entry, Row},
     ui::{format_elapsed, format_size, reduce_motion},
 };
@@ -303,10 +304,7 @@ impl AppWindow {
             }
         }
 
-        let sel = selected
-            .as_deref()
-            .and_then(|id| entries.iter().find(|e| e.sc.id == id));
-        let footer = self.recordings_footer(t, sel, cx);
+        let footer = self.recordings_footer(t, cx);
         let _ = any_running;
         div()
             .flex()
@@ -317,7 +315,7 @@ impl AppWindow {
             .child(search)
             .child(list)
             .children(self.export_jobs_view(t, cx))
-            .child(footer)
+            .children(footer)
             .into_any_element()
     }
 
@@ -447,28 +445,25 @@ impl AppWindow {
             .into_any_element()
     }
 
-    fn recordings_footer(
-        &mut self,
-        t: &Theme,
-        sel: Option<&Entry>,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let base = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_2()
-            .p_2()
-            .border_t_1()
-            .border_color(t.border_variant);
-        if let Some(id) = self.recordings.delete_confirm.clone() {
-            let title = self
-                .recordings
-                .entries
-                .iter()
-                .find(|e| e.sc.id == id)
-                .map_or(id.clone(), |e| e.sc.title.clone());
-            return base
+    /// The delete confirmation. Replay and Export live in the row menu, so the panel has no
+    /// footer otherwise (running exports show their own progress lines above this).
+    fn recordings_footer(&mut self, t: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let id = self.recordings.delete_confirm.clone()?;
+        let title = self
+            .recordings
+            .entries
+            .iter()
+            .find(|e| e.sc.id == id)
+            .map_or(id.clone(), |e| e.sc.title.clone());
+        Some(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_2()
+                .p_2()
+                .border_t_1()
+                .border_color(t.border_variant)
                 .child(
                     div()
                         .flex_1()
@@ -485,52 +480,12 @@ impl AppWindow {
                         this.recordings.delete_confirm = None;
                         cx.notify();
                     },
-                )));
-        }
-        let Some(e) = sel else {
-            return base.child(
-                div()
-                    .flex_1()
-                    .text_color(t.text_muted)
-                    .child("Select a recording"),
-            );
-        };
-        let origin = if e.sc.origin.cwd.is_empty() {
-            mt_record::store::display_time(e.sc.created_at)
-        } else {
-            format!(
-                "{} · {}",
-                mt_record::store::display_time(e.sc.created_at),
-                e.sc.origin.cwd
-            )
-        };
-        let id = e.sc.id.clone();
-        let (id_replay, id_export) = (id.clone(), id);
-        let can_act = !e.running;
-        base.child(
-            div()
-                .flex_1()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_size(px(11.))
-                .text_color(t.text_muted)
-                .child(origin),
+                ))),
         )
-        .when(can_act, |el| {
-            el.child(Button::new("rec-replay", "Replay").on_click(
-                cx.listener(move |this, _, _, cx| this.replay_recording(&id_replay, 1.0, cx)),
-            ))
-            .child(
-                Button::new("rec-export", "Export")
-                    .style(ButtonStyle::Filled)
-                    .on_click(cx.listener(move |this, _, w, cx| {
-                        this.export_recording(Some(id_export.clone()), w, cx)
-                    })),
-            )
-        })
     }
 
-    /// The running exports, one line each with a progress bar and a cancel button.
+    /// The running exports: title and percentage, a progress bar and a Cancel button at the
+    /// right end below it.
     fn export_jobs_view(&mut self, t: &Theme, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.recordings
             .jobs
@@ -538,39 +493,52 @@ impl AppWindow {
             .enumerate()
             .map(|(i, j)| {
                 let frac = j.progress.fraction().clamp(0.0, 1.0);
+                let cancelling = j.progress.is_cancelling();
                 let progress = j.progress.clone();
                 div()
                     .flex()
                     .flex_none()
                     .flex_col()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
+                    .gap_2()
+                    .px_3()
+                    .pt_3()
+                    .pb_3()
                     .border_t_1()
                     .border_color(t.border_variant)
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap_1()
+                            .items_baseline()
+                            .gap_2()
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_w_0()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
-                                    .text_size(px(11.))
                                     .child(format!("Exporting {} as {}", j.title, j.format)),
                             )
                             .child(
-                                IconButton::new(("export-cancel", i), IconName::X)
-                                    .tooltip("Cancel export")
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        progress.cancel();
-                                        cx.notify();
-                                    })),
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(t.text_muted)
+                                    .child(if cancelling {
+                                        "Cancelling…".to_string()
+                                    } else {
+                                        format!("{}%", (frac * 100.0).round() as u32)
+                                    }),
                             ),
                     )
                     .child(progress_bar(t, frac))
+                    .child(div().flex().justify_end().child(
+                        Button::new(("export-cancel", i), "Cancel").on_click(cx.listener(
+                            move |_, _, _, cx| {
+                                progress.cancel();
+                                cx.notify();
+                            },
+                        )),
+                    ))
                     .into_any_element()
             })
             .collect()
@@ -707,7 +675,8 @@ impl AppWindow {
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .p(px(2.))
+                    .gap(px(2.))
                     .rounded(px(RADIUS_CONTROL))
                     .border_1()
                     .border_color(if d.focus == 0 { t.accent } else { t.border })
@@ -717,17 +686,21 @@ impl AppWindow {
                         let on = i == d.format;
                         div()
                             .id(("export-format", i))
+                            .flex_1()
+                            .min_w_0()
                             .flex()
                             .items_center()
+                            .justify_center()
                             .gap_2()
                             .px_2()
-                            .h(px(24.))
+                            .h(px(26.))
+                            .rounded(px(RADIUS_CONTROL))
                             .when(on, |el| el.bg(t.element_selected))
                             .when(why.is_none() && !on, |el| {
                                 el.cursor_pointer().hover(|s| s.bg(t.element_hover))
                             })
                             .when(why.is_some(), |el| el.text_color(t.text_placeholder))
-                            .child(div().child(format!("{} (.{})", e.label(), e.extension())))
+                            .child(div().whitespace_nowrap().child(e.label()))
                             .when_some(why.clone(), |el, w| {
                                 el.child(
                                     div()
@@ -741,6 +714,7 @@ impl AppWindow {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(d) = this.recordings.dialog.as_mut() {
                                     d.focus = 0;
+                                    d.theme_open = false;
                                     d.select_format(i);
                                 }
                                 cx.notify();
@@ -748,82 +722,105 @@ impl AppWindow {
                     })),
             );
 
-        let mut fields = Vec::new();
-        for (i, s) in specs.iter().enumerate() {
-            let focused = d.focus == i + 1;
-            let edit = &d.fields[d.format][i];
-            let input = match &s.kind {
-                OptKind::Bool => div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(toggle(t, edit.text() == "true"))
-                    .into_any_element(),
-                OptKind::Enum(values) => div()
-                    .flex()
-                    .gap_1()
-                    .children(values.iter().map(|v| {
-                        let on = edit.text() == *v;
+        // Options in two panes: a column of rows, each row one full-width or two half-width cells.
+        let pane_w = px((DIALOG_WIDTH - 32. - PANE_GAP) / 2.);
+        let layouts = self.recordings.field_layout.clone();
+        let mut panes = Vec::new();
+        for pane in d.panes() {
+            let mut rows: Vec<AnyElement> = Vec::new();
+            for row in &pane.rows {
+                let wide = row.len() == 1;
+                let cells: Vec<AnyElement> = row
+                    .iter()
+                    .map(|&i| {
                         div()
-                            .px_2()
-                            .h(px(22.))
-                            .flex()
-                            .items_center()
-                            .rounded(px(RADIUS_CONTROL))
-                            .border_1()
-                            .border_color(if on { t.accent } else { t.border })
-                            .child((*v).to_string())
-                    }))
-                    .into_any_element(),
-                _ => field_box(t, focused, line_field(t, edit, focused, "")).into_any_element(),
-            };
-            let n = i + 1;
-            fields.push(
+                            .flex_1()
+                            .min_w_0()
+                            .child(export_option(t, d, i, &specs[i], wide, &layouts, cx))
+                            .into_any_element()
+                    })
+                    .collect();
+                rows.push(div().flex().gap_3().children(cells).into_any_element());
+            }
+            panes.push(
                 div()
-                    .id(("export-opt", i))
+                    .w(pane_w)
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(d) = this.recordings.dialog.as_mut() {
-                            d.focus = n;
-                            if d.is_toggle() {
-                                d.cycle_value(1);
-                            }
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_baseline()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(t.text_muted)
-                                    .child(s.label),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(t.text_placeholder)
-                                    .child(s.help),
-                            ),
-                    )
-                    .child(input),
+                    .gap_3()
+                    .when_some(pane.title, |el, title| {
+                        el.child(
+                            div()
+                                .text_size(px(10.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(t.text_placeholder)
+                                .child(title.to_uppercase()),
+                        )
+                    })
+                    .children(rows),
             );
         }
 
-        let path_focused = d.focus == d.path_focus();
+        let path_focus = d.path_focus();
+        let path_focused = d.focus == path_focus;
         let open_focused = d.focus == d.open_focus();
         let error = d.error.clone();
         let title = d.sidecar.title.clone();
         let open_on = d.open_when_done;
         let can_export = d.unavailable(d.format).is_none();
+        let hint = d
+            .focused_spec()
+            .map(|s| format!("{}: {}", s.label, s.help))
+            .unwrap_or_else(|| "Enter exports · Tab next field · Esc cancels".into());
+        let sheet = d.theme_open.then(|| theme_sheet(t, d, pane_w, cx));
+        let output = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(t.text_muted)
+                    .child("Output file"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        export_text_field(
+                            t,
+                            &d.path,
+                            path_focus,
+                            path_focused,
+                            "Choose where to save (home or browse buttons)",
+                            &layouts,
+                            cx,
+                        )
+                        .flex_1(),
+                    )
+                    .child(
+                        IconButton::new("export-home", IconName::House)
+                            .tooltip("Home folder: use <home>/<recording name>")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(d) = this.recordings.dialog.as_mut() {
+                                    d.fill_home();
+                                    d.focus = path_focus;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        IconButton::new("export-browse", IconName::FolderOpen)
+                            .tooltip("Browse…")
+                            .on_click(cx.listener(|this, _, _, cx| this.browse_export_path(cx))),
+                    ),
+            );
+
         Some(
             Modal::new("export-dialog")
-                .width(px(520.))
+                .width(px(DIALOG_WIDTH))
                 .top(px(TITLE_BAR_HEIGHT + PALETTE_TOP_OFFSET))
                 .on_dismiss(cx.listener_for_dismiss())
                 .child(
@@ -838,67 +835,16 @@ impl AppWindow {
                                 .child(format!("Export \"{title}\"")),
                         )
                         .child(formats)
-                        .children(fields)
                         .child(
                             div()
+                                .id("export-fields")
+                                .max_h(px(FIELDS_MAX_HEIGHT))
+                                .overflow_y_scroll()
                                 .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(t.text_muted)
-                                        .child("Output file"),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_2()
-                                        .child(
-                                            field_box(
-                                                t,
-                                                path_focused,
-                                                line_field(
-                                                    t,
-                                                    &self
-                                                        .recordings
-                                                        .dialog
-                                                        .as_ref()
-                                                        .expect("checked above")
-                                                        .path,
-                                                    path_focused,
-                                                    "",
-                                                ),
-                                            )
-                                            .flex_1(),
-                                        )
-                                        .child(Button::new("export-browse", "Browse…").on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.browse_export_path(cx)
-                                            }),
-                                        )),
-                                ),
+                                .gap(px(PANE_GAP))
+                                .children(panes),
                         )
-                        .child(
-                            div()
-                                .id("export-open")
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(d) = this.recordings.dialog.as_mut() {
-                                        d.open_when_done = !d.open_when_done;
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(toggle(t, open_on))
-                                .child(
-                                    div()
-                                        .text_color(if open_focused { t.accent } else { t.text })
-                                        .child("Open when done"),
-                                ),
-                        )
+                        .child(output)
                         .when_some(error, |el, e| {
                             el.child(div().text_color(t.error).text_size(px(11.)).child(e))
                         })
@@ -909,11 +855,29 @@ impl AppWindow {
                                 .gap_2()
                                 .child(
                                     div()
-                                        .flex_1()
-                                        .text_size(px(11.))
-                                        .text_color(t.text_muted)
-                                        .child("Enter exports · Tab next field · Esc cancels"),
+                                        .id("export-open")
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(d) = this.recordings.dialog.as_mut() {
+                                                d.open_when_done = !d.open_when_done;
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .child(toggle(t, open_on))
+                                        .child(
+                                            div()
+                                                .text_color(if open_focused {
+                                                    t.accent
+                                                } else {
+                                                    t.text
+                                                })
+                                                .child("Open when done"),
+                                        ),
                                 )
+                                .child(div().flex_1())
                                 .child(Button::new("export-cancel-btn", "Cancel").on_click(
                                     cx.listener(|this, _, w, cx| this.close_export_dialog(w, cx)),
                                 ))
@@ -926,12 +890,501 @@ impl AppWindow {
                                             })),
                                     )
                                 }),
-                        ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(t.text_muted)
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(hint),
+                        )
+                        .children(sheet),
                 )
                 .into_any_element(),
         )
     }
 }
+
+/// A single-line text field of the export dialog: click places the caret, drag selects, double
+/// click selects a word and triple click everything, like the designer's fields. The text is
+/// measured at paint time so the pointer position maps to a byte offset.
+fn export_text_field(
+    t: &Theme,
+    edit: &crate::components::TextEdit,
+    ix: usize,
+    focused: bool,
+    placeholder: &'static str,
+    layouts: &super::panel::ExportLayouts,
+    cx: &mut Context<AppWindow>,
+) -> gpui::Stateful<gpui::Div> {
+    let text = edit.text().to_string();
+    let (a, b) = edit.selection().unwrap_or((edit.caret(), edit.caret()));
+    let caret = edit.caret();
+    let accent = t.accent;
+    let caret_bar = move || div().w(px(1.)).mr(px(-1.)).h(px(14.)).bg(accent);
+    let measured = text.clone();
+    let store = layouts.clone();
+    let measure = canvas(
+        move |bounds, window, _| {
+            let style = window.text_style();
+            let size = style.font_size.to_pixels(window.rem_size());
+            let run = style.to_run(measured.len());
+            let line = window
+                .text_system()
+                .shape_line(measured.into(), size, &[run], None);
+            store.borrow_mut().insert(ix, (bounds, line));
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+    let body = div()
+        .relative()
+        .flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .child(measure)
+        .when(text.is_empty(), |el| {
+            el.child(
+                div()
+                    .text_color(t.text_placeholder)
+                    .child(placeholder.to_string()),
+            )
+        })
+        .child(text[..a].to_string())
+        .when(focused && caret == a, |el| el.child(caret_bar()))
+        .when(b > a, |el| {
+            el.child(div().bg(accent.opacity(0.35)).child(text[a..b].to_string()))
+        })
+        .when(focused && caret == b && b > a, |el| el.child(caret_bar()))
+        .child(text[b..].to_string());
+    div()
+        .id(("export-text", ix))
+        .flex()
+        .items_center()
+        .h(px(26.))
+        .px_2()
+        .rounded(px(RADIUS_CONTROL))
+        .border_1()
+        .border_color(if focused { t.accent } else { t.border })
+        .bg(t.background)
+        .cursor_text()
+        .child(body)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, ev, _, cx| this.export_field_down(ix, ev, cx)),
+        )
+        .on_mouse_move(cx.listener(move |this, ev, _, cx| this.export_field_drag(ix, ev, cx)))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _, _, _| this.recordings.field_drag = None),
+        )
+}
+
+fn rgb_u32(c: mt_theme::Rgba) -> u32 {
+    (u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b)
+}
+
+/// "macos" shows as "macOS", the rest capitalised.
+fn enum_label(v: &str) -> String {
+    match v {
+        "macos" => "macOS".into(),
+        _ => {
+            let mut c = v.chars();
+            c.next()
+                .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// A small preview of a theme: its background with "Aa" and three palette dots.
+fn theme_chip(t: &Theme, theme: Option<&mt_theme::Theme>) -> gpui::Div {
+    let chip = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(3.))
+        .px(px(5.))
+        .w(px(58.))
+        .h(px(18.))
+        .rounded(px(RADIUS_CONTROL))
+        .border_1()
+        .border_color(t.border);
+    let Some(th) = theme else {
+        return chip.bg(t.surface);
+    };
+    chip.bg(gpui::rgb(rgb_u32(th.background)))
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(gpui::rgb(rgb_u32(th.foreground)))
+                .child("Aa"),
+        )
+        .children([1usize, 2, 4].map(|k| {
+            div()
+                .size(px(5.))
+                .rounded(px(2.5))
+                .bg(gpui::rgb(rgb_u32(th.ansi[k])))
+        }))
+}
+
+/// One option of the dialog: label (with its help text when `wide`) over its control.
+fn export_option(
+    t: &Theme,
+    d: &ExportDialog,
+    i: usize,
+    spec: &mt_export::OptionSpec,
+    wide: bool,
+    layouts: &super::panel::ExportLayouts,
+    cx: &mut Context<AppWindow>,
+) -> AnyElement {
+    let n = i + 1;
+    let focused = d.focus == n;
+    let edit = &d.fields[d.format][i];
+    let key = spec.key;
+    let input = match (&spec.kind, key) {
+        (_, "theme") => {
+            let shown = if edit.text().is_empty() {
+                d.sidecar.theme.as_str()
+            } else {
+                edit.text()
+            };
+            let found = d.themes.iter().find(|x| x.name.eq_ignore_ascii_case(shown));
+            let name = if edit.text().is_empty() {
+                if shown.is_empty() {
+                    "Recording's theme".to_string()
+                } else {
+                    format!("Recording's ({shown})")
+                }
+            } else {
+                shown.to_string()
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .h(px(26.))
+                .px_2()
+                .rounded(px(RADIUS_CONTROL))
+                .border_1()
+                .border_color(if focused { t.accent } else { t.border })
+                .bg(t.background)
+                .cursor_pointer()
+                .child(theme_chip(t, found))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(name),
+                )
+                .child(Icon::new(IconName::ChevronDown).color(t.text_muted))
+                .into_any_element()
+        }
+        (_, "margin_fill") => {
+            let cur = edit.text().trim().to_string();
+            let parsed = mt_theme::Rgba::parse(&cur).ok();
+            let invalid = !cur.is_empty() && parsed.is_none();
+            let pick = |value: &'static str| {
+                cx.listener(move |this, _, _, cx| {
+                    if let Some(d) = this.recordings.dialog.as_mut() {
+                        d.focus = n;
+                        d.set_value("margin_fill", value);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                })
+            };
+            let auto = div()
+                .id(("export-swatch-auto", i))
+                .flex()
+                .items_center()
+                .px_2()
+                .h(px(18.))
+                .rounded(px(RADIUS_CONTROL))
+                .border_1()
+                .border_color(if cur.is_empty() { t.accent } else { t.border })
+                .text_size(px(10.))
+                .cursor_pointer()
+                .child("Auto")
+                .on_click(pick(""));
+            let swatches = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(5.))
+                .child(auto)
+                .children(SWATCHES.iter().enumerate().map(|(k, hex)| {
+                    let c = mt_theme::Rgba::parse(hex).unwrap_or(mt_theme::Rgba::rgb(0, 0, 0));
+                    div()
+                        .id(("export-swatch", i * 32 + k))
+                        .size(px(18.))
+                        .rounded(px(RADIUS_CONTROL))
+                        .bg(gpui::rgb(rgb_u32(c)))
+                        .border_1()
+                        .border_color(if cur.eq_ignore_ascii_case(hex) {
+                            t.accent
+                        } else {
+                            t.border
+                        })
+                        .cursor_pointer()
+                        .on_click(pick(hex))
+                }));
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(swatches)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .size(px(26.))
+                                .flex_none()
+                                .rounded(px(RADIUS_CONTROL))
+                                .border_1()
+                                .border_color(if invalid { t.error } else { t.border })
+                                .bg(match parsed {
+                                    Some(c) => gpui::rgb(rgb_u32(c)).into(),
+                                    None => t.surface,
+                                }),
+                        )
+                        .child(
+                            export_text_field(
+                                t,
+                                edit,
+                                n,
+                                focused,
+                                "#rrggbb, empty = automatic",
+                                layouts,
+                                cx,
+                            )
+                            .flex_1(),
+                        ),
+                )
+                .into_any_element()
+        }
+        (OptKind::Bool, _) => div()
+            .flex()
+            .items_center()
+            .h(px(26.))
+            .child(toggle(t, edit.text() == "true"))
+            .into_any_element(),
+        (OptKind::Enum(values), _) => div()
+            .flex()
+            .gap_1()
+            .children(values.iter().enumerate().map(|(k, v)| {
+                let on = edit.text() == *v;
+                let v: &'static str = v;
+                div()
+                    .id(("export-enum", i * 16 + k))
+                    .px_2()
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(RADIUS_CONTROL))
+                    .border_1()
+                    .border_color(if on { t.accent } else { t.border })
+                    .when(on, |el| el.bg(t.element_selected))
+                    .cursor_pointer()
+                    .child(enum_label(v))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(d) = this.recordings.dialog.as_mut() {
+                            d.focus = n;
+                            d.fields[d.format][i] = crate::components::TextEdit::new(v);
+                            d.error = None;
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+            }))
+            .into_any_element(),
+        _ => export_text_field(t, edit, n, focused, "", layouts, cx).into_any_element(),
+    };
+    let is_bool = matches!(spec.kind, OptKind::Bool);
+    let is_theme = key == "theme";
+    div()
+        .id(("export-opt", i))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if let Some(d) = this.recordings.dialog.as_mut() {
+                d.focus = n;
+                if is_bool {
+                    d.cycle_value(1);
+                } else if is_theme {
+                    d.toggle_theme_sheet();
+                }
+            }
+            cx.notify();
+        }))
+        .child(
+            div()
+                .flex()
+                .items_baseline()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(if focused { t.text } else { t.text_muted })
+                        .whitespace_nowrap()
+                        .child(spec.label),
+                )
+                .when(wide, |el| {
+                    el.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_size(px(10.))
+                            .text_color(t.text_placeholder)
+                            .child(spec.help),
+                    )
+                }),
+        )
+        .child(input)
+        .into_any_element()
+}
+
+/// The theme list: a sheet over the left pane with a preview chip per theme.
+fn theme_sheet(
+    t: &Theme,
+    d: &ExportDialog,
+    width: gpui::Pixels,
+    cx: &mut Context<AppWindow>,
+) -> AnyElement {
+    let ix = d.spec_ix("theme");
+    let current = d.value("theme").to_string();
+    let mut entries: Vec<(String, String, Option<&mt_theme::Theme>)> = vec![(
+        String::new(),
+        if d.sidecar.theme.is_empty() {
+            "Recording's theme".to_string()
+        } else {
+            format!("Recording's theme ({})", d.sidecar.theme)
+        },
+        d.themes
+            .iter()
+            .find(|x| x.name.eq_ignore_ascii_case(&d.sidecar.theme)),
+    )];
+    entries.extend(
+        d.themes
+            .iter()
+            .map(|x| (x.name.clone(), x.name.clone(), Some(x))),
+    );
+    let rows = entries
+        .into_iter()
+        .enumerate()
+        .map(|(k, (value, label, th))| {
+            let on = value == current;
+            div()
+                .id(("export-theme", k))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .h(px(28.))
+                .flex_none()
+                .when(on, |el| el.bg(t.element_selected))
+                .when(!on, |el| el.hover(|s| s.bg(t.element_hover)))
+                .cursor_pointer()
+                .child(theme_chip(t, th))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(label),
+                )
+                .when(on, |el| el.child(Icon::new(IconName::Check)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(d) = this.recordings.dialog.as_mut() {
+                        d.set_value("theme", &value);
+                        d.theme_open = false;
+                        if let Some(i) = ix {
+                            d.focus = i + 1;
+                        }
+                    }
+                    cx.notify();
+                }))
+        });
+    div()
+        .id("export-theme-sheet")
+        .absolute()
+        .top(px(SHEET_TOP))
+        .left(px(16.))
+        .w(width)
+        .h(px(SHEET_HEIGHT))
+        .flex()
+        .flex_col()
+        .rounded(px(RADIUS_CONTROL))
+        .border_1()
+        .border_color(t.border)
+        .bg(t.elevated_surface)
+        .shadow_lg()
+        .occlude()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .px_2()
+                .h(px(30.))
+                .flex_none()
+                .border_b_1()
+                .border_color(t.border)
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Theme"),
+                )
+                .child(
+                    IconButton::new("export-theme-close", IconName::X)
+                        .tooltip("Close")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(d) = this.recordings.dialog.as_mut() {
+                                d.theme_open = false;
+                            }
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .id("export-theme-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&d.theme_scroll)
+                .flex()
+                .flex_col()
+                .children(rows),
+        )
+        .into_any_element()
+}
+
+/// The export dialog is wide so option fields fit two per row.
+const DIALOG_WIDTH: f32 = 800.;
+/// Gap between the two option panes.
+const PANE_GAP: f32 = 24.;
+/// The theme sheet covers the left pane from just under the format row.
+const SHEET_TOP: f32 = 108.;
+const SHEET_HEIGHT: f32 = 330.;
+/// Option fields scroll past this height so the dialog fits short windows.
+const FIELDS_MAX_HEIGHT: f32 = 460.;
 
 fn progress_bar(t: &Theme, frac: f32) -> gpui::Div {
     div().h(px(4.)).w_full().rounded(px(2.)).bg(t.border).child(

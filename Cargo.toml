@@ -26,6 +26,19 @@ notify = "8"
 async-channel = "2"
 regex = "1"
 
+# GIF export is CPU-bound pixel work (SPEC §10.10.6): without this a `make run` (debug) export of
+# a large recording takes minutes. Only the crates on that path are optimised in dev builds.
+[profile.dev.package.mt_export]
+opt-level = 3
+[profile.dev.package.fontdue]
+opt-level = 3
+[profile.dev.package.gif]
+opt-level = 3
+[profile.dev.package.weezl]
+opt-level = 3
+[profile.dev.package.ttf-parser]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

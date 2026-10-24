@@ -243,7 +243,7 @@ EXAMPLES:
         #[arg(short, long)]
         force: bool,
     },
-    /// Export a recording to another format (cast, vhs).
+    /// Export a recording to another format (cast, vhs, gif).
     ///
     /// Writes `<title>.<ext>` into `recording.export.output_dir` (or the current directory)
     /// unless -o is given, and never overwrites without -f. `vhs` needs a recording made with
@@ -252,6 +252,7 @@ EXAMPLES:
 EXAMPLES:
   microterm ctl recording export r_20260101_101500_ab12cd --format vhs -o demo.tape
   microterm ctl recording export ID --format cast --opt idle_limit=1 --opt strip_input=true
+  microterm ctl recording export ID --format gif -o demo.gif --opt fps=5 --opt scale=0.5
   microterm ctl recording export --list-formats")]
     Export {
         /// Recording id.

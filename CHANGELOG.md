@@ -3,9 +3,41 @@
 ## Unreleased
 
 ### Fixed
+- **GIF font size had no visible effect.** The whole recorded window (for example 238×56) was
+  always drawn, so a bigger font just made a bigger picture with the same tiny text in a mostly
+  empty window. New `crop` option (default on) cuts the window to the cells the recording uses,
+  so the text fills the picture and the font size is visible.
+- **Export dialog text fields.** The title, path, number and colour fields could not be selected
+  with the mouse, and Ctrl/Cmd+A selected the terminal pane behind the dialog instead of the text
+  (Copy and Paste leaked the same way). They now support click to place the caret, drag, double
+  click (word) and triple click (all), Select all, Copy, Cut and Paste.
+- **GIF colour emoji.** Emoji (📦 🦀 ✅ …) were drawn as `□`; they now come out in colour from a
+  bundled Noto Color Emoji (SIL OFL, 9.9 MB, adds about 10 MB to the binary). Only the first emoji
+  of ZWJ sequences, skin tones and flags is drawn.
+- **Recordings start with the screen that was visible.** A recording began empty, so the prompt (and anything on screen) was missing from the first frames of a replay or export. The visible screen is now its first event.
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.5 — Animated GIF export.** New `gif` exporter in the export dialog, `ctl recording export
+  --format gif` and `--list-formats`. It replays the recording through a headless terminal and
+  renders frames with a built-in software rasteriser (bundled JetBrains Mono, the recording's or
+  any theme, bold/italic, dim, reverse, underline, strike, 256/truecolor, cursor shapes, wide cells,
+  geometric box-drawing and block characters, `chrome = none | plain | macos`). Delta frames with
+  per-frame palettes; options `fps`, `speed`, `idle_limit`, `font_size`, `scale`, `padding`,
+  `cursor`, `loop`, `end_pause`, `theme`, `chrome`, `trim_start`/`trim_end`, `max_size_mb`, with
+  defaults from the `gif_*` keys of `[recording.export]`. Output is byte-identical for the same
+  input. Ligatures, colour emoji, glyphs outside the bundled fonts and images draw as `□` and are
+  counted in the report. `make bench` records the export time and size of a 60 s session.
+  VHS-style output by default: the window sits on a darker backdrop (`margin`, `margin_fill`)
+  with antialiased rounded corners and a soft `shadow`, text is blended in linear light and
+  rendered at 2× (`gif_scale` now defaults to 2.0, range 0.25–3.0; `gif_font_size` to 16), and
+  `line_height` is adjustable. The export dialog is now two panes (no scrolling for GIF), the
+  output file starts empty with **home** and **browse** icon buttons, `theme` is picked from a
+  list with colour previews, `margin_fill` has preset swatches plus a hex field, and `chrome`
+  defaults to `macos` (`gif_chrome` too). New `house` icon for menus. New `title` option: the text in the GIF's window title bar, prefilled with
+  the recording's name in the dialog and editable. GIF export only redraws and encodes the rows that changed (a
+  large-terminal recording went from 34 s to under 3 s in a debug build) and the export crates are
+  optimised in debug builds; the panel's export card shows a percentage and a Cancel button. Frames with more than 255 colours keep the most used colours exactly.
 - **M12.4 — Recordings panel and export dialog.** With `recording.enabled = true`, `⌘⇧Y` /
   `Ctrl+Shift+Y` (`ToggleRecordingsPanel`, also View ▸ Recordings and the palette) opens a right
   side panel listing the store: search, groups (Recording now / Today / Yesterday / Earlier),
