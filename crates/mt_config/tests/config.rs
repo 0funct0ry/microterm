@@ -555,6 +555,56 @@ fn snippets_section_defaults_values_and_validation() {
 }
 
 #[test]
+fn triggers_section_defaults_values_and_validation() {
+    let c = Config::default().triggers;
+    assert!(!c.enabled && !c.allow_clipboard && !c.allow_capture && !c.scan_alt_screen);
+    assert_eq!(
+        (c.scan_partial_after_ms, c.max_rules, c.max_line_chars),
+        (250, 64, 4096)
+    );
+    assert_eq!(
+        (c.highlights_max, c.markers_max, c.findings_max),
+        (2000, 1000, 500)
+    );
+    assert!(c.capture_redact && c.confirm_delete && !c.panel_open_on_start);
+
+    let l = parse_str(
+        "[triggers]\nenabled = true\nallow_clipboard = true\npanel_width = 420\ncapture_dir = \"/var/tmp/c\"\n",
+    )
+    .unwrap();
+    assert!(l.config.triggers.enabled && l.config.triggers.allow_clipboard);
+    assert!(!l.config.triggers.allow_capture);
+    assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+
+    for (src, key) in [
+        ("[triggers]\npanel_width = 279\n", "panel_width"),
+        ("[triggers]\nmax_rules = 0\n", "max_rules"),
+        (
+            "[triggers]\nscan_partial_after_ms = 60001\n",
+            "scan_partial_after_ms",
+        ),
+        ("[triggers]\nmax_line_chars = 10\n", "max_line_chars"),
+        ("[triggers]\nfindings_max = 0\n", "findings_max"),
+        ("[triggers]\ncapture_max_kb = 0\n", "capture_max_kb"),
+        (
+            "[triggers]\ncapture_dir = \"relative/dir\"\n",
+            "capture_dir",
+        ),
+    ] {
+        let e = err(src);
+        assert!(e[0].message.contains(key), "{e:?}");
+        assert_eq!(e[0].line, 2, "{e:?}");
+    }
+
+    let l = parse_str("[triggers]\nenable = true\n").unwrap();
+    assert!(
+        l.warnings.iter().any(|w| w.message.contains("enabled")),
+        "{:?}",
+        l.warnings
+    );
+}
+
+#[test]
 fn templates_without_enabled_is_an_info_diagnostic() {
     let l = parse_str("[snippets]\ntemplates = true\n").unwrap();
     assert_eq!(l.warnings.len(), 1, "{:?}", l.warnings);

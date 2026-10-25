@@ -286,6 +286,11 @@ fn reload_inner(cx: &mut App) -> ReloadOutcome {
     }
     notify_windows(cx, &diff);
     crate::snippets::library::sync_and_notify(cx);
+    if diff.has(Effect::Triggers) {
+        crate::triggers::runtime::config_changed(cx);
+    } else {
+        crate::triggers::runtime::sync(cx);
+    }
     crate::menu_bar::refresh(cx);
     if diff.is_empty() && !registry_changed {
         ReloadOutcome::Unchanged

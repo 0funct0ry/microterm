@@ -196,6 +196,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mt_snippets::store::base_of;
 
     fn editor(body: &str) -> Editor {
         Editor::open(
@@ -207,12 +208,12 @@ mod tests {
                 ..Default::default()
             },
             Some("a".into()),
-            Base::of("", None),
+            base_of("", None),
         )
     }
 
     fn blank() -> Editor {
-        Editor::open(Snippet::default(), None, Base::of("", None))
+        Editor::open(Snippet::default(), None, base_of("", None))
     }
 
     #[test]

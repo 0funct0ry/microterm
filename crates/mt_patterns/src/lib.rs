@@ -9,8 +9,10 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 mod quick;
+mod redaction;
 mod word;
 pub use quick::{QuickError, QuickMatch, QuickSet, BUILTIN_NAMES};
+pub use redaction::{redact, REDACTED};
 pub use word::{path_at, word_at};
 
 /// A hyperlink found in a row of text. `range` is a char-index range into the row.

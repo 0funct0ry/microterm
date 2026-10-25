@@ -262,6 +262,15 @@ pub fn build_menu_bar(
                 Entry::Separator,
                 c.on("Clear Scrollback", "ClearScrollback"),
             ];
+            // Hidden while the triggers gate is off (SPEC §10.7, §10.11.9).
+            if crate::triggers::TriggerGate::of_config(config).enabled {
+                entries.push(Entry::Separator);
+                entries.push(c.item(
+                    "Create Trigger from Selection…",
+                    "CreateTriggerFromSelection",
+                    st.has_selection,
+                ));
+            }
             // Hidden while the recording gate is off (SPEC §10.7, §10.10.1).
             if crate::recording::gate::RecordingGate::of_config(config).enabled {
                 entries.push(Entry::Separator);
@@ -297,6 +306,10 @@ pub fn build_menu_bar(
             // Hidden while the recording gate is off (SPEC §10.7, §10.10.1).
             if crate::recording::gate::RecordingGate::of_config(config).enabled {
                 entries.push(c.on("Recordings", "ToggleRecordingsPanel"));
+            }
+            // Hidden while the triggers gate is off (SPEC §10.7, §10.11.9).
+            if crate::triggers::TriggerGate::of_config(config).enabled {
+                entries.push(c.on("Triggers", "ToggleTriggersPanel"));
             }
             entries
         },

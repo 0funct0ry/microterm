@@ -108,6 +108,13 @@ an `id`, a `format` (`cast` or `vhs`), an optional `output` path, an `opts` obje
 keys as `--opt` and `force`; a recording that cannot be exported in that format fails with exit
 code 12.
 
+### Triggers are not available to agents
+
+There is no MCP tool for [triggers](/docs/triggers/), and `ctl trigger` cannot create, edit or
+delete a rule: rules that react to terminal output are written by you in the panel or in
+`triggers.toml`. `ctl trigger enable|disable|pause|resume` change only the running session, and
+`ctl events` shows `pane.bell` and `trigger.fired` so you can watch what rules do.
+
 ## Security: read this before enabling it
 
 `ctl`, the socket and the MCP server are, by design, remote control of every pane. The only

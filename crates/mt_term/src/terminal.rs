@@ -7,6 +7,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
@@ -17,6 +18,7 @@ use crate::commands::{drive, CommandInfo, CommandTracker, OscSniffer};
 use crate::emulator::{take_damage, term_config, CursorDefault, ScrollCmd, Size};
 use crate::events::{Listener, Osc52Policy, Palette, Shared, TermEvent};
 use crate::input::{encode_key, encode_paste, InputMode, KeyInput};
+use crate::linetap::{LineQueue, LineTapCfg};
 use crate::shell::resolve_shell;
 use crate::snapshot::{self, Modes, RenderSnapshot};
 use crate::width_filter::WidthFilter;
@@ -409,6 +411,8 @@ impl Terminal {
             ..
         } = f;
         let wide = self.wide_ri.load(Ordering::Relaxed);
+        // Replayed bytes (reconnect, attach) never reach the trigger line tap (SPEC §10.11.3).
+        tracker.lines.set_replay(!record);
         // Bytes held back by the width filter while it was on are released first.
         if !wide {
             let held = filter.take_pending();
@@ -434,6 +438,10 @@ impl Terminal {
             },
             |code| self.shared.notify(TermEvent::CommandFinished(code)),
         );
+        if !record {
+            let trimmed = tracker.trimmed();
+            tracker.lines.settle_replay(&term, trimmed);
+        }
         drop(tracker);
         drop(term);
         self.shared.notify(TermEvent::Wakeup);
@@ -488,7 +496,29 @@ impl Terminal {
     /// Like [`write`](Self::write) but invisible to every input tap. Used for snippet inserts
     /// that contain a `secret` (SPEC §10.8.5, §10.10.3).
     pub fn write_untapped(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        let bytes = bytes.into();
+        self.note_typed();
+        self.send_raw(bytes.into());
+    }
+
+    /// Marks the cursor's logical line as typed input (see `CompletedLine::input`), so rules
+    /// that match command output skip it even without shell integration.
+    fn note_typed(&self) {
+        let id = {
+            let term = self.term.lock();
+            if term
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+            {
+                return;
+            }
+            crate::linetap::cursor_line_start(&term)
+        };
+        let mut tracker = self.tracker();
+        let id = tracker.trimmed() + id as u64;
+        tracker.note_typed(id);
+    }
+
+    fn send_raw(&self, bytes: Cow<'static, [u8]>) {
         match &self.backend {
             Backend::Local { input, .. } => {
                 let _ = input.send(bytes);
@@ -522,6 +552,99 @@ impl Terminal {
         match &self.backend {
             Backend::Local { master_fd, .. } => pty_input_hidden(*master_fd),
             Backend::Remote { .. } => None,
+        }
+    }
+
+    /// Installs (or with `None` removes) the trigger line tap (SPEC §10.11.3): finished lines of
+    /// rendered output go to `queue` tagged `pane`, starting from the cursor's current line.
+    ///
+    /// The PTY thread only records which rows finished; a small `mt-line-tap` thread reads them
+    /// out of the grid a couple of milliseconds later (so the text is the line as it stands then)
+    /// and scans an unfinished line (a prompt) once after `partial_after_ms` of PTY silence. With
+    /// no tap installed the cost is one check per parsed segment.
+    pub fn set_line_tap(&self, cfg: Option<LineTapCfg>, queue: Arc<LineQueue>, pane: u64) {
+        let term = self.term.lock();
+        let mut tracker = self.tracker();
+        let Some(cfg) = cfg else {
+            tracker.lines.remove();
+            return;
+        };
+        let shared = crate::linetap::TapShared::new();
+        let trimmed = tracker.trimmed();
+        tracker
+            .lines
+            .install(cfg, queue, pane, shared.clone(), true, &*term, trimmed);
+        drop(tracker);
+        drop(term);
+        self.spawn_line_thread(cfg.partial_after_ms, shared);
+    }
+
+    pub fn line_tap_installed(&self) -> bool {
+        self.tracker().lines.installed()
+    }
+
+    /// The `mt-line-tap` thread: reads finished lines out of the grid (woken by the PTY thread,
+    /// then waiting a moment so one pass covers many lines) and scans an unfinished line once
+    /// the PTY has been quiet.
+    fn spawn_line_thread(&self, after_ms: u32, shared: Arc<crate::linetap::TapShared>) {
+        const COALESCE: Duration = Duration::from_millis(2);
+        let term = Arc::downgrade(&self.term);
+        let tracker = Arc::downgrade(&self.tracker);
+        let taps = Arc::downgrade(&self.taps);
+        let idle = if after_ms == 0 {
+            Duration::from_secs(3600)
+        } else {
+            Duration::from_millis(u64::from((after_ms / 4).clamp(20, 100)))
+        };
+        let thread_shared = shared.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mt-line-tap".into())
+            .spawn(move || {
+                let shared = thread_shared;
+                let mut checked = 0u64;
+                loop {
+                    // Woken by the PTY thread when rows finish; otherwise checks for quiet.
+                    if !shared.pending.load(Ordering::Acquire) {
+                        std::thread::park_timeout(idle);
+                    }
+                    if !shared.alive.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let work = shared.pending.load(Ordering::Acquire);
+                    if work {
+                        std::thread::sleep(COALESCE);
+                    }
+                    let (Some(term), Some(tracker), Some(taps)) =
+                        (term.upgrade(), tracker.upgrade(), taps.upgrade())
+                    else {
+                        return;
+                    };
+                    let last = taps.last_output_ms.load(Ordering::Relaxed);
+                    let quiet = crate::commands::now_ms().saturating_sub(last);
+                    let want_partial = after_ms > 0
+                        && last != 0
+                        && last != checked
+                        && quiet >= u64::from(after_ms);
+                    if !work && !want_partial {
+                        continue;
+                    }
+                    let term = term.lock();
+                    let mut tracker = tracker.lock().unwrap_or_else(|e| e.into_inner());
+                    tracker.drain_lines(&*term);
+                    if want_partial {
+                        checked = last;
+                        tracker.flush_partial_lines(&*term);
+                    }
+                }
+            });
+        match spawned {
+            Ok(h) => {
+                shared.set_waker(h.thread().clone());
+                h.thread().unpark();
+            }
+            Err(_) => {
+                // No extraction thread: finished lines are never read out (taps stay inert).
+            }
         }
     }
 
@@ -604,7 +727,15 @@ impl Terminal {
     pub fn send_mouse(&self, ev: &crate::MouseEvent) -> bool {
         match crate::encode_mouse(ev, &self.modes().mouse_modes()) {
             Some(b) => {
-                self.write(b);
+                // Mouse reports are not typing: the cursor's line stays output.
+                let b: Cow<'static, [u8]> = b.into();
+                Taps::send(&self.taps.input, &b);
+                let hidden = self.input_hidden();
+                self.taps.send_record(|| TapKind::Input {
+                    bytes: b.to_vec(),
+                    hidden,
+                });
+                self.send_raw(b);
                 true
             }
             None => false,
@@ -714,7 +845,84 @@ impl Terminal {
         let mut snap = snapshot::build(&term, damage, self.wide_ri.load(Ordering::Relaxed));
         snap.modes.sgr_pixels = self.sgr_pixels.load(Ordering::Relaxed);
         snap.vt = self.shared.vt.lock().unwrap().view();
+        snap.line_base = self.tracker().trimmed();
         snap
+    }
+
+    /// A snapshot that leaves the damage state alone, so a one-off reader (a trigger
+    /// `screenshot`) cannot make the renderer miss rows.
+    pub fn peek_snapshot(&self) -> RenderSnapshot {
+        let term = self.term.lock();
+        let mut snap = snapshot::build(
+            &term,
+            snapshot::Damage::Full,
+            self.wide_ri.load(Ordering::Relaxed),
+        );
+        snap.modes.sgr_pixels = self.sgr_pixels.load(Ordering::Relaxed);
+        snap.vt = self.shared.vt.lock().unwrap().view();
+        drop(term);
+        snap.line_base = self.tracker().trimmed();
+        snap
+    }
+
+    /// The logical line with stable id `id` plus context (trigger `snapshot`), cut to
+    /// `max_chars` per line. `None` once the line left the scrollback.
+    pub fn capture_lines(
+        &self,
+        id: u64,
+        before: usize,
+        after: usize,
+        max_chars: usize,
+    ) -> Option<crate::CapturedLines> {
+        let term = self.term.lock();
+        let trimmed = self.tracker().trimmed();
+        crate::linetap::lines_around(&term, trimmed, id, before, after, max_chars)
+    }
+
+    /// The `[start, end)` stable-id regions of the prompt and typed input of the retained
+    /// commands (empty without shell integration); see `CompletedLine::input`.
+    pub fn input_line_regions(&self) -> Vec<(u64, u64)> {
+        self.tracker().input_regions()
+    }
+
+    /// Lines that left the history for good: `line_base + absolute row` is a row's stable id.
+    pub fn line_base(&self) -> u64 {
+        self.tracker().trimmed()
+    }
+
+    /// Where the viewport sits, without touching the damage state a snapshot consumes:
+    /// `(line_base, history size, display offset, rows)`.
+    pub fn view_info(&self) -> (u64, usize, usize, usize) {
+        let (history, offset, rows) = {
+            use alacritty_terminal::grid::Dimensions;
+            let term = self.term.lock();
+            let g = term.grid();
+            (g.history_size(), g.display_offset(), g.screen_lines())
+        };
+        (self.tracker().trimmed(), history, offset, rows)
+    }
+
+    /// Stable id of the cursor's row (`line_base + absolute row`), for markers on event rules.
+    pub fn cursor_line_id(&self) -> u64 {
+        let term = self.term.lock();
+        let (abs, _) = crate::lines::cursor_abs(&term);
+        drop(term);
+        self.tracker().trimmed() + abs as u64
+    }
+
+    /// Scrolls so the row with stable id `id` is visible (centred when it was off screen).
+    /// `false` when the row has left the scrollback.
+    pub fn scroll_to_line_id(&self, id: u64) -> bool {
+        let trimmed = self.tracker().trimmed();
+        let Some(abs) = id.checked_sub(trimmed) else {
+            return false;
+        };
+        let mut term = self.term.lock();
+        if abs as usize >= crate::lines::total_lines(&term) {
+            return false;
+        }
+        crate::lines::scroll_to_abs(&mut term, abs as usize, true);
+        true
     }
 
     pub fn total_lines(&self) -> usize {
@@ -1205,6 +1413,27 @@ mod tests {
     }
 
     #[test]
+    fn lines_typed_on_are_input_even_without_shell_integration() {
+        let (t, rx) = spawn_sh("echo ready-$((1+1)); read x; echo got-$x; sleep 5");
+        wait_for(&t, &rx, "ready-2");
+        t.write(b"typed-line-x\r".to_vec());
+        wait_for(&t, &rx, "got-typed-line-x");
+        let base = t.line_base();
+        let id_of = |needle: &str| {
+            t.lines_range(0, t.total_lines())
+                .iter()
+                .position(|l| l.text().starts_with(needle))
+                .map(|i| base + i as u64)
+                .expect(needle)
+        };
+        let regions = t.input_line_regions();
+        assert!(crate::in_regions(&regions, id_of("typed-line-x")));
+        assert!(!crate::in_regions(&regions, id_of("ready-2")));
+        assert!(!crate::in_regions(&regions, id_of("got-typed-line-x")));
+        t.write(vec![3]);
+    }
+
+    #[test]
     fn echo_flag_follows_the_pty_and_untapped_writes_are_invisible() {
         // A password prompt: ECHO off while the program holds the tty in canonical mode.
         let (t, rx) = spawn_sh("stty -echo; echo noecho-$((1+1)); sleep 5");
@@ -1449,5 +1678,76 @@ mod tests {
             .iter()
             .any(|e| matches!(e, TermEvent::ChildExit(Some(2)))));
         assert!(t.foreground_process().is_none() && t.cwd().is_none());
+    }
+
+    fn line_cfg(partial_after_ms: u32) -> LineTapCfg {
+        LineTapCfg {
+            max_line_chars: 4096,
+            scan_alt_screen: false,
+            partial_after_ms,
+        }
+    }
+
+    /// Collects lines until `done` accepts what has arrived (or 10 s pass).
+    fn wait_lines(
+        q: &LineQueue,
+        done: impl Fn(&[crate::CompletedLine]) -> bool,
+    ) -> Vec<crate::CompletedLine> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut got = Vec::new();
+        while !done(&got) && Instant::now() < deadline {
+            got.extend(q.recv_batch(100, Duration::from_millis(100)));
+        }
+        got
+    }
+
+    #[test]
+    fn line_tap_sees_live_pty_lines_and_a_prompt_without_a_newline() {
+        let (t, rx) = spawn_sh("echo rd$((1+1))");
+        wait_for(&t, &rx, "rd2");
+        std::thread::sleep(Duration::from_millis(300));
+        let q = LineQueue::new(4096);
+        assert!(!t.line_tap_installed());
+        t.set_line_tap(Some(line_cfg(150)), q.clone(), 9);
+        assert!(t.line_tap_installed());
+        t.write(b"echo 'error: build failed'; printf 'Continue? [y/N] '; sleep 2\n".to_vec());
+        let got = wait_lines(&q, |l| {
+            l.iter().any(|x| x.partial && x.text == "Continue? [y/N]")
+                && l.iter().any(|x| x.text == "error: build failed")
+        });
+        let texts: Vec<_> = got.iter().map(|l| (l.text.as_str(), l.partial)).collect();
+        assert!(texts.contains(&("error: build failed", false)), "{texts:?}");
+        assert!(texts.contains(&("Continue? [y/N]", true)), "{texts:?}");
+        assert!(got.iter().all(|l| l.pane == 9));
+        // Removing the tap stops delivery (and the flusher).
+        t.set_line_tap(None, q.clone(), 9);
+        assert!(!t.line_tap_installed());
+        t.write(b"echo after-rem$((1+1))\n".to_vec());
+        wait_for(&t, &rx, "after-rem2");
+        assert!(q.recv_batch(100, Duration::from_millis(50)).is_empty());
+    }
+
+    #[test]
+    fn replayed_bytes_do_not_reach_the_line_tap_but_live_ones_do() {
+        let t = Terminal::remote(
+            SpawnOptions::default(),
+            RemoteIo {
+                input: Box::new(|_| {}),
+                resize: Box::new(|_, _| {}),
+            },
+            || {},
+        );
+        let q = LineQueue::new(100);
+        t.set_line_tap(Some(line_cfg(0)), q.clone(), 3);
+        t.feed_replay(b"old error: replayed\r\nContinue? [y/N] ");
+        assert!(q.recv_batch(10, Duration::from_millis(0)).is_empty());
+        t.feed(b"\r\nlive error: fresh\r\nx");
+        // The lines are read out of the grid a moment later, by the tap's own thread.
+        let texts: Vec<_> = wait_lines(&q, |l| !l.is_empty())
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        // The replayed prompt was not scanned, and finishing it unchanged is not a new scan.
+        assert_eq!(texts, ["live error: fresh"]);
     }
 }

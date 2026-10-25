@@ -39,6 +39,7 @@ export default defineConfig({
             { label: 'Run & wait', slug: 'docs/run-and-wait' },
             { label: 'Notifications & status', slug: 'docs/notifications-and-status' },
             { label: 'Shell integration', slug: 'docs/shell-integration' },
+            { label: 'Triggers', slug: 'docs/triggers' },
             { label: 'Recording & replay', slug: 'docs/recording-and-replay' },
             { label: 'Exporting recordings', slug: 'docs/exporting-recordings' },
             { label: 'Agents & automation', slug: 'docs/agents-and-automation' },

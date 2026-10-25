@@ -172,6 +172,20 @@ action = "Disable"   # unbind a default
 | `FocusRecordingsPanel` | **Focus recordings panel** — Open the recordings side panel if needed and move keyboard focus to it | — | — |
 | `ExportRecording` | **Export recording** — Open the export dialog for the selected recording | — | — |
 
+## Triggers
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `ToggleTriggersPanel` | **Toggle triggers panel** — Open the triggers side panel; press again to focus it, and again to close it (needs `triggers.enabled = true`) | — | — |
+| `FocusTriggersPanel` | **Focus triggers panel** — Open the triggers side panel if needed and move keyboard focus to it | — | — |
+| `NewTrigger` | **New trigger** — Open the trigger editor with a blank rule | — | — |
+| `CreateTriggerFromSelection` | **Create trigger from selection** — Open the trigger editor with the selected text as an escaped regex and a highlight action | — | — |
+| `OpenTriggersFile` | **Open triggers file** — Open triggers.toml in $VISUAL / $EDITOR | — | — |
+| `ToggleTriggersPaused` | **Pause or resume all triggers** — Stop every rule from firing for this session, or let them fire again | — | — |
+| `NextMarker` | **Next marker** — Scroll the focused pane to the next marker left by a trigger | — | — |
+| `PreviousMarker` | **Previous marker** — Scroll the focused pane to the previous marker left by a trigger | — | — |
+| `ClearMarkers` | **Clear markers** — Remove the focused pane's trigger markers | — | — |
+
 ## Serial
 
 | Action | Description | macOS | Linux |

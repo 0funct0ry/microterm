@@ -74,6 +74,64 @@ pub fn stop_all(h: &mut dyn RecordingHost) -> Vec<Finished> {
     h.recorders().stop_all(|p| terms.get(&p).cloned())
 }
 
+/// Starts a recording of `pane`. `trigger` is the rule id when a trigger rule asks (SPEC
+/// §10.11.4): it is recorded in the sidecar's origin and `input` is then always `false` (a
+/// trigger can never capture keystrokes, T9). The gate is the caller's business.
+pub(crate) fn start_with(
+    h: &mut dyn RecordingHost,
+    cfg: &Config,
+    pane: u64,
+    input: Option<bool>,
+    title: Option<String>,
+    trigger: Option<&str>,
+) -> Result<Value, RpcError> {
+    let term = h
+        .terminal(pane)
+        .ok_or_else(|| RpcError::not_found(format!("pane {pane} does not exist")))?;
+    let rows = h.rows();
+    let row = rows.panes.iter().find(|r| r.id == pane);
+    let mut origin = Origin {
+        kind: "local".into(),
+        name: String::new(),
+        cwd: row.and_then(|r| r.cwd.clone()).unwrap_or_default(),
+        process: row.and_then(|r| r.process.clone()).unwrap_or_default(),
+        trigger: trigger
+            .map(|id| format!("trigger:{id}"))
+            .unwrap_or_default(),
+    };
+    match h.domain_kind(pane) {
+        Some(DomainKind::Ssh { name }) => {
+            origin.kind = "ssh".into();
+            origin.name = name;
+        }
+        Some(DomainKind::Serial { name }) => {
+            origin.kind = "serial".into();
+            origin.name = name;
+        }
+        _ => {}
+    }
+    let (theme, font) = h.theme_font();
+    let rec = &cfg.recording;
+    let opts = StartOpts {
+        input: if trigger.is_some() {
+            false
+        } else {
+            input.unwrap_or(rec.capture_input)
+        },
+        redact_no_echo: rec.redact_no_echo,
+        title,
+        origin,
+        theme,
+        font,
+        limits: Limits {
+            max_duration_secs: f64::from(rec.max_duration_minutes) * 60.0,
+            max_bytes: u64::from(rec.max_size_mb) * 1024 * 1024,
+        },
+    };
+    let info = h.recorders().start(&store()?, pane, &term, opts)?;
+    Ok(json!({"id": info.id, "title": info.title, "pane": pane}))
+}
+
 pub fn handle(h: &mut dyn RecordingHost, request: Request) -> Result<Value, RpcError> {
     let cfg = h.config();
     if !RecordingGate::of_config(&cfg).enabled {
@@ -106,46 +164,7 @@ pub fn handle(h: &mut dyn RecordingHost, request: Request) -> Result<Value, RpcE
             let s = st.load(&p.id).map_err(store_error)?;
             Ok(sidecar_json(&st, &s))
         }
-        Request::RecordingStart(p) => {
-            let term = h
-                .terminal(p.pane)
-                .ok_or_else(|| RpcError::not_found(format!("pane {} does not exist", p.pane)))?;
-            let rows = h.rows();
-            let row = rows.panes.iter().find(|r| r.id == p.pane);
-            let mut origin = Origin {
-                kind: "local".into(),
-                name: String::new(),
-                cwd: row.and_then(|r| r.cwd.clone()).unwrap_or_default(),
-                process: row.and_then(|r| r.process.clone()).unwrap_or_default(),
-            };
-            match h.domain_kind(p.pane) {
-                Some(DomainKind::Ssh { name }) => {
-                    origin.kind = "ssh".into();
-                    origin.name = name;
-                }
-                Some(DomainKind::Serial { name }) => {
-                    origin.kind = "serial".into();
-                    origin.name = name;
-                }
-                _ => {}
-            }
-            let (theme, font) = h.theme_font();
-            let rec = &cfg.recording;
-            let opts = StartOpts {
-                input: p.input.unwrap_or(rec.capture_input),
-                redact_no_echo: rec.redact_no_echo,
-                title: p.title,
-                origin,
-                theme,
-                font,
-                limits: Limits {
-                    max_duration_secs: f64::from(rec.max_duration_minutes) * 60.0,
-                    max_bytes: u64::from(rec.max_size_mb) * 1024 * 1024,
-                },
-            };
-            let info = h.recorders().start(&store()?, p.pane, &term, opts)?;
-            Ok(json!({"id": info.id, "title": info.title, "pane": p.pane}))
-        }
+        Request::RecordingStart(p) => start_with(h, &cfg, p.pane, p.input, p.title, None),
         Request::RecordingStop(p) => {
             if p.all {
                 let done = stop_all(h);

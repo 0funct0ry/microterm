@@ -31,6 +31,9 @@ pub struct Origin {
     pub name: String,
     pub cwd: String,
     pub process: String,
+    /// `"trigger:<rule id>"` when a trigger rule started the recording (SPEC §10.11.4).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub trigger: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

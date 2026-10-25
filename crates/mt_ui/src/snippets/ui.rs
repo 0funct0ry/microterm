@@ -145,6 +145,8 @@ impl AppWindow {
             Some(RightPanel::Snippets)
         } else if self.recordings_visible() {
             Some(RightPanel::Recordings)
+        } else if self.triggers_visible() {
+            Some(RightPanel::Triggers)
         } else {
             None
         }
@@ -159,6 +161,7 @@ impl AppWindow {
             None if self.recordings_visible() && self.recordings.panel.focused => {
                 FocusTarget::Panel
             }
+            None if self.triggers_visible() && self.triggers.panel.focused => FocusTarget::Panel,
             None => FocusTarget::Viewport,
         }
     }
@@ -172,6 +175,7 @@ impl AppWindow {
             self.snippets.panel.close();
         } else {
             self.recordings.close_panel();
+            self.triggers.close_panel();
             self.snippets.panel.reconcile(&library::set(cx));
         }
         self.after_panel_change(window, cx);
@@ -184,6 +188,7 @@ impl AppWindow {
         }
         self.snippets.panel.focus();
         self.recordings.close_panel();
+        self.triggers.close_panel();
         self.snippets.panel.reconcile(&library::set(cx));
         self.after_panel_change(window, cx);
     }
@@ -201,6 +206,8 @@ impl AppWindow {
                     panel_width: Some(self.snippets.panel.width),
                     recordings_open: Some(self.recordings.panel.open),
                     recordings_width: Some(self.recordings.panel.width),
+                    triggers_open: Some(self.triggers.panel.open),
+                    triggers_width: Some(self.triggers.panel.width),
                 },
             );
         }

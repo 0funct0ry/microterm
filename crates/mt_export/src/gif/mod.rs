@@ -5,7 +5,7 @@
 mod emoji;
 mod encode;
 mod font;
-mod raster;
+pub(crate) mod raster;
 mod schedule;
 
 use std::io::Write;

@@ -286,6 +286,18 @@ impl RenderOnce for Tab {
                     .whitespace_nowrap()
                     .child(self.title),
             })
+            .when_some(chrome.counter.clone(), |el, text| {
+                el.child(
+                    gpui::div()
+                        .flex_none()
+                        .px(px(5.))
+                        .rounded_full()
+                        .bg(t.element_hover)
+                        .text_size(px(10.))
+                        .text_color(t.text)
+                        .child(text),
+                )
+            })
             .when(chrome.zoomed, |el| {
                 el.child(
                     crate::components::Icon::new(crate::assets::IconName::Maximize)

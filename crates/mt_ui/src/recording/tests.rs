@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// One shared store for every test (`XDG_DATA_HOME` is process-wide).
-pub(super) fn store_dir() -> &'static PathBuf {
+pub(crate) fn store_dir() -> &'static PathBuf {
     static D: OnceLock<PathBuf> = OnceLock::new();
     D.get_or_init(|| {
         let d = std::env::temp_dir().join(format!("mt_rec_ui_{}", std::process::id()));
@@ -29,12 +29,12 @@ pub(super) fn store_dir() -> &'static PathBuf {
 }
 
 /// The store is shared, so the tests that count its files run one at a time.
-pub(super) fn serial() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn serial() -> std::sync::MutexGuard<'static, ()> {
     static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
     L.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub(super) fn casts() -> Vec<PathBuf> {
+pub(crate) fn casts() -> Vec<PathBuf> {
     let dir = store_dir().join("microterm").join("recordings");
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
@@ -48,7 +48,7 @@ pub(super) fn casts() -> Vec<PathBuf> {
     v
 }
 
-pub(super) fn config(name: &str, text: &str) -> PathBuf {
+pub(crate) fn config(name: &str, text: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("mt_rec_cfg_{}_{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -56,7 +56,7 @@ pub(super) fn config(name: &str, text: &str) -> PathBuf {
     d.join("microterm.toml")
 }
 
-pub(super) fn boot(
+pub(crate) fn boot(
     cx: &mut TestAppContext,
     path: PathBuf,
 ) -> (Entity<AppWindow>, &mut VisualTestContext) {
@@ -84,7 +84,7 @@ pub(super) fn boot(
     (view, cx)
 }
 
-pub(super) fn wait_for(view: &Entity<AppWindow>, cx: &mut VisualTestContext, needle: &str) -> bool {
+pub(crate) fn wait_for(view: &Entity<AppWindow>, cx: &mut VisualTestContext, needle: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         std::thread::sleep(Duration::from_millis(30));
@@ -102,7 +102,7 @@ pub(super) fn wait_for(view: &Entity<AppWindow>, cx: &mut VisualTestContext, nee
     }
 }
 
-pub(super) fn toasts(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<(String, bool)> {
+pub(crate) fn toasts(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<(String, bool)> {
     view.read_with(cx, |t, _| {
         t.toasts
             .iter()
@@ -115,7 +115,7 @@ fn pill(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> bool {
     view.read_with(cx, |t, c| t.recording_pill(c).is_some())
 }
 
-pub(super) fn palette_labels(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<String> {
+pub(crate) fn palette_labels(view: &Entity<AppWindow>, cx: &mut VisualTestContext) -> Vec<String> {
     cx.dispatch_action(ShowCommandPalette);
     let labels = view.read_with(cx, |t, _| {
         let p = t.picker.as_ref().unwrap();

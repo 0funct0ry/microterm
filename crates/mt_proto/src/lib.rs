@@ -727,6 +727,22 @@ pub struct RecordingMarkerParams {
     pub label: Option<String>,
 }
 
+/// `trigger.get|enable|disable`: a rule by id (SPEC §10.11.6). There is deliberately no method
+/// that creates, edits or deletes a rule: a process that can drive `ctl` cannot install
+/// automation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerIdParams {
+    pub id: String,
+}
+
+/// `trigger.test`: the dry run of a rule against a pane (it runs nothing).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerTestParams {
+    pub id: String,
+    #[serde(default)]
+    pub target: Target,
+}
+
 /// `recording.get`: one stored recording by id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingIdParams {
@@ -837,6 +853,13 @@ pub enum Request {
     RecordingRemove(RecordingRemoveParams),
     RecordingExport(RecordingExportParams),
     RecordingFormats,
+    TriggerList,
+    TriggerGet(TriggerIdParams),
+    TriggerEnable(TriggerIdParams),
+    TriggerDisable(TriggerIdParams),
+    TriggerPause,
+    TriggerResume,
+    TriggerTest(TriggerTestParams),
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -898,6 +921,13 @@ pub const METHODS: &[&str] = &[
     "recording.remove",
     "recording.export",
     "recording.formats",
+    "trigger.list",
+    "trigger.get",
+    "trigger.enable",
+    "trigger.disable",
+    "trigger.pause",
+    "trigger.resume",
+    "trigger.test",
 ];
 
 impl Request {
@@ -953,6 +983,13 @@ impl Request {
             Request::RecordingRemove(_) => "recording.remove",
             Request::RecordingExport(_) => "recording.export",
             Request::RecordingFormats => "recording.formats",
+            Request::TriggerList => "trigger.list",
+            Request::TriggerGet(_) => "trigger.get",
+            Request::TriggerEnable(_) => "trigger.enable",
+            Request::TriggerDisable(_) => "trigger.disable",
+            Request::TriggerPause => "trigger.pause",
+            Request::TriggerResume => "trigger.resume",
+            Request::TriggerTest(_) => "trigger.test",
             Request::SnippetList(_) => "snippet.list",
             Request::SnippetGet(_) => "snippet.get",
             Request::SnippetExpand(_) => "snippet.expand",
@@ -979,7 +1016,14 @@ impl Request {
             | Request::MenuList
             | Request::RecordingList
             | Request::RecordingFormats
+            | Request::TriggerList
+            | Request::TriggerPause
+            | Request::TriggerResume
             | Request::MenuBarList => json!({}),
+            Request::TriggerGet(p) | Request::TriggerEnable(p) | Request::TriggerDisable(p) => {
+                to(p)
+            }
+            Request::TriggerTest(p) => to(p),
             Request::RecordingGet(p) => to(p),
             Request::RecordingStart(p) => to(p),
             Request::RecordingStop(p) => to(p),
@@ -1126,6 +1170,13 @@ impl Request {
             "recording.remove" => Request::RecordingRemove(p(method, params)?),
             "recording.export" => Request::RecordingExport(p(method, params)?),
             "recording.formats" => Request::RecordingFormats,
+            "trigger.list" => Request::TriggerList,
+            "trigger.get" => Request::TriggerGet(p(method, params)?),
+            "trigger.enable" => Request::TriggerEnable(p(method, params)?),
+            "trigger.disable" => Request::TriggerDisable(p(method, params)?),
+            "trigger.pause" => Request::TriggerPause,
+            "trigger.resume" => Request::TriggerResume,
+            "trigger.test" => Request::TriggerTest(p(method, params)?),
             "snippet.list" => Request::SnippetList(p(method, params)?),
             "snippet.get" => Request::SnippetGet(p(method, params)?),
             "snippet.expand" => Request::SnippetExpand(p(method, params)?),
@@ -1470,6 +1521,16 @@ pub enum Event {
         pane: u64,
         exit_code: Option<i32>,
     },
+    /// BEL arrived in the pane (independent of `[bell].mode`).
+    Bell {
+        pane: u64,
+    },
+    /// A trigger rule fired (M12.6); `actions` are the action kinds that ran.
+    TriggerFired {
+        rule: String,
+        pane: u64,
+        actions: Vec<String>,
+    },
     TabAdded {
         window: u64,
         tab: u64,
@@ -1561,6 +1622,8 @@ impl Event {
             Event::Notification { .. } => "pane.notification",
             Event::PaneExited { .. } => "pane.exited",
             Event::CommandFinished { .. } => "pane.command_finished",
+            Event::Bell { .. } => "pane.bell",
+            Event::TriggerFired { .. } => "trigger.fired",
             Event::TabAdded { .. } => "tab.added",
             Event::TabRemoved { .. } => "tab.removed",
             Event::TabMoved { .. } => "tab.moved",
@@ -1590,6 +1653,8 @@ impl Event {
             | Event::Notification { pane, .. }
             | Event::PaneExited { pane, .. }
             | Event::CommandFinished { pane, .. }
+            | Event::Bell { pane }
+            | Event::TriggerFired { pane, .. }
             | Event::MenuInvoked { pane, .. }
             | Event::MenuItemsChanged { pane } => Subject::Pane(*pane),
             Event::TabAdded { tab, .. }
@@ -2033,6 +2098,16 @@ mod tests {
                 force: false,
             }),
             Request::RecordingFormats,
+            Request::TriggerList,
+            Request::TriggerGet(TriggerIdParams { id: "t_a".into() }),
+            Request::TriggerEnable(TriggerIdParams { id: "t_a".into() }),
+            Request::TriggerDisable(TriggerIdParams { id: "t_a".into() }),
+            Request::TriggerPause,
+            Request::TriggerResume,
+            Request::TriggerTest(TriggerTestParams {
+                id: "t_a".into(),
+                target: Target::pane(3),
+            }),
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -2075,8 +2150,24 @@ mod tests {
              record.start record.stop replay.start config.reload subscribe menu.list menubar.list menu.show \
              menu.invoke snippet.list snippet.get snippet.expand snippet.insert snippet.add snippet.remove \
              recording.list recording.get recording.start recording.stop recording.marker \
-             recording.rename recording.remove recording.export recording.formats"
+             recording.rename recording.remove recording.export recording.formats \
+             trigger.list trigger.get trigger.enable trigger.disable trigger.pause trigger.resume \
+             trigger.test"
         );
+        // Rules are created, edited and deleted in the panel or the file, never over IPC (T6).
+        for banned in [
+            "trigger.new",
+            "trigger.add",
+            "trigger.edit",
+            "trigger.remove",
+            "trigger.delete",
+            "trigger.set",
+        ] {
+            assert!(
+                Request::from_parts(banned, json!({})).is_err(),
+                "{banned} must not exist"
+            );
+        }
         for old in ["pane.spawn", "pane.kill", "tab.activate", "tab.set_title"] {
             assert!(
                 Request::from_parts(old, json!({})).is_err(),

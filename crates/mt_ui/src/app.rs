@@ -187,6 +187,8 @@ pub enum Target {
     Color(Option<mt_mux::TabColor>),
     /// A snippet id (`!` provider; Enter inserts, ⌥Enter runs).
     Snippet(String),
+    /// A trigger marker of the focused pane, by stable line id (`%` provider).
+    Marker(u64),
 }
 
 /// Provider groups of the command palette (the `u8` tag in `PickerState`).
@@ -196,6 +198,7 @@ pub mod group {
     pub const TABS: u8 = 2;
     pub const THEMES: u8 = 3;
     pub const SNIPPETS: u8 = 4;
+    pub const MARKERS: u8 = 5;
 }
 
 /// `>` actions (the default), `@` workspaces, `#` tabs, `~` themes (SPEC §10.1).
@@ -206,11 +209,14 @@ pub const PALETTE_PREFIXES: &[(char, u8)] = &[
     ('~', group::THEMES),
 ];
 
-/// `>` plus `!` snippets while the feature is on.
-pub fn palette_prefixes(snippets: bool) -> Vec<(char, u8)> {
+/// `>` plus `!` snippets while the feature is on, and `%` trigger markers while triggers are.
+pub fn palette_prefixes(snippets: bool, triggers: bool) -> Vec<(char, u8)> {
     let mut p = PALETTE_PREFIXES.to_vec();
     if snippets {
         p.push(('!', group::SNIPPETS));
+    }
+    if triggers {
+        p.push(('%', group::MARKERS));
     }
     p
 }
@@ -301,6 +307,8 @@ pub struct AppWindow {
     /// The snippets panel, fill dialog and editor (SPEC §10.8).
     pub(crate) snippets: crate::snippets::ui::SnippetsUi,
     pub(crate) recordings: crate::recording::panel::RecordingsUi,
+    /// The Triggers panel and rule editor (SPEC §10.11.5).
+    pub(crate) triggers: crate::triggers::ui::TriggersUi,
     /// Where each designer text field's text was painted, for mouse hit-testing.
     pub(crate) designer_layout: crate::designer_view::FieldLayouts,
     /// The designer field a left-button drag is selecting in.
@@ -426,9 +434,13 @@ impl AppWindow {
             .unwrap_or_default();
         let snippets = crate::snippets::ui::SnippetsUi::new(&cfg, cx.focus_handle());
         let mut recordings = crate::recording::panel::RecordingsUi::new(&cfg, cx.focus_handle());
+        let mut triggers = crate::triggers::ui::TriggersUi::new(&cfg, cx.focus_handle());
         if snippets.panel.open {
             // One right panel at a time; the snippets panel wins a tie at startup.
             recordings.close_panel();
+        }
+        if snippets.panel.open || recordings.panel.open {
+            triggers.close_panel();
         }
         let mut this = Self {
             viewport_focus,
@@ -444,6 +456,7 @@ impl AppWindow {
             designer: None,
             snippets,
             recordings,
+            triggers,
             designer_layout: Default::default(),
             designer_drag: None,
             last_window_title: String::new(),
@@ -638,7 +651,7 @@ impl AppWindow {
     }
 
     /// Recomputes every tab's display title and process state from the mux and its terminal.
-    fn refresh_titles(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh_titles(&mut self, cx: &mut Context<Self>) {
         mux_host::refresh_color_rules(cx);
         let fmt = self.cfg.tab_bar.title_format.clone();
         let show_index = self.cfg.tab_bar.show_index;
@@ -652,6 +665,7 @@ impl AppWindow {
             let shell = tab.session().map(|s| s.default_title.as_str());
             let parts = mt_mux::TitleParts {
                 title_override: mt.title_override.as_deref(),
+                trigger_title: mt.trigger_title.as_deref(),
                 pane_title: Some(pane.title.as_str()),
                 process: tab.process.as_deref().or(shell),
                 cwd: pane.cwd.as_deref(),
@@ -843,6 +857,9 @@ impl AppWindow {
             return;
         };
         let Some(rx) = view.wake.clone() else { return };
+        // A new terminal gets its trigger line tap once this update has finished (it needs to
+        // read the other windows, which the update on the stack forbids).
+        cx.defer(|cx| crate::triggers::runtime::sync_taps(cx, false));
         view.pump = Some(cx.spawn_in(window, async move |this, cx| {
             if this
                 .update_in(cx, |this, window, cx| {
@@ -902,6 +919,7 @@ impl AppWindow {
         let mut exit = None;
         let mut new_title = None;
         let mut finished = Vec::new();
+        let mut started = false;
         let mut progress = Vec::new();
         let mut notes = Vec::new();
         let mut menu_items_changed = false;
@@ -932,6 +950,7 @@ impl AppWindow {
                 }
                 TermEvent::ChildExit(code) => exit = Some(code),
                 TermEvent::CommandFinished(code) => finished.push(code),
+                TermEvent::CommandStart => started = true,
                 TermEvent::Progress { state, value } => progress.push((state, value)),
                 TermEvent::Notify(text) => notes.push(text),
                 TermEvent::MenuItemsChanged => menu_items_changed = true,
@@ -940,6 +959,7 @@ impl AppWindow {
         session.refresh();
         if index == self.active_tab && focused {
             self.search_follow_output();
+            self.follow_trigger_preview(cx);
         }
         if let Some(title) = new_title {
             mux_host::host(cx).mux.set_pane_title(pane, &title);
@@ -947,7 +967,13 @@ impl AppWindow {
         }
         self.cursor_phase = true;
         if bell {
+            // Published before `[bell].mode` is applied, so `mode = "none"` still lets a
+            // trigger react (SPEC §10.11.3).
+            mux_host::host(cx).mux.bell(pane);
             self.flash_bell(cx);
+        }
+        if started {
+            crate::triggers::on_command_start(cx, pane);
         }
         for code in finished {
             mux_host::on_command_finished(cx, pane, code);
@@ -985,7 +1011,7 @@ impl AppWindow {
         cx.notify();
     }
 
-    fn flash_bell(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn flash_bell(&mut self, cx: &mut Context<Self>) {
         match self.cfg.bell.mode {
             mt_config::BellMode::None => return,
             mt_config::BellMode::Audible => {
@@ -1247,7 +1273,9 @@ impl AppWindow {
         match self.focus_target() {
             crate::overlay_stack::FocusTarget::Viewport => window.focus(&self.viewport_focus),
             crate::overlay_stack::FocusTarget::Panel => {
-                if self.recordings_visible() && self.recordings.panel.focused {
+                if self.triggers_visible() && self.triggers.panel.focused {
+                    window.focus(&self.triggers.focus)
+                } else if self.recordings_visible() && self.recordings.panel.focused {
                     window.focus(&self.recordings.focus)
                 } else {
                     window.focus(&self.snippets.focus)
@@ -1413,7 +1441,10 @@ impl AppWindow {
                 PickerData {
                     kind,
                     state: with_mru(items, cx).with_prefixes(
-                        &palette_prefixes(SnippetsGate::of_config(&self.cfg).enabled),
+                        &palette_prefixes(
+                            SnippetsGate::of_config(&self.cfg).enabled,
+                            crate::triggers::TriggerGate::of_config(&self.cfg).enabled,
+                        ),
                         Some(group::ACTIONS),
                     ),
                     placeholder: if SnippetsGate::of_config(&self.cfg).enabled {
@@ -1573,6 +1604,8 @@ impl AppWindow {
         let snippets_on = SnippetsGate::of_config(&self.cfg).enabled;
         let recording_on = crate::recording::gate::RecordingGate::of_config(&self.cfg).enabled;
         let recording_now = self.focused_is_recording(cx);
+        let triggers_on = crate::triggers::TriggerGate::of_config(&self.cfg).enabled;
+        let has_selection = self.live().is_some_and(|s| s.snapshot.selection.is_some());
         for (i, def) in ACTIONS
             .iter()
             .enumerate()
@@ -1584,6 +1617,10 @@ impl AppWindow {
             // start and stop.
             .filter(|(_, d)| recording_on || d.category() != "Recording")
             .filter(|(_, d)| !matches!(d.name, "StartRecording" | "StopRecording"))
+            // Trigger rows are absent while the gate is off (SPEC §10.11.1); creating a rule
+            // from a selection needs a selection.
+            .filter(|(_, d)| triggers_on || d.category() != "Triggers")
+            .filter(|(_, d)| has_selection || d.name != "CreateTriggerFromSelection")
         {
             let mut e = Entry::new(Target::Action(i), format!("action:{}", def.name));
             e.detail = Some(def.description.to_string());
@@ -1676,6 +1713,26 @@ impl AppWindow {
                     e.chip = Some(s.keys.clone());
                 }
                 items.push((format!("Snippet: {}", s.title), e));
+            }
+        }
+        if triggers_on {
+            if let (Some(pane), Some(rt)) = (
+                self.focused_pane(),
+                cx.try_global::<crate::triggers::runtime::TriggerRuntime>(),
+            ) {
+                for m in rt.deco.markers(pane) {
+                    let mut e =
+                        Entry::new(Target::Marker(m.line), format!("marker:{pane}:{}", m.line));
+                    e.group = group::MARKERS;
+                    e.icon = Some(IconName::Search);
+                    e.detail = Some(format!("rule {}", m.rule));
+                    let name = if m.label.is_empty() {
+                        "marker".to_string()
+                    } else {
+                        m.label.clone()
+                    };
+                    items.push((format!("Marker: {name}"), e));
+                }
             }
         }
         let current = *cx.global::<Theme>();
@@ -1919,6 +1976,11 @@ impl AppWindow {
                 }
             }
             Target::MenuItem(addr) => self.invoke_menu_address(&addr, window, cx),
+            Target::Marker(line) => {
+                if let Some(pane) = self.focused_pane() {
+                    cx.defer(move |cx| crate::triggers::runtime::jump_to_line(cx, pane, line));
+                }
+            }
             Target::Snippet(id) => {
                 let g = crate::snippets::panel_state::Gesture {
                     run: alt.then_some(true),
@@ -2179,6 +2241,7 @@ impl AppWindow {
             if mux_host::host(cx).mux.clear_attention(pane) {
                 cx.notify();
             }
+            crate::triggers::on_focus(cx, pane);
         }
     }
 
@@ -2887,6 +2950,9 @@ impl AppWindow {
         }
         if diff.has(mt_config::Effect::Snippets) {
             self.snippets_changed(window, cx);
+        }
+        if diff.has(mt_config::Effect::Triggers) {
+            self.triggers_gate_changed(window, cx);
         }
         if diff.has(mt_config::Effect::Recording)
             && !crate::recording::gate::RecordingGate::of_config(&cfg).enabled

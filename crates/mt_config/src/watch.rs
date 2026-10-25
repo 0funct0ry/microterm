@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::load::{snippets_path, themes_dir};
+use crate::load::{snippets_path, themes_dir, triggers_path};
 
 pub const DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -20,8 +20,8 @@ pub struct ConfigWatcher {
     _thread: JoinHandle<()>,
 }
 
-fn relevant(path: &Path, config: &Path, snippets: &Path, themes: &Path) -> bool {
-    path == config || path == snippets || path.starts_with(themes)
+fn relevant(path: &Path, config: &Path, snippets: &Path, triggers: &Path, themes: &Path) -> bool {
+    path == config || path == snippets || path == triggers || path.starts_with(themes)
 }
 
 /// Start watching. The receiver yields one `()` per debounced burst of relevant changes.
@@ -42,16 +42,17 @@ pub fn watch_with(
     };
     let themes = themes_dir(&config);
     let snippets = snippets_path(&config);
+    let triggers = triggers_path(&config);
     let (raw_tx, raw_rx) = mpsc::channel::<()>();
     let (tx, rx) = async_channel::unbounded::<()>();
 
-    let (cfg2, snip2, themes2) = (config.clone(), snippets, themes.clone());
+    let (cfg2, snip2, trig2, themes2) = (config.clone(), snippets, triggers, themes.clone());
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = res {
             if ev
                 .paths
                 .iter()
-                .any(|p| relevant(p, &cfg2, &snip2, &themes2))
+                .any(|p| relevant(p, &cfg2, &snip2, &trig2, &themes2))
             {
                 let _ = raw_tx.send(());
             }

@@ -36,6 +36,7 @@ pub struct Config {
     pub sh: Sh,
     pub snippets: Snippets,
     pub recording: Recording,
+    pub triggers: Triggers,
     pub menu_bar: MenuBar,
     pub notifications: Notifications,
     pub terminal: Terminal,
@@ -82,6 +83,7 @@ impl Default for Config {
             sh: Sh::default(),
             snippets: Snippets::default(),
             recording: Recording::default(),
+            triggers: Triggers::default(),
             menu_bar: MenuBar::default(),
             notifications: Notifications::default(),
             terminal: Terminal::default(),
@@ -710,6 +712,68 @@ impl Default for Recording {
             panel_open_on_start: false,
             confirm_delete: true,
             export: RecordingExport::default(),
+        }
+    }
+}
+
+/// `[triggers]`: opt-in rules in `triggers.toml` (SPEC §10.11, §8.3). `allow_clipboard` and
+/// `allow_capture` are second gates that only this file can set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Triggers {
+    /// Master switch; `false` leaves the feature fully inert (no tap, thread, panel or file).
+    pub enabled: bool,
+    /// Second gate: the `clipboard` action.
+    pub allow_clipboard: bool,
+    /// Second gate: the `snapshot` and `screenshot` actions.
+    pub allow_capture: bool,
+    /// Scan an unfinished line after this much PTY silence in ms (0 = never).
+    pub scan_partial_after_ms: u32,
+    /// Also scan while a full-screen program uses the alternate screen.
+    pub scan_alt_screen: bool,
+    pub max_rules: u32,
+    /// Longer lines are scanned up to this prefix.
+    pub max_line_chars: u32,
+    /// Per pane.
+    pub highlights_max: u32,
+    /// Per pane.
+    pub markers_max: u32,
+    /// Per window.
+    pub findings_max: u32,
+    /// `""` = `$XDG_DATA_HOME/microterm/captures`.
+    pub capture_dir: String,
+    pub capture_max_kb: u32,
+    pub capture_max_files: u32,
+    pub capture_max_total_mb: u32,
+    /// Best-effort secret redaction in `snapshot` text.
+    pub capture_redact: bool,
+    /// Initial panel width in px (280-600).
+    pub panel_width: u32,
+    pub panel_open_on_start: bool,
+    pub confirm_delete: bool,
+}
+
+impl Default for Triggers {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_clipboard: false,
+            allow_capture: false,
+            scan_partial_after_ms: 250,
+            scan_alt_screen: false,
+            max_rules: 64,
+            max_line_chars: 4096,
+            highlights_max: 2000,
+            markers_max: 1000,
+            findings_max: 500,
+            capture_dir: String::new(),
+            capture_max_kb: 256,
+            capture_max_files: 200,
+            capture_max_total_mb: 100,
+            capture_redact: true,
+            panel_width: 360,
+            panel_open_on_start: false,
+            confirm_delete: true,
         }
     }
 }

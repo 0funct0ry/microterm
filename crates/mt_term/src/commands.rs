@@ -378,6 +378,9 @@ pub fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Typed-on lines remembered for [`CommandTracker::input_regions`].
+const MAX_TYPED: usize = 1024;
+
 #[derive(Debug)]
 pub struct CommandTracker {
     cmds: VecDeque<Rec>,
@@ -394,6 +397,11 @@ pub struct CommandTracker {
     seen: bool,
     next_seq: u64,
     finished_total: u64,
+    /// The trigger line tap (SPEC §10.11.3); inert unless installed.
+    pub(crate) lines: crate::linetap::LineTap,
+    /// Stable ids of the logical lines the user typed on (keys, text, pastes), ascending. The
+    /// input regions without shell integration, and a backstop with it.
+    typed: VecDeque<u64>,
 }
 
 impl CommandTracker {
@@ -410,7 +418,14 @@ impl CommandTracker {
             seen: false,
             next_seq: 1,
             finished_total: 0,
+            lines: Default::default(),
+            typed: VecDeque::new(),
         }
+    }
+
+    /// The count of lines that left the history for good (the stable-id offset).
+    pub(crate) fn trimmed(&self) -> u64 {
+        self.trimmed
     }
 
     /// Whether the shell has ever sent a mark (shell integration is active).
@@ -465,6 +480,7 @@ impl CommandTracker {
         if cols != self.cols {
             self.cols = cols;
             self.cmds.clear();
+            self.lines.reset_position(term, self.trimmed);
         }
     }
 
@@ -487,10 +503,79 @@ impl CommandTracker {
     /// Accounts for history changes after a parser call and trims it to the limit.
     pub(crate) fn after_segment<T>(&mut self, term: &mut Term<T>) {
         if term.mode().contains(TermMode::ALT_SCREEN) {
-            return; // the alternate grid has no history
+            // The alternate grid has no history; only an opted-in line tap looks at it.
+            if self.lines.wants_alt() {
+                self.scan_lines(term);
+            }
+            return;
         }
         let h = term.grid().history_size();
         self.after_segment_inner(h, Some(term));
+        self.scan_lines(term);
+    }
+
+    /// The `[start, end)` stable-id regions of the prompt and typed input, ascending and
+    /// disjoint: OSC 133 `A` up to `C` of the retained commands, plus every line the user typed
+    /// on (so a shell without integration still keeps its command lines out of output rules).
+    pub(crate) fn input_regions(&self) -> Vec<(u64, u64)> {
+        let mut all: Vec<(u64, u64)> = self
+            .cmds
+            .iter()
+            .filter_map(|r| {
+                let start = r.prompt?.id;
+                let end = match (r.output, r.end) {
+                    (Some(o), _) => o.id,
+                    (None, Some(e)) => e.id.max(start + 1),
+                    (None, None) => u64::MAX,
+                };
+                (end > start).then_some((start, end))
+            })
+            .chain(self.typed.iter().map(|&id| (id, id + 1)))
+            .collect();
+        all.sort_unstable();
+        let mut out: Vec<(u64, u64)> = Vec::with_capacity(all.len());
+        for (a, b) in all {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
+        }
+        out
+    }
+
+    /// Records that the user typed on the logical line with stable id `id`.
+    pub(crate) fn note_typed(&mut self, id: u64) {
+        while self.typed.front().is_some_and(|&f| f < self.trimmed) {
+            self.typed.pop_front();
+        }
+        match self.typed.binary_search(&id) {
+            Ok(_) => {}
+            Err(i) => self.typed.insert(i, id),
+        }
+        while self.typed.len() > MAX_TYPED {
+            self.typed.pop_front();
+        }
+    }
+
+    fn scan_lines<T>(&mut self, term: &Term<T>) {
+        let regions = if self.lines.reads_in_scan() {
+            self.input_regions()
+        } else {
+            Vec::new()
+        };
+        self.lines.scan(term, self.trimmed, &regions);
+    }
+
+    /// Lazy line tap: reads the finished rows out of the grid (lock held by the caller).
+    pub(crate) fn drain_lines<T>(&mut self, term: &Term<T>) -> usize {
+        let regions = self.input_regions();
+        self.lines.drain(term, self.trimmed, &regions)
+    }
+
+    /// Scans the unfinished line once if it has not been scanned in this form.
+    pub(crate) fn flush_partial_lines<T>(&mut self, term: &Term<T>) {
+        let regions = self.input_regions();
+        self.lines.flush_partial(term, self.trimmed, &regions);
     }
 
     fn after_segment_inner<T>(&mut self, mut h: usize, term: Option<&mut Term<T>>) {
@@ -800,6 +885,7 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
                         shared.notify(crate::TermEvent::MenuItemsChanged);
                     }
                 }
+                Mark::OutputStart => shared.notify(crate::TermEvent::CommandStart),
                 Mark::MenuReg(cmd) => {
                     if tracker.menus.apply(cmd.clone(), now_ms()) {
                         shared.notify(crate::TermEvent::MenuItemsChanged);
@@ -1186,5 +1272,18 @@ mod tests {
         e.advance(b"\x1b]7717;menu;add;x;!!;send;!!\x07\x1b]7717;menu;nope\x07");
         let n = e.menu_items().len();
         assert!(n <= crate::menu_reg::RATE_PER_SEC as usize && n > 0, "{n}");
+    }
+
+    #[test]
+    fn typed_lines_merge_with_prompt_regions_into_disjoint_ranges() {
+        let mut t = CommandTracker::new(100, 80);
+        t.note_typed(9);
+        t.note_typed(3);
+        t.note_typed(3);
+        t.note_typed(4);
+        assert_eq!(t.input_regions(), vec![(3, 5), (9, 10)]);
+        t.trimmed = 4;
+        t.note_typed(20);
+        assert_eq!(t.input_regions(), vec![(4, 5), (9, 10), (20, 21)]);
     }
 }

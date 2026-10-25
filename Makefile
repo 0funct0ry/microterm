@@ -42,7 +42,7 @@ CRATE_FEATURES = $(if $(filter microterm,$(C)),$(FEATURES),$(if $(filter mt_ui x
 .PHONY: help setup doctor tools tool-cargo-deny \
 	run run-release run-headless build release mux mux-release mux-musl \
 	test test-crate test-ssh test-ssh-local test-serial ssh-demo ssh-demo-drop check clippy fmt fmt-check lint deny audit \
-	check-facade check-mux-gpui check-snippets-pure themes docs docs-check doc \
+	check-facade check-mux-gpui check-snippets-pure check-triggers-pure themes docs docs-check doc \
 	bench bundle install release-dry \
 	site-install site-dev site-build site-preview \
 	ci tree clean clean-site distclean
@@ -155,9 +155,10 @@ test-serial: ## Serial reconnect test over a socat pty pair (Linux; skipped with
 test-ssh-local: mux ## SSH integration tests against a throw-away local sshd (no Docker, no root)
 	scripts/test-ssh.sh --local
 
-bench: ## Headless 100 MB throughput + GIF export baselines -> bench/results/ (vtebench: see bench/README.md)
+bench: ## Headless 100 MB throughput + GIF export + trigger baselines -> bench/results/ (vtebench: see bench/README.md)
 	bench/throughput.sh
 	bench/gif.sh
+	bench/triggers.sh
 
 # ------------------------------------------------------------------------------ quality
 
@@ -178,7 +179,7 @@ deny: tool-cargo-deny ## Licence, advisory and source checks (cargo-deny)
 
 audit: deny ## Alias of deny
 
-lint: check-facade check-mux-gpui check-snippets-pure check-export-pure fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
+lint: check-facade check-mux-gpui check-snippets-pure check-triggers-pure check-export-pure fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
 
 # Facade rule (SPEC §3.3): only mt_term may mention alacritty_terminal.
 check-facade:
@@ -193,6 +194,10 @@ check-mux-gpui:
 check-snippets-pure: # mt_snippets stays free of GPUI and the terminal engine (SPEC §10.8, D12)
 	@if $(CARGO) tree -p mt_snippets 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
 		echo 'error: mt_snippets must not depend on gpui or alacritty_terminal'; exit 1; fi
+
+check-triggers-pure: # mt_triggers stays free of GPUI and the terminal engine (SPEC §10.11, D14)
+	@if $(CARGO) tree -p mt_triggers 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
+		echo 'error: mt_triggers must not depend on gpui or alacritty_terminal'; exit 1; fi
 
 check-export-pure: # mt_export stays free of GPUI; gif replays via mt_term, never alacritty directly (SPEC §10.10.6, D13)
 	@if $(CARGO) tree -p mt_export 2>/dev/null | grep -Ei 'gpui'; then \

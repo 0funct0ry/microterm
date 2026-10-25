@@ -18,6 +18,46 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.6 — Triggers.** Opt-in local automation rules (`[triggers] enabled = false` by default,
+  SPEC §10.11, D14): *when* a regex matches a rendered line (or a pane event happens:
+  `command_finished`, `cwd_changed`, `pane_exited`, `title_changed`, `bell`), run up to four
+  actions from a closed set: `highlight`, `notify`, `status`, `tab_color`, `bell`, `counter`,
+  `title`, `marker`, `findings`, `recording`, and behind second gates that only `microterm.toml`
+  can open (`allow_clipboard`, `allow_capture`) `clipboard`, `snapshot` and `screenshot`. No action
+  runs a program, types into a pane or uses the network, and none can fire another rule. Rules live
+  in `triggers.toml` (new crate `mt_triggers`: model, surgical write-back, one `RegexSet` pass
+  per line, templates and sanitiser, rate limits, dry run); errors are reported at
+  `triggers.toml:LINE:COL`. A new **Triggers** side panel (one right panel at a time) lists rules
+  and **Findings**, with an editor (live "matches N panes", live regex preview, ordered actions,
+  **Test** dry run, Save/Cancel/Duplicate/Delete) and *Create Trigger from Selection…* (Edit
+  menu, pane menu, palette). Highlights, scrollbar ticks, edge marks and `NextMarker`/
+  `PreviousMarker`/`ClearMarkers` (no default keys) work on stable line ids, so they survive
+  scrolling and reflow. The terminal facade gained a line tap: the PTY thread only records which
+  rows finished and a small thread reads them out about 2 ms later; an unfinished prompt is
+  scanned once after 250 ms of silence; replayed bytes and the alternate screen are never scanned.
+  `ctl trigger list|get|enable|disable|pause|resume|test` (exit 10 while off, 3 for an unknown
+  rule; enable/disable/pause are session-only and there is deliberately no create, edit or delete
+  verb and no MCP tool), `pane.bell` and `trigger.fired` events, `source: "trigger"` on
+  notifications. Tab colors gain the `trigger` source (manual > trigger > declared > rules) and
+  tab titles a trigger-set level (below a manual rename, above OSC titles). Captures go to
+  a `0700` directory with `0600` files created with `O_EXCL|O_NOFOLLOW` under generated names,
+  with size caps and rotation of microterm's own files only; `snapshot` text is redacted on a
+  best-effort basis (`mt_patterns::redact`). New public `mt_export::screenshot::png_frame` renders
+  one frame as a PNG. The id-keyed array-of-tables `toml_edit` helpers now live in
+  `mt_config::aot` and are shared with `snippets.toml`. `make bench` gains `bench/triggers.sh`: the
+  worker scans 3.5 M lines/s with 8 rules; `cat` of 100 MB through a PTY with 8 rules runs at
+  about 0.85 of the untapped throughput (best of three), short of the 10 % target of SPEC §10.11.10.
+- **Triggers: quiet rules are not rate limited.** A rule whose actions are all `highlight`,
+  `marker` or `counter` skips the 5/s per-pane and 20/s global limits, so a burst is counted and
+  marked exactly (the cooldown still applies; use `0`). Rules with any other action keep them.
+- **Triggers: `scope`.** Text rules match command output only by default (`scope = "output"`):
+  the shell prompt, the command being typed and its autosuggestion (OSC 133 `A`–`C`) are skipped,
+  and without shell integration every line the user typed on is; `scope = "any"` matches every
+  line. Editor switch "Output only", honoured by **Test**, the live preview (which follows new
+  output) and `ctl trigger test`. Highlights are now drawn only while the text under
+  them is unchanged, so an edited or cleared prompt line no longer keeps a stale underline.
+- **Side panels and keyboard focus.** Clicking the terminal now takes keyboard focus back from the
+  Snippets, Recordings or Triggers panel, so Ctrl+V and typing reach the terminal again.
 - **M12.5 — Animated GIF export.** New `gif` exporter in the export dialog, `ctl recording export
   --format gif` and `--list-formats`. It replays the recording through a headless terminal and
   renders frames with a built-in software rasteriser (bundled JetBrains Mono, the recording's or

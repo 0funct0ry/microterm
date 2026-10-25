@@ -202,6 +202,11 @@ pub struct RenderSnapshot {
     pub display_offset: usize,
     /// Lines of scrollback currently stored.
     pub history_size: usize,
+    /// Lines that left the history for good: `line_base + absolute row` is the stable id of a
+    /// row (the id the trigger line tap reports), unaffected by trimming.
+    pub line_base: u64,
+    /// Per viewport row: the row soft-wraps into the next one.
+    pub wrapped: Vec<bool>,
     pub modes: Modes,
     pub damage: Damage,
     pub selection: Option<crate::selection::SelectionSpan>,
@@ -335,6 +340,7 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
 
     let mut cells = Vec::with_capacity(rows * cols);
     let mut row_hashes = Vec::with_capacity(rows);
+    let mut wrapped = Vec::with_capacity(rows);
     let mut last_link: Option<std::sync::Arc<Hyperlink>> = None;
     for r in 0..rows {
         let line = Line(r as i32 - offset as i32);
@@ -356,6 +362,12 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
             }
             cells.push(cell);
         }
+        wrapped.push(
+            cols > 0
+                && grid[Point::new(line, Column(cols - 1))]
+                    .flags
+                    .contains(alacritty_terminal::term::cell::Flags::WRAPLINE),
+        );
         if widen_ri {
             widen_regional_indicators(&mut cells[start..]);
         }
@@ -391,6 +403,8 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
         },
         display_offset: offset,
         history_size: grid.history_size(),
+        line_base: 0,
+        wrapped,
         modes: Modes::from_engine(mode),
         damage,
         selection: crate::selection::span(term),

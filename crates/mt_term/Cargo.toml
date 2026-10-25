@@ -11,3 +11,6 @@ libc = "0.2"
 polling = "3"
 serde.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+mt_triggers = { path = "../mt_triggers" }

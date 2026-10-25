@@ -5,4 +5,5 @@
 pub enum RightPanel {
     Snippets,
     Recordings,
+    Triggers,
 }

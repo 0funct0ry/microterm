@@ -1,9 +1,0 @@
-{
-  "date": "2026-10-14",
-  "os": "macos",
-  "arch": "aarch64",
-  "profile": "release",
-  "size_mb": 100,
-  "parser": { "seconds": 0.708, "mb_per_s": 141.3 },
-  "pty_cat": { "seconds": 1.071, "mb_per_s": 93.4 }
-}

@@ -47,6 +47,8 @@ pub struct UiState {
     pub panel_width: Option<f32>,
     pub recordings_open: Option<bool>,
     pub recordings_width: Option<f32>,
+    pub triggers_open: Option<bool>,
+    pub triggers_width: Option<f32>,
 }
 
 /// `ui.json`; a missing or corrupt file means defaults.
@@ -77,6 +79,7 @@ mod tests {
             panel_width: Some(333.0),
             recordings_open: Some(false),
             recordings_width: Some(410.0),
+            ..Default::default()
         };
         save_ui(&d, &s).unwrap();
         assert_eq!(load_ui(&d), s);

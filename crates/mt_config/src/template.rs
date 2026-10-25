@@ -166,6 +166,26 @@ panel_width = 360                # px, 280-600
 panel_open_on_start = false
 confirm_delete = true
 
+[triggers]                       # opt-in local automation rules in triggers.toml (SPEC §10.11)
+enabled = false                  # master switch; false = feature fully inert (no tap, thread, panel, rows or file)
+allow_clipboard = false          # second gate: the `clipboard` action (only settable here)
+allow_capture = false            # second gate: the `snapshot` and `screenshot` actions (only settable here)
+scan_partial_after_ms = 250      # scan an unfinished line (prompts) after this much PTY silence (0 = never)
+scan_alt_screen = false          # also scan while a full-screen program uses the alternate screen
+max_rules = 64
+max_line_chars = 4096            # longer lines are scanned up to this prefix
+highlights_max = 2000            # per pane
+markers_max = 1000               # per pane
+findings_max = 500               # per window
+capture_dir = ""                 # "" = $XDG_DATA_HOME/microterm/captures (absolute path if set)
+capture_max_kb = 256             # per text file
+capture_max_files = 200
+capture_max_total_mb = 100
+capture_redact = true            # best-effort secret redaction in `snapshot` text
+panel_width = 360                # px, 280-600
+panel_open_on_start = false
+confirm_delete = true
+
 [recording.export]               # defaults for the export dialog and `ctl recording export`
 default_format = "gif"           # "gif" | "vhs" | "cast" | any registered exporter id
 output_dir = ""                  # "" = ask (save panel) in the GUI, current directory in ctl

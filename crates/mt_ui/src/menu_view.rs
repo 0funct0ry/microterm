@@ -455,6 +455,10 @@ impl AppWindow {
                 self.focus_pane(pane, window, cx);
                 self.save_selection_as_snippet(window, cx);
             }
+            Builtin::CreateTrigger => {
+                self.focus_pane(pane, window, cx);
+                self.create_trigger_from_selection(window, cx);
+            }
             Builtin::ToggleRecording => {
                 self.focus_pane(pane, window, cx);
                 self.toggle_recording(window, cx);

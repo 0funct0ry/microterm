@@ -101,6 +101,10 @@ pub struct Tab {
     pub zoomed: Option<Id>,
     /// Manual color (menu, palette, ctl).
     pub color: Option<TabColor>,
+    /// Title set by a trigger rule (SPEC §10.11.4): below a manual rename, above OSC titles.
+    pub trigger_title: Option<String>,
+    /// Transient color set by a trigger rule, with the rule's name (SPEC §10.11.4).
+    pub trigger_color: Option<(TabColor, String)>,
     /// Color declared by config (workspace tab, launch profile, SSH domain).
     pub declared_color: Option<TabColor>,
     /// Result of the first matching `[[tab_bar.color_rules]]`, maintained by the UI layer.
@@ -108,9 +112,14 @@ pub struct Tab {
 }
 
 impl Tab {
-    /// The color in effect and where it came from (manual > declared > rule > none).
+    /// The color in effect and where it came from (manual > trigger > declared > rule > none).
     pub fn resolved_color(&self) -> (Option<TabColor>, ColorSource) {
-        color::resolve(self.color, self.declared_color, self.rule_color)
+        color::resolve(
+            self.color,
+            self.trigger_color.as_ref().map(|(c, _)| *c),
+            self.declared_color,
+            self.rule_color,
+        )
     }
 
     /// The focused pane.
@@ -149,6 +158,8 @@ pub enum NotifySource {
     Ctl,
     /// A program wrote OSC 9.
     Osc9,
+    /// A trigger rule's `notify` action (SPEC §10.11.4).
+    Trigger,
 }
 
 impl NotifySource {
@@ -156,6 +167,7 @@ impl NotifySource {
         match self {
             Self::Ctl => "ctl",
             Self::Osc9 => "osc9",
+            Self::Trigger => "trigger",
         }
     }
 }
@@ -213,6 +225,17 @@ pub enum MuxEvent {
     CommandFinished {
         pane: Id,
         exit_code: Option<i32>,
+    },
+    /// BEL arrived, whatever `[bell].mode` says (SPEC §10.11.3). A trigger's own `bell` action
+    /// does not emit this, so a rule can never fire itself.
+    Bell {
+        pane: Id,
+    },
+    /// A trigger rule fired and ran `actions` (kind names, SPEC §10.11.6).
+    TriggerFired {
+        rule: String,
+        pane: Id,
+        actions: Vec<String>,
     },
     /// A context-menu item with a side effect ran (SPEC §10.9.5, audit).
     MenuInvoked {
@@ -351,6 +374,20 @@ impl Mux {
         for l in &mut self.listeners {
             l(&ev);
         }
+    }
+
+    /// Publishes `Bell` for `pane` (BEL arrived).
+    pub fn bell(&mut self, pane: Id) {
+        self.emit(MuxEvent::Bell { pane });
+    }
+
+    /// Publishes `TriggerFired`.
+    pub fn trigger_fired(&mut self, rule: &str, pane: Id, actions: Vec<String>) {
+        self.emit(MuxEvent::TriggerFired {
+            rule: rule.to_string(),
+            pane,
+            actions,
+        });
     }
 
     pub fn subscribe(&mut self, listener: impl FnMut(&MuxEvent) + Send + 'static) {
@@ -703,6 +740,8 @@ impl Mux {
             color: None,
             declared_color: None,
             rule_color: None,
+            trigger_color: None,
+            trigger_title: None,
         };
         let win = self.window_mut(window)?;
         let at = if win.tabs.is_empty() {
@@ -799,6 +838,8 @@ impl Mux {
             .find(|t| t.id == tab)
             .ok_or(Error::NoTab(tab))?;
         t.title_override = title.filter(|s| !s.trim().is_empty());
+        // The user's own rename ends a trigger-set title (SPEC §10.11.4).
+        t.trigger_title = None;
         let pane = t.pane().id;
         self.emit(MuxEvent::TitleChanged { pane });
         Ok(())
@@ -845,6 +886,23 @@ impl Mux {
     /// Sets the color declared by config.
     pub fn set_declared_color(&mut self, tab: Id, color: Option<TabColor>) -> Result<(), Error> {
         self.update_tab_color(tab, |t| t.declared_color = color)
+    }
+
+    /// Sets (or with `None` clears) the title a trigger rule gave the tab. Publishes nothing: a
+    /// title action must never feed a `title_changed` rule (SPEC §10.11.3, loop safety).
+    pub fn set_trigger_title(&mut self, tab: Id, title: Option<String>) -> Result<(), Error> {
+        self.tab_mut(tab)?.trigger_title = title.filter(|t| !t.is_empty());
+        Ok(())
+    }
+
+    /// Sets (or with `None` clears) the transient color of a trigger rule, labelled with the
+    /// rule's name for the tooltip.
+    pub fn set_trigger_color(
+        &mut self,
+        tab: Id,
+        color: Option<(TabColor, String)>,
+    ) -> Result<(), Error> {
+        self.update_tab_color(tab, |t| t.trigger_color = color)
     }
 
     /// Sets the first-matching-rule color.
@@ -1478,6 +1536,87 @@ mod tests {
         // Rule stops matching.
         mux.set_rule_color(t, None).unwrap();
         assert_eq!(color_events(&log), 3);
+    }
+
+    #[test]
+    fn trigger_color_sits_between_manual_and_declared() {
+        let (mut mux, _, tabs) = mux_with_tabs(1);
+        let log = recorded(&mut mux);
+        let t = tabs[0];
+        mux.set_declared_color(t, Some(BLUE)).unwrap();
+        mux.set_rule_color(t, Some(TEAL)).unwrap();
+        assert_eq!(color_events(&log), 1);
+        mux.set_trigger_color(t, Some((RED, "Build failed".into())))
+            .unwrap();
+        assert_eq!(
+            mux.tab(t).unwrap().resolved_color(),
+            (Some(RED), ColorSource::Trigger)
+        );
+        assert_eq!(
+            mux.tab(t)
+                .unwrap()
+                .trigger_color
+                .as_ref()
+                .map(|(_, n)| n.as_str()),
+            Some("Build failed")
+        );
+        assert_eq!(color_events(&log), 2);
+        // A later firing with the same color changes nothing visible.
+        mux.set_trigger_color(t, Some((RED, "Build failed".into())))
+            .unwrap();
+        assert_eq!(color_events(&log), 2);
+        // Manual wins over the trigger; clearing manual reveals it again.
+        mux.set_tab_color(t, Some(TEAL)).unwrap();
+        assert_eq!(mux.tab(t).unwrap().resolved_color().1, ColorSource::Manual);
+        mux.set_tab_color(t, None).unwrap();
+        assert_eq!(mux.tab(t).unwrap().resolved_color().1, ColorSource::Trigger);
+        // Clearing the trigger color reverts to the declared one.
+        mux.set_trigger_color(t, None).unwrap();
+        assert_eq!(
+            mux.tab(t).unwrap().resolved_color(),
+            (Some(BLUE), ColorSource::Declared)
+        );
+    }
+
+    #[test]
+    fn trigger_title_is_silent_and_a_rename_clears_it() {
+        let (mut mux, _, tabs) = mux_with_tabs(1);
+        let log = recorded(&mut mux);
+        let t = tabs[0];
+        mux.set_trigger_title(t, Some("BUILD FAILED".into()))
+            .unwrap();
+        assert_eq!(
+            mux.tab(t).unwrap().trigger_title.as_deref(),
+            Some("BUILD FAILED")
+        );
+        assert!(
+            !log.lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, MuxEvent::TitleChanged { .. })),
+            "a trigger title must not feed a title_changed rule"
+        );
+        let win = mux.windows()[0].id;
+        mux.rename_tab(win, t, Some("mine".into())).unwrap();
+        assert_eq!(mux.tab(t).unwrap().trigger_title, None);
+        mux.set_trigger_title(t, Some(String::new())).unwrap();
+        assert_eq!(mux.tab(t).unwrap().trigger_title, None);
+    }
+
+    #[test]
+    fn bell_and_trigger_fired_events_are_published() {
+        let (mut mux, _, tabs) = mux_with_tabs(1);
+        let log = recorded(&mut mux);
+        let pane = mux.tab(tabs[0]).unwrap().pane().id;
+        mux.bell(pane);
+        mux.trigger_fired("Build failed", pane, vec!["notify".into(), "bell".into()]);
+        let events = log.lock().unwrap().clone();
+        assert!(events.contains(&MuxEvent::Bell { pane }));
+        assert!(events.contains(&MuxEvent::TriggerFired {
+            rule: "Build failed".into(),
+            pane,
+            actions: vec!["notify".into(), "bell".into()],
+        }));
     }
 
     #[test]

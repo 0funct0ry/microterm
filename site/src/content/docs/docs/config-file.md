@@ -152,6 +152,38 @@ vhs_sleep_cap_ms = 3000          # longest Sleep emitted
 Turning `enabled` off in a reload stops and saves every running recording. The other keys apply
 to the next recording.
 
+## Triggers
+
+`[triggers]` turns on [triggers](/docs/triggers/), local automation rules kept in a separate
+`triggers.toml` next to this file; it is off by default. The panel writes `triggers.toml`; this
+file is never written for these keys, and the two `allow_*` switches can only be set here.
+
+```toml
+[triggers]
+enabled = false                  # master switch; false = fully inert, `ctl trigger` exits 10
+allow_clipboard = false          # second gate: the `clipboard` action
+allow_capture = false            # second gate: the `snapshot` and `screenshot` actions
+scan_partial_after_ms = 250      # scan an unfinished line (a prompt) after this much silence (0 = never)
+scan_alt_screen = false          # also scan while a full-screen program uses the alternate screen
+max_rules = 64
+max_line_chars = 4096            # longer lines are scanned up to this prefix
+highlights_max = 2000            # per pane
+markers_max = 1000               # per pane
+findings_max = 500               # per window
+capture_dir = ""                 # "" = ~/.local/share/microterm/captures (an absolute path if set)
+capture_max_kb = 256             # per text file
+capture_max_files = 200
+capture_max_total_mb = 100
+capture_redact = true            # best-effort secret redaction in `snapshot` text
+panel_width = 360                # px, 280-600
+panel_open_on_start = false
+confirm_delete = true
+```
+
+Turning `enabled` off in a reload removes every highlight, marker, counter, finding, title and
+color a rule set and stops (and saves) recordings that a rule started; turning it on installs
+the line taps without a restart. A change to `allow_*` or the `scan_*` keys applies at once.
+
 ## Errors
 
 - **Syntax and type errors** are errors. microterm keeps the last valid config.

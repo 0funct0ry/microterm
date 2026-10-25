@@ -26,6 +26,7 @@ pub struct TabColorChrome {
 pub fn tooltip(name: &str, source: ColorSource, rule: Option<&str>) -> String {
     match (source, rule) {
         (ColorSource::Rule, Some(r)) => format!("Color: {name} (rule: {r})"),
+        (ColorSource::Trigger, Some(r)) => format!("Color: {name} (trigger: {r})"),
         (ColorSource::Declared, _) => format!("Color: {name} (declared)"),
         _ => format!("Color: {name}"),
     }
@@ -222,6 +223,10 @@ mod tests {
     #[test]
     fn tooltips_name_the_color_and_its_source() {
         assert_eq!(tooltip("red", ColorSource::Manual, None), "Color: red");
+        assert_eq!(
+            tooltip("red", ColorSource::Trigger, Some("Build failed")),
+            "Color: red (trigger: Build failed)"
+        );
         assert_eq!(
             tooltip("red", ColorSource::Declared, None),
             "Color: red (declared)"

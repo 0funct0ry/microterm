@@ -15,6 +15,7 @@ mod events;
 mod headless;
 mod input;
 mod lines;
+mod linetap;
 pub mod menu_reg;
 mod mouse;
 mod process;
@@ -37,6 +38,7 @@ pub use input::{
     KittyFlags, Mods,
 };
 pub use lines::LineCells;
+pub use linetap::{in_regions, CapturedLines, CompletedLine, LineQueue, LineTapCfg, ALT_ID_BIT};
 pub use mouse::{
     encode_mouse, MouseButton, MouseEvent, MouseEventKind, MouseModes, MouseTracking,
     PixelModeSniffer,

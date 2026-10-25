@@ -6,6 +6,7 @@ mod cast;
 pub mod docs;
 mod gif;
 mod options;
+pub mod screenshot;
 mod vhs;
 
 use std::collections::BTreeMap;

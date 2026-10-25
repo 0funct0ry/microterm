@@ -4422,6 +4422,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "libc",
+ "mt_triggers",
  "polling",
  "serde",
  "toml 0.8.23",
@@ -4433,6 +4434,23 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "mt_triggers"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mt_config",
+ "mt_proto",
+ "proptest",
+ "rand 0.8.8",
+ "regex",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
@@ -4454,6 +4472,7 @@ dependencies = [
  "mt_ssh",
  "mt_term",
  "mt_theme",
+ "mt_triggers",
  "notify-rust",
  "nucleo-matcher",
  "regex",

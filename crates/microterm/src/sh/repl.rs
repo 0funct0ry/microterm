@@ -45,6 +45,7 @@ impl ShHelper {
         let snap = self.shared.snapshot();
         let snippets = self.shared.snippet_ids();
         let recordings = self.shared.recording_ids();
+        let triggers = self.shared.trigger_ids();
         complete(
             line,
             pos,
@@ -53,6 +54,7 @@ impl ShHelper {
                 aliases: &self.aliases,
                 snippets: &snippets,
                 recordings: &recordings,
+                triggers: &triggers,
             },
         )
     }

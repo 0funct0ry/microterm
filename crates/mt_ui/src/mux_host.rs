@@ -128,6 +128,7 @@ impl MuxHost {
 pub fn ensure(cx: &mut App) {
     if !cx.has_global::<MuxHost>() {
         cx.set_global(MuxHost::new());
+        crate::triggers::runtime::install(cx);
         sync_declared(cx);
     }
 }
@@ -563,7 +564,7 @@ fn first_window_of_active(cx: &mut App) -> Option<Id> {
 }
 
 /// Every pane's live terminal.
-fn pane_terminals(cx: &mut App) -> HashMap<Id, Arc<Terminal>> {
+pub(crate) fn pane_terminals(cx: &mut App) -> HashMap<Id, Arc<Terminal>> {
     let panes: Vec<Id> = host(cx)
         .mux
         .windows()
@@ -1066,7 +1067,7 @@ pub(crate) fn replay(cx: &mut App, p: &mt_proto::ReplayParams) -> Reply {
 }
 
 /// `[ctl].status_max_len`: status and notification text is cut to this many characters.
-fn status_max_len(cx: &App) -> usize {
+pub(crate) fn status_max_len(cx: &App) -> usize {
     cx.global::<Settings>().config.ctl.status_max_len as usize
 }
 
@@ -1076,6 +1077,11 @@ pub(crate) fn refresh_windows(cx: &mut App) {
     for h in handles {
         let _ = h.update(cx, |_, _, cx| cx.notify());
     }
+}
+
+/// The OS window showing mux window `window`, if it is open (not parked).
+pub(crate) fn open_handle(cx: &mut App, window: Id) -> Option<WindowHandle<AppWindow>> {
+    host(cx).open.get(&window).copied()
 }
 
 /// Whether the user is looking at `pane` right now: its tab is the active tab of a window that
@@ -1108,7 +1114,7 @@ fn app_focused(cx: &mut App) -> bool {
 
 /// Surfaces a notification that got through the rate limit according to `[notifications]`:
 /// attention badge, toast and OS notification (SPEC §12.4). `--desktop` forces the last one.
-fn deliver(cx: &mut App, d: ipc_ops::Delivered) {
+pub(crate) fn deliver(cx: &mut App, d: ipc_ops::Delivered) {
     use mt_config::{DesktopMode, ToastMode};
     use mt_proto::NotifyLevel;
 
@@ -1176,9 +1182,11 @@ pub(crate) fn tab_chrome(cx: &App, pane: Id) -> crate::tab_chrome::TabChrome {
         if let (Some(color), source) = tab.resolved_color() {
             let theme = cx.global::<crate::theme::Theme>();
             let bar = &cx.global::<Settings>().config.tab_bar;
-            let rule = (source == mt_mux::ColorSource::Rule)
-                .then(|| h.rule_labels.get(&tab.id).cloned())
-                .flatten();
+            let rule = match source {
+                mt_mux::ColorSource::Rule => h.rule_labels.get(&tab.id).cloned(),
+                mt_mux::ColorSource::Trigger => tab.trigger_color.as_ref().map(|(_, n)| n.clone()),
+                _ => None,
+            };
             chrome = chrome.with_color(
                 crate::tab_color::TabColorChrome {
                     name: color.to_string(),
@@ -1189,6 +1197,25 @@ pub(crate) fn tab_chrome(cx: &App, pane: Id) -> crate::tab_chrome::TabChrome {
                 },
                 &theme.tab_ui,
             );
+        }
+        if let Some(rt) = cx.try_global::<crate::triggers::runtime::TriggerRuntime>() {
+            let panes: Vec<u64> = tab.tree.panes().iter().map(|p| p.id).collect();
+            let (total, per) = rt.fx.counts_for(&panes);
+            if total > 0 {
+                let lines: Vec<String> = per
+                    .iter()
+                    .map(|(id, n)| {
+                        format!(
+                            "{}: {n}",
+                            rt.engine.rule(id).map_or(id.as_str(), |r| r.name.as_str())
+                        )
+                    })
+                    .collect();
+                chrome = chrome.with_counter(total, &lines);
+            }
+            if tab.trigger_title.is_some() && tab.title_override.is_none() {
+                chrome = chrome.with_trigger_title();
+            }
         }
     }
     chrome
@@ -1622,6 +1649,13 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         | Request::RecordingFormats) => {
             crate::recording::ipc::handle(&mut crate::recording::ipc::GuiHost(cx), r)
         }
+        r @ (Request::TriggerList
+        | Request::TriggerGet(_)
+        | Request::TriggerEnable(_)
+        | Request::TriggerDisable(_)
+        | Request::TriggerPause
+        | Request::TriggerResume
+        | Request::TriggerTest(_)) => crate::triggers::ipc::handle(cx, r),
         r @ (Request::SnippetList(_)
         | Request::SnippetGet(_)
         | Request::SnippetExpand(_)

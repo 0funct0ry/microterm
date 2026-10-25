@@ -335,7 +335,7 @@ fn save_writes_atomically_with_bak_and_marks_self_write() {
     let dir = tmpdir("save");
     let path = dir.join("snippets.toml");
     std::fs::write(&path, FILE).unwrap();
-    let base = Base::of(FILE, Some("k8s-logs"));
+    let base = base_of(FILE, Some("k8s-logs"));
     let mut s = load_str(FILE).unwrap().set.get("k8s-logs").unwrap().clone();
     s.description = "Follow".into();
     let out = save_snippet(&path, &base, &s).unwrap();
@@ -354,7 +354,7 @@ fn save_writes_atomically_with_bak_and_marks_self_write() {
 fn save_creates_a_missing_file() {
     let dir = tmpdir("create");
     let path = dir.join("snippets.toml");
-    let base = Base::of("", None);
+    let base = base_of("", None);
     save_snippet(&path, &base, &snip("a", "A", "echo")).unwrap();
     assert_eq!(load(&path).unwrap().set.snippets.len(), 1);
     assert!(!dir.join("snippets.toml.bak").exists());
@@ -366,7 +366,7 @@ fn staleness_is_per_entry() {
     let dir = tmpdir("stale");
     let path = dir.join("snippets.toml");
     std::fs::write(&path, FILE).unwrap();
-    let base = Base::of(FILE, Some("k8s-logs"));
+    let base = base_of(FILE, Some("k8s-logs"));
     let mut edit = load_str(FILE).unwrap().set.get("k8s-logs").unwrap().clone();
     edit.title = "Mine".into();
 
@@ -386,7 +386,7 @@ fn staleness_is_per_entry() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
 
     // A new snippet whose id appeared meanwhile: refuse.
-    let base_new = Base::of(FILE, None);
+    let base_new = base_of(FILE, None);
     let clash = snip("k8s-logs", "x", "y");
     std::fs::write(&path, &other).unwrap();
     assert!(matches!(

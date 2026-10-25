@@ -22,6 +22,8 @@ pub fn should_confirm_close(policy: ConfirmClose, has_foreground_process: bool) 
 pub struct TitleParts<'a> {
     /// Set by RenameTab; wins over everything and is not run through the format.
     pub title_override: Option<&'a str>,
+    /// Set by a trigger rule; wins over the pane and process titles, loses to a rename.
+    pub trigger_title: Option<&'a str>,
     /// OSC 0/2 title of the pane.
     pub pane_title: Option<&'a str>,
     /// Foreground process name.
@@ -36,6 +38,8 @@ pub struct TitleParts<'a> {
 /// `{title} {process} {cwd_basename} {index}` (SPEC §5, §8.3). Unknown placeholders stay literal.
 pub fn format_title(parts: &TitleParts<'_>, format: &str) -> String {
     let base = if let Some(t) = parts.title_override.filter(|t| !t.is_empty()) {
+        t.to_string()
+    } else if let Some(t) = parts.trigger_title.filter(|t| !t.is_empty()) {
         t.to_string()
     } else {
         let title = parts
@@ -96,6 +100,20 @@ mod tests {
             format_title(&parts(), "{index}:{process} {cwd_basename}"),
             "3:vim proj"
         );
+    }
+
+    #[test]
+    fn trigger_title_sits_between_rename_and_osc_title() {
+        let mut p = parts();
+        p.trigger_title = Some("BUILD FAILED");
+        assert_eq!(format_title(&p, "{index}:{title}"), "BUILD FAILED");
+        p.title_override = Some("api");
+        assert_eq!(format_title(&p, "{title}"), "api", "a manual rename wins");
+        p.title_override = None;
+        p.trigger_title = Some("");
+        assert_eq!(format_title(&p, "{title}"), "vim main.rs");
+        p.trigger_title = None;
+        assert_eq!(format_title(&p, "{title}"), "vim main.rs");
     }
 
     #[test]

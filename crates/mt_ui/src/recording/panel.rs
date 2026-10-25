@@ -266,6 +266,7 @@ impl AppWindow {
             self.recordings.close_panel();
         } else {
             self.snippets.panel.close();
+            self.triggers.close_panel();
             self.refresh_recordings(cx);
         }
         self.after_panel_change(window, cx);
@@ -278,6 +279,7 @@ impl AppWindow {
         }
         self.recordings.panel.focus();
         self.snippets.panel.close();
+        self.triggers.close_panel();
         self.refresh_recordings(cx);
         self.after_panel_change(window, cx);
     }

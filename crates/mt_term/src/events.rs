@@ -69,6 +69,8 @@ pub enum TermEvent {
     ChildExit(Option<i32>),
     /// OSC 133 `D`: a command finished with this status (`None` when the shell sent none).
     CommandFinished(Option<i32>),
+    /// OSC 133 `C`: the shell started running a command (its output begins).
+    CommandStart,
     /// OSC 9;4 progress report.
     Progress {
         state: ProgressState,
@@ -92,6 +94,7 @@ impl std::fmt::Debug for TermEvent {
             Self::CursorBlinkingChange => write!(f, "CursorBlinkingChange"),
             Self::ChildExit(c) => write!(f, "ChildExit({c:?})"),
             Self::CommandFinished(c) => write!(f, "CommandFinished({c:?})"),
+            Self::CommandStart => write!(f, "CommandStart"),
             Self::Progress { state, value } => write!(f, "Progress({state:?}, {value:?})"),
             Self::Notify(t) => write!(f, "Notify({t:?})"),
             Self::MenuItemsChanged => write!(f, "MenuItemsChanged"),

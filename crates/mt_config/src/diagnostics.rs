@@ -437,6 +437,29 @@ const ROOT: &[(&str, K)] = &[
         ]),
     ),
     (
+        "triggers",
+        K::Table(&[
+            ("enabled", K::Leaf),
+            ("allow_clipboard", K::Leaf),
+            ("allow_capture", K::Leaf),
+            ("scan_partial_after_ms", K::Leaf),
+            ("scan_alt_screen", K::Leaf),
+            ("max_rules", K::Leaf),
+            ("max_line_chars", K::Leaf),
+            ("highlights_max", K::Leaf),
+            ("markers_max", K::Leaf),
+            ("findings_max", K::Leaf),
+            ("capture_dir", K::Leaf),
+            ("capture_max_kb", K::Leaf),
+            ("capture_max_files", K::Leaf),
+            ("capture_max_total_mb", K::Leaf),
+            ("capture_redact", K::Leaf),
+            ("panel_width", K::Leaf),
+            ("panel_open_on_start", K::Leaf),
+            ("confirm_delete", K::Leaf),
+        ]),
+    ),
+    (
         "recording",
         K::Table(&[
             ("enabled", K::Leaf),
@@ -910,6 +933,38 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
         err(
             &["snippets", "preview_lines"],
             "snippets.preview_lines must be between 0 and 5".into(),
+        );
+    }
+    let t = &c.triggers;
+    let ranges: [(&str, u32, u32, u32); 9] = [
+        ("panel_width", t.panel_width, 280, 600),
+        ("max_rules", t.max_rules, 1, 256),
+        ("scan_partial_after_ms", t.scan_partial_after_ms, 0, 60_000),
+        ("max_line_chars", t.max_line_chars, 64, 65_536),
+        ("highlights_max", t.highlights_max, 1, 100_000),
+        ("markers_max", t.markers_max, 1, 100_000),
+        ("findings_max", t.findings_max, 1, 10_000),
+        ("capture_max_kb", t.capture_max_kb, 1, 10_240),
+        ("capture_max_total_mb", t.capture_max_total_mb, 1, 10_240),
+    ];
+    for (key, v, lo, hi) in ranges {
+        if !(lo..=hi).contains(&v) {
+            err(
+                &["triggers", key],
+                format!("triggers.{key} must be between {lo} and {hi}"),
+            );
+        }
+    }
+    if !(1..=100_000).contains(&t.capture_max_files) {
+        err(
+            &["triggers", "capture_max_files"],
+            "triggers.capture_max_files must be between 1 and 100000".into(),
+        );
+    }
+    if !t.capture_dir.is_empty() && !std::path::Path::new(&t.capture_dir).is_absolute() {
+        err(
+            &["triggers", "capture_dir"],
+            "triggers.capture_dir must be an absolute path (or empty for the default)".into(),
         );
     }
     if !(280..=600).contains(&c.recording.panel_width) {

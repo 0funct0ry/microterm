@@ -25,6 +25,8 @@ pub struct TabChrome {
     pub dot_ring: bool,
     /// A pane of this tab is recording: the tooltip line ("Recording pane 12 — 00:42").
     pub recording: Option<String>,
+    /// The trigger counter pill after the title (`12`, `99+`), summed over the tab's panes.
+    pub counter: Option<String>,
 }
 
 pub fn dot_of(state: StatusState) -> Option<StatusKind> {
@@ -68,6 +70,7 @@ pub fn tab_chrome(status: Option<&Status>, attention: Option<NotifyLevel>) -> Ta
         color: None,
         dot_ring: false,
         recording: None,
+        counter: None,
     }
 }
 
@@ -84,6 +87,29 @@ impl TabChrome {
         });
         self.recording = Some(line);
         self
+    }
+
+    /// Adds the trigger counter pill; the tooltip lists the per-rule counts.
+    pub fn with_counter(mut self, total: u32, lines: &[String]) -> Self {
+        self.counter = Some(crate::triggers::state::pill(total));
+        self.append_tooltip(&lines.join("\n"));
+        self
+    }
+
+    /// The tab title was set by a trigger (SPEC §10.11.4): a "set by trigger" line.
+    pub fn with_trigger_title(mut self) -> Self {
+        self.append_tooltip("Title set by a trigger");
+        self
+    }
+
+    fn append_tooltip(&mut self, line: &str) {
+        if line.is_empty() {
+            return;
+        }
+        self.tooltip = Some(match self.tooltip.take() {
+            Some(t) => format!("{t}\n{line}"),
+            None => line.to_string(),
+        });
     }
 
     /// Adds the tab color: the tooltip gains the color name and source, and a status dot that

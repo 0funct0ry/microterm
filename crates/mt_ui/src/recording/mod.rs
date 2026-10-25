@@ -13,4 +13,4 @@ pub mod ui;
 #[cfg(test)]
 mod panel_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

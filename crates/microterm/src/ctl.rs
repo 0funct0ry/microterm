@@ -64,7 +64,7 @@ EXAMPLES:
     /// One object per line: {"type":"pane.command_finished","pane":12,"exit_code":1,"ts":"…"}.
     /// --type takes dotted names (workspace.*, window.*, tab.*, pane.added, pane.removed, pane.focused,
     /// pane.title_changed, pane.cwd_changed, pane.exited, pane.command_finished,
-    /// pane.status_changed, pane.notification, domain.state_changed, menu.invoked); --match keeps events whose
+    /// pane.status_changed, pane.notification, pane.bell, trigger.fired, domain.state_changed, menu.invoked); --match keeps events whose
     /// pane, tab or window the selector matches; --snapshot first prints the current tree as
     /// {"type":"snapshot","tree":{…}}. pane.output is not streamed (use `pane wait`). Exits 2
     /// when the GUI quits.
@@ -174,6 +174,57 @@ EXAMPLES:
     /// `rm` without --force exits 8.
     #[command(subcommand)]
     Recording(RecordingCmd),
+
+    /// Triggers: list, get, enable, disable, pause, resume, test (SPEC §10.11).
+    ///
+    /// Needs `[triggers] enabled = true`; while it is off every verb exits 10. A rule that does
+    /// not exist exits 3. There is no verb that creates, edits or deletes a rule: rules are
+    /// written in the Triggers panel or in triggers.toml, so a process that can drive `ctl`
+    /// cannot install automation. `enable`, `disable`, `pause` and `resume` change the running
+    /// session only and are never written back to the file.
+    #[command(subcommand)]
+    Trigger(TriggerCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TriggerCmd {
+    /// List rules: id, name, enabled, kind, panes, fired, suppressed, last error.
+    ///
+    /// With --json: {"triggers":[{"id","name","enabled","kind","panes","fired","suppressed",
+    /// "last_error"}],"paused":false,"dropped_lines":0}.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl trigger list
+  microterm ctl trigger list --json | jq '.triggers[] | select(.fired > 0) | .id'")]
+    List,
+    /// Show one rule (its definition and counters).
+    Get {
+        /// Rule id (t_xxxxxx).
+        id: String,
+    },
+    /// Turn a rule on for this session (the file is not changed).
+    Enable { id: String },
+    /// Turn a rule off for this session (the file is not changed).
+    Disable { id: String },
+    /// Stop every rule from firing for this session (the panel's "Pause all").
+    Pause,
+    /// Let rules fire again.
+    Resume,
+    /// Dry run: what the rule would do on the last 200 lines of a pane. Runs nothing.
+    ///
+    /// With --json: {"id","pane","ran":false,"firings":[{"input","actions":["…"]}]}.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl trigger test t_3f9a1c --in $MICROTERM_PANE")]
+    Test {
+        id: String,
+        /// Pane to read (default: $MICROTERM_PANE).
+        #[arg(long = "in", value_name = "ID")]
+        pane: Option<u64>,
+        /// Selector instead of an ID, e.g. 'title:build*'.
+        #[arg(long = "match", value_name = "EXPR")]
+        expr: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

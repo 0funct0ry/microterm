@@ -5,4 +5,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 size_mb="${1:-100}"
 out="bench/results/$(date +%Y-%m-%d).json"
-cargo run --release -q -p mt_term --example throughput -- --size-mb "$size_mb" --out "$out"
+cargo run --release -q -p mt_term --example throughput -- --size-mb "$size_mb" --triggers 8 --out "$out"

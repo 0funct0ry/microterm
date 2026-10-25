@@ -942,6 +942,29 @@ mod tests {
         );
     }
 
+    /// Agents cannot read, enable, disable, create or delete rules (SPEC §10.11.6, T6): no tool
+    /// exists for any of it, whatever the gates say.
+    #[test]
+    fn no_tool_touches_triggers_in_either_gate_state() {
+        for t in TOOLS {
+            let hay = format!("{} {}", t.name, t.description).to_lowercase();
+            assert!(!hay.contains("trigger"), "{} mentions triggers", t.name);
+        }
+        for name in [
+            "microterm_trigger_list",
+            "microterm_trigger_get",
+            "microterm_trigger_enable",
+            "microterm_trigger_disable",
+            "microterm_trigger_new",
+            "microterm_trigger_delete",
+        ] {
+            assert!(
+                find(name).is_none() && request(name, &json!({}), CallerEnv::default()).is_err(),
+                "{name} must be an unknown tool"
+            );
+        }
+    }
+
     #[test]
     fn recording_start_never_captures_input_unless_asked() {
         let env = CallerEnv {

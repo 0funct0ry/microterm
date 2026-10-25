@@ -461,6 +461,14 @@ const VIEWPORT_BUILTINS: &[BuiltinDef] = &[
         "selection",
         WhenFalse::Hide,
     ),
+    // Hidden while `triggers.enabled = false` (SPEC §10.11.5).
+    b_if(
+        "create_trigger",
+        "Create trigger from selection…",
+        Some("CreateTriggerFromSelection"),
+        "selection",
+        WhenFalse::Hide,
+    ),
     // Hidden while `recording.enabled = false` (SPEC §10.10.1).
     b(
         "toggle_recording",

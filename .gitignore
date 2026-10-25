@@ -6,3 +6,4 @@ target/
 node_modules/
 .tools/
 vt-probe-out/
+bench/results/

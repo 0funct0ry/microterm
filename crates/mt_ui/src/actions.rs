@@ -83,6 +83,16 @@ actions!(
         ToggleRecordingsPanel,
         FocusRecordingsPanel,
         ExportRecording,
+        // Triggers (M12.6, SPEC §10.11.9): no default keys.
+        ToggleTriggersPanel,
+        FocusTriggersPanel,
+        NewTrigger,
+        CreateTriggerFromSelection,
+        OpenTriggersFile,
+        ToggleTriggersPaused,
+        NextMarker,
+        PreviousMarker,
+        ClearMarkers,
         // Serial ports (M12).
         ConnectSerial,
         SerialSendBreak,
@@ -1066,6 +1076,78 @@ pub static ACTIONS: &[ActionDef] = &[
         ExportRecording
     ),
     def!(
+        "ToggleTriggersPanel",
+        "Toggle triggers panel",
+        "Open the triggers side panel; press again to focus it, and again to close it (needs `triggers.enabled = true`)",
+        &[],
+        &[],
+        ToggleTriggersPanel
+    ),
+    def!(
+        "FocusTriggersPanel",
+        "Focus triggers panel",
+        "Open the triggers side panel if needed and move keyboard focus to it",
+        &[],
+        &[],
+        FocusTriggersPanel
+    ),
+    def!(
+        "NewTrigger",
+        "New trigger",
+        "Open the trigger editor with a blank rule",
+        &[],
+        &[],
+        NewTrigger
+    ),
+    def!(
+        "CreateTriggerFromSelection",
+        "Create trigger from selection",
+        "Open the trigger editor with the selected text as an escaped regex and a highlight action",
+        &[],
+        &[],
+        CreateTriggerFromSelection
+    ),
+    def!(
+        "OpenTriggersFile",
+        "Open triggers file",
+        "Open triggers.toml in $VISUAL / $EDITOR",
+        &[],
+        &[],
+        OpenTriggersFile
+    ),
+    def!(
+        "ToggleTriggersPaused",
+        "Pause or resume all triggers",
+        "Stop every rule from firing for this session, or let them fire again",
+        &[],
+        &[],
+        ToggleTriggersPaused
+    ),
+    def!(
+        "NextMarker",
+        "Next marker",
+        "Scroll the focused pane to the next marker left by a trigger",
+        &[],
+        &[],
+        NextMarker
+    ),
+    def!(
+        "PreviousMarker",
+        "Previous marker",
+        "Scroll the focused pane to the previous marker left by a trigger",
+        &[],
+        &[],
+        PreviousMarker
+    ),
+    def!(
+        "ClearMarkers",
+        "Clear markers",
+        "Remove the focused pane's trigger markers",
+        &[],
+        &[],
+        ClearMarkers
+    ),
+    def!(
         "ConnectSerial",
         "Connect to serial port",
         "Pick a serial port and open it in a new tab",
@@ -1128,6 +1210,7 @@ pub const CATEGORIES: &[&str] = &[
     "Tab colors",
     "Snippets",
     "Recording",
+    "Triggers",
     "Serial",
     "Misc",
     "Debug",
@@ -1202,6 +1285,15 @@ impl ActionDef {
             | "ToggleRecordingsPanel"
             | "FocusRecordingsPanel"
             | "ExportRecording" => "Recording",
+            "ToggleTriggersPanel"
+            | "FocusTriggersPanel"
+            | "NewTrigger"
+            | "CreateTriggerFromSelection"
+            | "OpenTriggersFile"
+            | "ToggleTriggersPaused"
+            | "NextMarker"
+            | "PreviousMarker"
+            | "ClearMarkers" => "Triggers",
             "ConnectSerial" | "SerialSendBreak" | "SerialToggleDtr" | "SerialToggleRts" => "Serial",
             _ => "Misc",
         }

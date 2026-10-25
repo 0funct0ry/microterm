@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# ANSI Color Definitions
+# ==============================================================================
+COLOR_RESET="\033[0m"
+COLOR_INFO="\033[1;36m"        # Bold Cyan
+COLOR_WARN="\033[1;33m"        # Bold Yellow
+COLOR_ERROR="\033[1;31m"       # Bold Red
+COLOR_CRITICAL="\033[1;37;41m" # Bold White text on Red background
+
+# ==============================================================================
+# Meaningful Log Message Pools
+# ==============================================================================
+INFO_MSGS=(
+    "User authentication successful for user_id=8492."
+    "HTTP GET /api/v1/status processed in 42ms."
+    "Background job 'cleanup_temp_files' completed successfully."
+    "Cache hit ratio is currently at 94.2%."
+    "Database connection pool size adjusted to 20."
+    "New session initialized for client 192.168.1.50."
+)
+
+WARN_MSGS=(
+    "Memory usage exceeded 80% threshold on node-02."
+    "Slow query detected: SELECT * FROM orders took 2540ms."
+    "API rate limit approaching for client 'mobile-app-v2'."
+    "Disk space on /var/log is below 20% capacity."
+    "Retry attempt 2 of 3 for external payment gateway."
+)
+
+ERROR_MSGS=(
+    "Failed to connect to primary database: Connection refused."
+    "Payment processing failed: Gateway timeout after 30s."
+    "Invalid JWT token provided by client 10.0.0.15."
+    "File not found: /etc/app/config.yaml"
+    "Unhandled NullPointerException in worker thread 4."
+)
+
+CRITICAL_MSGS=(
+    "SYSTEM OUT OF MEMORY. Initiating emergency shutdown."
+    "Database cluster failover triggered. Primary node unresponsive."
+    "Security breach detected: 50+ failed root login attempts."
+    "Unrecoverable filesystem error on /dev/sda1. Read-only."
+    "Core routing service crashed. Core dump generated."
+)
+
+# ==============================================================================
+# Logging Function
+# ==============================================================================
+log_message() {
+    local level=$1
+    local color=$2
+    local msg=$3
+    local timestamp
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Print formatted log: [TIMESTAMP] [LEVEL  ] Message
+    # %-8s ensures the level column is always 8 characters wide for perfect alignment
+    printf "[${timestamp}] [${color}%-8s${COLOR_RESET}] %s\n" "$level" "$msg"
+}
+
+# ==============================================================================
+# Argument Parsing
+# ==============================================================================
+NUM_LINES=10 # Default to 10 lines if -n is not provided
+
+while getopts ":n:" opt; do
+    case ${opt} in
+        n )
+            NUM_LINES=$OPTARG
+            ;;
+        \? )
+            echo "Usage: $0 [-n number_of_lines]"
+            echo "  -n    Number of log lines to generate (default: 10)"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate that NUM_LINES is a positive integer
+if ! [[ "$NUM_LINES" =~ ^[0-9]+$ ]] || [ "$NUM_LINES" -eq 0 ]; then
+    echo "Error: -n must be a positive integer greater than 0."
+    exit 1
+fi
+
+# ==============================================================================
+# Main Execution Loop
+# ==============================================================================
+echo "Generating $NUM_LINES log lines..."
+echo "---------------------------------------------------------"
+
+for (( i=0; i<NUM_LINES; i++ )); do
+    # Weighted random distribution to simulate real-world log ratios:
+    # INFO: 60% | WARN: 25% | ERROR: 10% | CRITICAL: 5%
+    rand=$((RANDOM % 100))
+    sleep 5
+
+    if [ $rand -lt 60 ]; then
+        level="INFO"
+        color=$COLOR_INFO
+        msg=${INFO_MSGS[$RANDOM % ${#INFO_MSGS[@]}]}
+    elif [ $rand -lt 85 ]; then
+        level="WARN"
+        color=$COLOR_WARN
+        msg=${WARN_MSGS[$RANDOM % ${#WARN_MSGS[@]}]}
+    elif [ $rand -lt 95 ]; then
+        level="ERROR"
+        color=$COLOR_ERROR
+        msg=${ERROR_MSGS[$RANDOM % ${#ERROR_MSGS[@]}]}
+    else
+        level="CRITICAL"
+        color=$COLOR_CRITICAL
+        msg=${CRITICAL_MSGS[$RANDOM % ${#CRITICAL_MSGS[@]}]}
+    fi
+
+    log_message "$level" "$color" "$msg"
+
+    # Optional: Uncomment the next line to simulate real-time log streaming
+    # sleep 0.1
+done
+
+echo "---------------------------------------------------------"
+echo "Log generation complete."

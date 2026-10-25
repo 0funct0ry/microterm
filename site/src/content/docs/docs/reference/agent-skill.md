@@ -122,6 +122,13 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl recording rm` — Delete recordings and their metadata. Needs --force
 - `microterm ctl recording export` — Export a recording to another format (cast, vhs, gif)
 - `microterm ctl recording replay` — Play a recording into a new tab (same as `ctl replay FILE`)
+- `microterm ctl trigger list` — List rules: id, name, enabled, kind, panes, fired, suppressed, last error
+- `microterm ctl trigger get` — Show one rule (its definition and counters)
+- `microterm ctl trigger enable` — Turn a rule on for this session (the file is not changed)
+- `microterm ctl trigger disable` — Turn a rule off for this session (the file is not changed)
+- `microterm ctl trigger pause` — Stop every rule from firing for this session (the panel's "Pause all")
+- `microterm ctl trigger resume` — Let rules fire again
+- `microterm ctl trigger test` — Dry run: what the rule would do on the last 200 lines of a pane. Runs nothing
 
 Run `microterm ctl <resource> <verb> --help` for flags.
 

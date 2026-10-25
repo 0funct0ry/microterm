@@ -313,7 +313,7 @@ pub fn handle(h: &mut dyn SnippetHost, request: Request) -> Result<Value, RpcErr
                     p.id
                 )));
             }
-            let base = store::Base::of(&text, Some(&p.id));
+            let base = store::base_of(&text, Some(&p.id));
             store::remove_snippet(&path, &base, &p.id).map_err(write_error)?;
             h.reloaded();
             Ok(json!({"id": p.id}))
@@ -394,7 +394,7 @@ fn add(h: &mut dyn SnippetHost, set: &SnippetSet, p: &SnippetAddParams) -> Resul
     };
     let path = h.path();
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let base = store::Base::of(&text, exists.then_some(id.as_str()));
+    let base = store::base_of(&text, exists.then_some(id.as_str()));
     store::save_snippet(&path, &base, &snippet).map_err(write_error)?;
     h.reloaded();
     Ok(json!({"id": id, "created": !exists}))

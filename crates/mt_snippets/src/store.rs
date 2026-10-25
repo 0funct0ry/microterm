@@ -4,9 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
 
-use mt_config::edit::{content_hash, EditError};
+use mt_config::aot;
+use mt_config::edit::EditError;
 use mt_config::Severity;
-use toml_edit::{Array, ArrayOfTables, DocumentMut, ImDocument, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, ImDocument, Item, Table, Value};
 
 use crate::model::{
     slugify, unique_id, unique_id_from, valid_id, Snippet, SnippetSet, MAX_BODY_BYTES, MAX_SNIPPETS,
@@ -419,11 +420,7 @@ fn entry_ids(src: &str) -> Result<Vec<Option<String>>, EditError> {
 /// The source text of the `[[snippets]]` entry with `id` (for per-entry staleness).
 pub fn entry_text(src: &str, id: &str) -> Option<String> {
     let ids = entry_ids(src).ok()?;
-    let doc = ImDocument::parse(src).ok()?;
-    let aot = doc.get("snippets")?.as_array_of_tables()?;
-    let i = ids.iter().position(|x| x.as_deref() == Some(id))?;
-    let span = aot.get(i)?.span()?;
-    src.get(span).map(str::to_string)
+    aot::entry_text(src, "snippets", &ids, id)
 }
 
 fn parse_mut(src: &str) -> Result<DocumentMut, EditError> {
@@ -458,20 +455,6 @@ fn string_value(text: &str, literal: bool) -> Value {
     Value::from(text.to_string())
 }
 
-fn set_value(table: &mut Table, key: &str, new: Value) {
-    let decor = table
-        .get(key)
-        .and_then(Item::as_value)
-        .map(|v| v.decor().clone());
-    let mut new = new;
-    if let Some(d) = decor {
-        *new.decor_mut() = d;
-    } else {
-        new.decor_mut().set_prefix(" ");
-    }
-    table.insert(key, Item::Value(new));
-}
-
 fn tags_value(tags: &[String]) -> Value {
     let mut a = Array::new();
     for t in tags {
@@ -485,7 +468,7 @@ fn apply(table: &mut Table, s: &Snippet, current: Option<&Snippet>) {
     let cur = current;
     // id is always explicit once saved from the panel.
     if cur.is_none_or(|c| !c.explicit_id) || table.get("id").and_then(Item::as_str) != Some(&s.id) {
-        set_value(table, "id", Value::from(s.id.clone()));
+        aot::set_value(table, "id", Value::from(s.id.clone()));
     }
     let str_field = |table: &mut Table, key: &str, new: &str, old: Option<&str>, literal: bool| {
         if Some(new) == old && table.contains_key(key) {
@@ -494,7 +477,7 @@ fn apply(table: &mut Table, s: &Snippet, current: Option<&Snippet>) {
         if new.is_empty() && key != "title" && key != "body" {
             table.remove(key);
         } else {
-            set_value(table, key, string_value(new, literal));
+            aot::set_value(table, key, string_value(new, literal));
         }
     };
     str_field(
@@ -517,7 +500,7 @@ fn apply(table: &mut Table, s: &Snippet, current: Option<&Snippet>) {
         if s.tags.is_empty() {
             table.remove("tags");
         } else {
-            set_value(table, "tags", tags_value(&s.tags));
+            aot::set_value(table, "tags", tags_value(&s.tags));
         }
     }
     str_field(
@@ -529,7 +512,7 @@ fn apply(table: &mut Table, s: &Snippet, current: Option<&Snippet>) {
     );
     if cur.map(|c| c.run) != Some(s.run) || (s.run && !table.contains_key("run")) {
         if s.run {
-            set_value(table, "run", Value::from(true));
+            aot::set_value(table, "run", Value::from(true));
         } else {
             table.remove("run");
         }
@@ -544,24 +527,9 @@ pub fn upsert(src: &str, s: &Snippet) -> Result<String, EditError> {
     let ids = entry_ids(src)?;
     let current = load_str(src).ok().and_then(|l| l.set.get(&s.id).cloned());
     let pos = ids.iter().position(|x| x.as_deref() == Some(s.id.as_str()));
-    if doc.get("snippets").is_none() {
-        doc.insert("snippets", Item::ArrayOfTables(ArrayOfTables::new()));
-    }
-    let aot = doc["snippets"]
-        .as_array_of_tables_mut()
-        .ok_or_else(|| EditError::Unparsable("snippets is not an array of tables".into()))?;
-    match pos {
-        Some(i) => apply(
-            aot.get_mut(i).expect("index from entry_ids"),
-            s,
-            current.as_ref(),
-        ),
-        None => {
-            let mut t = Table::new();
-            apply(&mut t, s, None);
-            aot.push(t);
-        }
-    }
+    let was_new = pos.is_none();
+    let table = aot::entry_mut(&mut doc, "snippets", pos)?;
+    apply(table, s, if was_new { None } else { current.as_ref() });
     Ok(doc.to_string())
 }
 
@@ -569,14 +537,7 @@ pub fn upsert(src: &str, s: &Snippet) -> Result<String, EditError> {
 pub fn remove(src: &str, id: &str) -> Result<String, EditError> {
     let mut doc = parse_mut(src)?;
     let ids = entry_ids(src)?;
-    let i = ids
-        .iter()
-        .position(|x| x.as_deref() == Some(id))
-        .ok_or_else(|| EditError::Unparsable(format!("no snippet with id \"{id}\"")))?;
-    doc["snippets"]
-        .as_array_of_tables_mut()
-        .ok_or_else(|| EditError::Unparsable("snippets is not an array of tables".into()))?
-        .remove(i);
+    aot::remove(&mut doc, "snippets", &ids, id, "snippet")?;
     Ok(doc.to_string())
 }
 
@@ -584,52 +545,16 @@ pub fn remove(src: &str, id: &str) -> Result<String, EditError> {
 pub fn reorder(src: &str, id: &str, before: Option<&str>) -> Result<String, EditError> {
     let mut doc = parse_mut(src)?;
     let ids = entry_ids(src)?;
-    let find = |want: &str| ids.iter().position(|x| x.as_deref() == Some(want));
-    let from =
-        find(id).ok_or_else(|| EditError::Unparsable(format!("no snippet with id \"{id}\"")))?;
-    let aot = doc["snippets"]
-        .as_array_of_tables_mut()
-        .ok_or_else(|| EditError::Unparsable("snippets is not an array of tables".into()))?;
-    let mut tables: Vec<Table> = aot.iter().cloned().collect();
-    // toml_edit prints array-of-tables entries by their stored position, so hand the original
-    // positions back out in the new order.
-    let mut positions: Vec<usize> = tables.iter().filter_map(Table::position).collect();
-    positions.sort_unstable();
-    let moved = tables.remove(from);
-    let mut to = match before.and_then(find) {
-        Some(b) if b > from => b - 1,
-        Some(b) => b,
-        None => tables.len(),
-    };
-    to = to.min(tables.len());
-    tables.insert(to, moved);
-    if positions.len() == tables.len() {
-        for (t, p) in tables.iter_mut().zip(positions) {
-            t.set_position(p);
-        }
-    }
-    aot.clear();
-    for t in tables {
-        aot.push(t);
-    }
+    aot::reorder(&mut doc, "snippets", &ids, id, before, "snippet")?;
     Ok(doc.to_string())
 }
 
 /// What an editor remembers from when it opened an entry, for per-entry staleness (§10.8.2).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Base {
-    pub file_hash: u64,
-    /// Source text of the entry when opened; `None` for a new snippet.
-    pub entry: Option<String>,
-}
+pub type Base = aot::Base;
 
-impl Base {
-    pub fn of(src: &str, id: Option<&str>) -> Self {
-        Self {
-            file_hash: content_hash(src),
-            entry: id.and_then(|i| entry_text(src, i)),
-        }
-    }
+/// `Base` for the entry `id` of `src` (`None` = a new snippet).
+pub fn base_of(src: &str, id: Option<&str>) -> Base {
+    aot::Base::new(src, id.and_then(|i| entry_text(src, i)))
 }
 
 /// Applies `edit` to `path` atomically. If the file changed since `base`, the edit is re-applied
@@ -640,12 +565,7 @@ pub fn save_with(
     id: &str,
     edit: impl FnOnce(&str) -> Result<String, EditError>,
 ) -> Result<String, EditError> {
-    mt_config::atomic::write_atomic(path, None, |src| {
-        if content_hash(src) != base.file_hash && entry_text(src, id) != base.entry {
-            return Err(EditError::Stale);
-        }
-        edit(src)
-    })
+    aot::save_with(path, base, |src| entry_text(src, id), edit)
 }
 
 pub fn save_snippet(path: &Path, base: &Base, s: &Snippet) -> Result<String, EditError> {

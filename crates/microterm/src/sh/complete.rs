@@ -56,6 +56,8 @@ pub struct CompCtx<'a> {
     pub snippets: &'a [String],
     /// Recording ids, completed after `recording show|stop|rename|rm|replay|export`.
     pub recordings: &'a [String],
+    /// Trigger rule ids, completed after `trigger get|enable|disable|test` (empty while off).
+    pub triggers: &'a [String],
 }
 
 /// The selector keys of SPEC §12.3 with their meaning.
@@ -509,6 +511,7 @@ enum Positional {
     Workspace,
     SnippetId,
     RecordingId,
+    TriggerId,
     Path,
     None,
 }
@@ -539,6 +542,7 @@ fn positional_kind(argv: &[String], positionals_before: usize) -> Positional {
             ["recording", "show" | "stop" | "rename" | "rm" | "replay" | "export"] => {
                 return Positional::RecordingId
             }
+            ["trigger", "get" | "enable" | "disable" | "test"] => return Positional::TriggerId,
             _ => {}
         }
     }
@@ -729,6 +733,16 @@ pub fn complete(line: &str, pos: usize, cx: &CompCtx<'_>) -> Completion {
                 true,
             )
         }
+        Positional::TriggerId => {
+            done.items = filter(
+                cx.triggers
+                    .iter()
+                    .map(|id| Candidate::new(id.clone(), ""))
+                    .collect(),
+                cur,
+                true,
+            )
+        }
         Positional::Path => done.items = filter(path_candidates(cur), "", true),
         Positional::None => {}
     }
@@ -839,6 +853,7 @@ mod tests {
             aliases: &aliases,
             snippets: &[],
             recordings: &[],
+            triggers: &[],
         };
         complete(line, line.len(), &cx)
             .items
@@ -908,6 +923,7 @@ mod tests {
             aliases: &aliases,
             snippets: &[],
             recordings: &[],
+            triggers: &[],
         };
         let c = complete("pane get --pane ", 16, &cx);
         assert_eq!(c.start, 16);
@@ -977,6 +993,7 @@ mod tests {
                 aliases: &aliases,
                 snippets: &[],
                 recordings: &[],
+                triggers: &[],
             };
             complete("pane list status:wor", 20, &cx)
         };
@@ -1045,6 +1062,7 @@ mod tests {
             aliases: &aliases,
             snippets: &[],
             recordings: &[],
+            triggers: &[],
         };
         let c = complete("l", 1, &cx);
         assert!(c.items.iter().any(|i| i.replacement == "ll"));
@@ -1093,6 +1111,7 @@ mod tests {
             aliases: &aliases,
             snippets: &[],
             recordings: &ids,
+            triggers: &[],
         };
         let c = complete("recording export r_2", 20, &cx);
         assert!(c.items[0].replacement.starts_with(&ids[0]));
@@ -1131,6 +1150,7 @@ mod tests {
             aliases: &aliases,
             snippets: &ids,
             recordings: &[],
+            triggers: &[],
         };
         for verb in ["show", "expand", "insert", "rm"] {
             let line = format!("snippet {verb} k8");

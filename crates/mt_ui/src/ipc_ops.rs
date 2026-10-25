@@ -45,6 +45,16 @@ pub fn event_of(e: &MuxEvent) -> Event {
         },
         MuxEvent::PaneExited { pane, status } => Event::PaneExited { pane, status },
         MuxEvent::CommandFinished { pane, exit_code } => Event::CommandFinished { pane, exit_code },
+        MuxEvent::Bell { pane } => Event::Bell { pane },
+        MuxEvent::TriggerFired {
+            ref rule,
+            pane,
+            ref actions,
+        } => Event::TriggerFired {
+            rule: rule.clone(),
+            pane,
+            actions: actions.clone(),
+        },
         MuxEvent::MenuInvoked {
             pane,
             ref menu,

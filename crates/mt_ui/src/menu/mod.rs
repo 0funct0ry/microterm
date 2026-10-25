@@ -80,6 +80,7 @@ pub struct Facts {
     pub snippets_enabled: bool,
     /// `recording.enabled`: the "Start/Stop recording" row exists only while it is on.
     pub recording_enabled: bool,
+    pub triggers_enabled: bool,
 }
 
 impl Facts {
@@ -182,6 +183,7 @@ impl Facts {
             manual_color: None,
             snippets_enabled: crate::snippets::gate::SnippetsGate::of_config(cfg).enabled,
             recording_enabled: crate::recording::gate::RecordingGate::of_config(cfg).enabled,
+            triggers_enabled: crate::triggers::TriggerGate::of_config(cfg).enabled,
         })
     }
 
@@ -247,6 +249,7 @@ pub enum Builtin {
     CloseOtherTabs,
     RenameTab,
     SaveAsSnippet,
+    CreateTrigger,
     ToggleRecording,
     Recordings,
 }
@@ -262,6 +265,7 @@ impl Builtin {
             ("viewport", "search") => Builtin::Search,
             ("viewport", "clear_scrollback") => Builtin::ClearScrollback,
             ("viewport", "save_as_snippet") => Builtin::SaveAsSnippet,
+            ("viewport", "create_trigger") => Builtin::CreateTrigger,
             ("viewport", "toggle_recording") => Builtin::ToggleRecording,
             ("viewport", "recordings") => Builtin::Recordings,
             ("viewport", "zoom") => Builtin::Zoom,
@@ -325,6 +329,7 @@ impl Builtin {
             | Builtin::CopyLink
             | Builtin::Search
             | Builtin::SaveAsSnippet
+            | Builtin::CreateTrigger
             | Builtin::ToggleRecording
             | Builtin::Recordings
             | Builtin::CloseOtherTabs
@@ -380,6 +385,9 @@ impl MenuRow {
 
 fn builtin_row(b: &'static BuiltinDef, f: &Facts) -> Option<MenuRow> {
     if b.id == "save_as_snippet" && !f.snippets_enabled {
+        return None;
+    }
+    if b.id == "create_trigger" && !f.triggers_enabled {
         return None;
     }
     if matches!(b.id, "toggle_recording" | "recordings") && !f.recording_enabled {

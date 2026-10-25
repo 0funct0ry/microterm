@@ -188,6 +188,91 @@ impl Emulator {
         );
     }
 
+    /// Installs (or with `None` removes) the trigger line tap; lines go to `queue` tagged `pane`.
+    /// No partial-line timer runs for an emulator: call [`flush_line_partial`](Self::flush_line_partial).
+    pub fn set_line_tap(
+        &mut self,
+        cfg: Option<crate::linetap::LineTapCfg>,
+        queue: Arc<crate::linetap::LineQueue>,
+        pane: u64,
+    ) {
+        match cfg {
+            Some(cfg) => {
+                let trimmed = self.tracker.trimmed();
+                self.tracker.lines.install(
+                    cfg,
+                    queue,
+                    pane,
+                    crate::linetap::TapShared::new(),
+                    false,
+                    &self.term,
+                    trimmed,
+                )
+            }
+            None => self.tracker.lines.remove(),
+        }
+    }
+
+    /// The logical line with stable id `id` plus context; see [`crate::Terminal::capture_lines`].
+    pub fn capture_lines(
+        &self,
+        id: u64,
+        before: usize,
+        after: usize,
+        max_chars: usize,
+    ) -> Option<crate::CapturedLines> {
+        crate::linetap::lines_around(
+            &self.term,
+            self.tracker.trimmed(),
+            id,
+            before,
+            after,
+            max_chars,
+        )
+    }
+
+    /// Installs the tap the way a live terminal does: rows that finish are only recorded, and
+    /// [`drain_line_tap`](Self::drain_line_tap) reads them out (tests).
+    #[cfg(test)]
+    pub(crate) fn set_lazy_line_tap(
+        &mut self,
+        cfg: crate::linetap::LineTapCfg,
+        queue: Arc<crate::linetap::LineQueue>,
+        pane: u64,
+    ) {
+        let trimmed = self.tracker.trimmed();
+        self.tracker.lines.install(
+            cfg,
+            queue,
+            pane,
+            crate::linetap::TapShared::new(),
+            true,
+            &self.term,
+            trimmed,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drain_line_tap(&mut self) -> usize {
+        self.tracker.drain_lines(&self.term)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_line_replay(&mut self, on: bool) {
+        self.tracker.lines.set_replay(on);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn settle_line_replay(&mut self) {
+        let trimmed = self.tracker.trimmed();
+        self.tracker.lines.settle_replay(&self.term, trimmed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn flush_line_partial(&mut self) {
+        self.tracker.flush_partial_lines(&self.term);
+    }
+
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.term.resize(Size { cols, rows });
         self.tracker.after_resize(&self.term);
@@ -205,6 +290,7 @@ impl Emulator {
             .flag()
             .load(std::sync::atomic::Ordering::Relaxed);
         snap.vt = self.shared.vt.lock().unwrap().view();
+        snap.line_base = self.tracker.trimmed();
         snap
     }
 

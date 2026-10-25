@@ -228,8 +228,10 @@ impl Host {
                         }
                     }
                     TermEvent::MenuItemsChanged => self.mux.notify_menu_items_changed(pane),
-                    TermEvent::Bell
-                    | TermEvent::ResetTitle
+                    // `ctl events` shows `pane.bell` even without a window (SPEC §10.11.3).
+                    TermEvent::Bell => self.mux.bell(pane),
+                    TermEvent::CommandStart => {}
+                    TermEvent::ResetTitle
                     | TermEvent::ClipboardStore(..)
                     | TermEvent::ClipboardLoad(..)
                     | TermEvent::CursorBlinkingChange => {}
@@ -781,6 +783,14 @@ impl Host {
             | Request::RecordingRemove(_)
             | Request::RecordingExport(_)
             | Request::RecordingFormats) => self.recording(r),
+            // Triggers need a window and its panes' line taps; the headless server has neither.
+            Request::TriggerList
+            | Request::TriggerGet(_)
+            | Request::TriggerEnable(_)
+            | Request::TriggerDisable(_)
+            | Request::TriggerPause
+            | Request::TriggerResume
+            | Request::TriggerTest(_) => Err(mt_ui::triggers::ipc::disabled()),
             r @ (Request::SnippetList(_)
             | Request::SnippetGet(_)
             | Request::SnippetExpand(_)

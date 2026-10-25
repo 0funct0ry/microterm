@@ -35,7 +35,7 @@ impl AppWindow {
         cx: &mut Context<Self>,
     ) {
         let text = self.snippets_file_text(cx);
-        let base = store::Base::of(&text, id.as_deref());
+        let base = store::base_of(&text, id.as_deref());
         self.snippets.editor = Some(Editor::open(snippet, id, base));
         self.snippets.preview = None;
         self.snippets.panel.focus();
@@ -221,7 +221,7 @@ impl AppWindow {
     pub(crate) fn reload_editor_base(&mut self, cx: &mut Context<Self>) {
         let text = self.snippets_file_text(cx);
         if let Some(ed) = self.snippets.editor.as_mut() {
-            ed.base = store::Base::of(&text, ed.id.as_deref());
+            ed.base = store::base_of(&text, ed.id.as_deref());
             ed.stale = false;
             ed.error = None;
         }
@@ -543,7 +543,7 @@ impl AppWindow {
         };
         let path = library::path(cx);
         let text = self.snippets_file_text(cx);
-        let base = store::Base::of(&text, Some(&id));
+        let base = store::base_of(&text, Some(&id));
         match store::remove_snippet(&path, &base, &id) {
             Ok(_) => {
                 self.toast(ToastKind::Success, "Snippet deleted", cx);
@@ -582,7 +582,7 @@ impl AppWindow {
         s.folder = folder.trim().to_string();
         let path = library::path(cx);
         let text = self.snippets_file_text(cx);
-        let base = store::Base::of(&text, Some(&id));
+        let base = store::base_of(&text, Some(&id));
         self.close_overlay(OverlayKind::NamePrompt, true, window, cx);
         match store::save_snippet(&path, &base, &s) {
             Ok(_) => window.defer(cx, |_, cx| library::sync_and_notify(cx)),
@@ -614,7 +614,7 @@ impl AppWindow {
     ) {
         let path = library::path(cx);
         let text = self.snippets_file_text(cx);
-        let base = store::Base::of(&text, Some(id));
+        let base = store::base_of(&text, Some(id));
         let (id, before) = (id.to_string(), before.map(str::to_string));
         match store::save_with(&path, &base, &id, |src| {
             store::reorder(src, &id, before.as_deref())

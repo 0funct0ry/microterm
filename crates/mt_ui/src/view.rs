@@ -71,6 +71,7 @@ impl Render for AppWindow {
         let side_panel = match self.right_panel() {
             Some(crate::right_panel::RightPanel::Snippets) => self.snippets_panel(&t, cx),
             Some(crate::right_panel::RightPanel::Recordings) => self.recordings_panel(&t, cx),
+            Some(crate::right_panel::RightPanel::Triggers) => self.triggers_panel(&t, cx),
             None => None,
         };
         root = root.child(
@@ -336,6 +337,29 @@ impl Render for AppWindow {
             .on_action(
                 cx.listener(|this, _: &ExportRecording, w, cx| this.export_recording(None, w, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &ToggleTriggersPanel, w, cx| {
+                    this.toggle_triggers_panel(w, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusTriggersPanel, w, cx| this.focus_triggers_panel(w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NewTrigger, w, cx| this.new_trigger(w, cx)))
+            .on_action(cx.listener(|this, _: &CreateTriggerFromSelection, w, cx| {
+                this.create_trigger_from_selection(w, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenTriggersFile, w, cx| this.open_triggers_file(w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ToggleTriggersPaused, _, cx| {
+                    this.toggle_triggers_paused(cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &NextMarker, _, cx| this.step_marker(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousMarker, _, cx| this.step_marker(false, cx)))
+            .on_action(cx.listener(|this, _: &ClearMarkers, _, cx| this.clear_trigger_markers(cx)))
             .on_action(cx.listener(|this, _: &NewSnippet, w, cx| this.new_snippet(w, cx)))
             .on_action(cx.listener(|this, _: &SaveSelectionAsSnippet, w, cx| {
                 this.save_selection_as_snippet(w, cx)
@@ -840,8 +864,16 @@ impl AppWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, w, cx| {
-                    if this.overlays.is_empty() && this.focused_pane() != Some(pane) {
-                        this.focus_pane(pane, w, cx);
+                    if this.overlays.is_empty() {
+                        if this.focused_pane() != Some(pane) {
+                            this.focus_pane(pane, w, cx);
+                        }
+                        // A click in the terminal gives it the keyboard back from a side panel
+                        // (otherwise Ctrl+V and typing keep going to the panel).
+                        if this.release_panel_focus() {
+                            this.sync_focus(w);
+                            cx.notify();
+                        }
                     }
                 }),
             )
@@ -853,7 +885,10 @@ impl AppWindow {
         };
         let cell = self.cell;
         let pointer = self.pointer_style();
+        let deco = crate::triggers::paint::for_pane(cx, pane, &session.snapshot, t);
+        let ticks = deco.ticks.clone();
         let paint = TerminalPaint {
+            deco,
             snapshot: session.snapshot.clone(),
             theme: *t,
             metrics: cell,
@@ -973,6 +1008,9 @@ impl AppWindow {
             if self.overlays.contains(OverlayKind::QuickSelect) {
                 el = el.child(self.quick_select_chips(t));
             }
+            if !ticks.is_empty() {
+                el = el.child(Self::marker_ticks(&ticks));
+            }
             let show_scrollbar = match self.cfg.scrollbar.mode {
                 mt_config::ScrollbarMode::Always => true,
                 mt_config::ScrollbarMode::Never => false,
@@ -1063,6 +1101,21 @@ impl AppWindow {
                 cx.notify();
             }),
         )
+    }
+
+    /// One 2 px tick per trigger marker along the scrollbar track (SPEC §10.11.4).
+    fn marker_ticks(ticks: &[(f32, Hsla)]) -> impl IntoElement {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(3.))
+            .w(px(6.))
+            .children(
+                ticks
+                    .iter()
+                    .map(|(f, c)| div().absolute().top(relative(*f)).h(px(2.)).w_full().bg(*c)),
+            )
     }
 
     /// Overlay scrollbar: thumb size and position follow the scrollback position.

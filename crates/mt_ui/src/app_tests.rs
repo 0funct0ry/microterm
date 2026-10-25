@@ -910,8 +910,14 @@ fn every_palette_action_is_reachable_by_its_label(cx: &mut TestAppContext) {
         .iter()
         .enumerate()
         // The snippet actions exist only while `snippets.enabled` (see snippets::tests).
-        // Recording rows need `recording.enabled` (see recording::tests).
-        .filter(|(_, d)| d.palette && d.category() != "Snippets" && d.category() != "Recording")
+        // Recording rows need `recording.enabled` (see recording::tests); trigger rows need
+        // `triggers.enabled` (see triggers::panel_tests).
+        .filter(|(_, d)| {
+            d.palette
+                && d.category() != "Snippets"
+                && d.category() != "Recording"
+                && d.category() != "Triggers"
+        })
     {
         view.update(cx, |t, _| {
             t.picker.as_mut().unwrap().state.set_query(def.label)

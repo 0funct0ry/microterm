@@ -44,6 +44,7 @@ pub mod tab_color;
 pub mod terminal_view;
 pub mod textgrid;
 pub mod theme;
+pub mod triggers;
 pub mod typography;
 mod view;
 
@@ -118,6 +119,7 @@ pub fn run(opts: RunOptions) {
             .detach();
             start_config_watcher(&path, cx);
             mux_host::ensure(cx);
+            triggers::runtime::sync(cx);
             menu_bar::install(cx);
             if let Some(ipc) = &opts.ipc {
                 mux_host::install_ipc(cx, ipc.socket.clone(), ipc.hub.clone());
@@ -178,6 +180,8 @@ fn start_config_watcher(path: &std::path::Path, cx: &mut App) {
                             settings::reload(cx);
                             // The watcher also reports `snippets.toml`; unchanged text is a no-op.
                             snippets::library::sync_and_notify(cx);
+                            // …and `triggers.toml`, which only matters while the gate is on.
+                            triggers::runtime::sync(cx);
                         })
                         .is_err()
                     {

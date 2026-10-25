@@ -3185,3 +3185,41 @@ fn recording_export_cast_vhs_and_exit_12() {
     let v = i.json(&["recording", "export", "--list-formats"]);
     assert_eq!(v, mt_export::formats_json());
 }
+
+// ---------------------------------------------------------------- triggers (M12.6)
+
+#[test]
+fn trigger_verbs_exit_10_while_disabled_and_create_no_file() {
+    // The default config has `triggers.enabled = false`; a headless instance has no triggers at
+    // all, so every verb answers `disabled` either way (ctl exit code 10).
+    let i = Instance::start();
+    for args in [
+        &["trigger", "list"][..],
+        &["trigger", "get", "t_x"],
+        &["trigger", "enable", "t_x"],
+        &["trigger", "disable", "t_x"],
+        &["trigger", "pause"],
+        &["trigger", "resume"],
+        &["trigger", "test", "t_x", "--in", "1"],
+    ] {
+        let (code, err) = i.ctl_err(args);
+        assert_eq!(code, 10, "{args:?}: {err}");
+        assert!(err.contains("triggers.enabled"), "{err}");
+    }
+    assert!(!std::path::Path::new(&format!("{}/cfg/microterm/triggers.toml", i.home)).exists());
+}
+
+#[test]
+fn there_is_no_way_to_create_edit_or_delete_a_rule_over_ctl() {
+    let i = Instance::start();
+    for verb in [
+        "new", "add", "create", "edit", "set", "rm", "remove", "delete", "import",
+    ] {
+        let (code, err) = i.ctl_err(&["trigger", verb, "t_x"]);
+        assert_eq!(code, 1, "trigger {verb}: {err}");
+        assert!(
+            err.contains("unrecognized subcommand") || err.contains("unexpected"),
+            "{err}"
+        );
+    }
+}

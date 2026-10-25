@@ -218,6 +218,22 @@ Works on the [recordings store](/docs/recording-and-replay/#the-recordings-store
   both files are removed for good (there is no trash).
 - `replay` plays the stored `.cast` into a new tab, like `ctl replay FILE`.
 
+## trigger
+
+```sh
+microterm ctl trigger list [--json]
+microterm ctl trigger get ID
+microterm ctl trigger enable ID | disable ID
+microterm ctl trigger pause | resume
+microterm ctl trigger test ID [--in PANE | --match EXPR]
+```
+
+Works on the rules of [triggers](/docs/triggers/). While `triggers.enabled = false` every verb
+exits `10`; an unknown rule exits `3`. There is no verb that creates, edits or deletes a rule.
+`enable`, `disable`, `pause` and `resume` change the running session only and never write
+`triggers.toml`. `test` is a dry run on the last 200 lines of a pane (default `$MICROTERM_PANE`)
+and runs nothing; with `--json` it returns `{"id","pane","ran":false,"firings":[{"input","actions"}]}`.
+
 ## menu
 
 ```sh

@@ -125,6 +125,8 @@ impl TabColor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorSource {
     Manual,
+    /// Set by a trigger rule (SPEC §10.11.4); transient.
+    Trigger,
     Declared,
     Rule,
     None,
@@ -134,6 +136,7 @@ impl ColorSource {
     pub fn name(self) -> &'static str {
         match self {
             ColorSource::Manual => "manual",
+            ColorSource::Trigger => "trigger",
             ColorSource::Declared => "declared",
             ColorSource::Rule => "rule",
             ColorSource::None => "none",
@@ -141,14 +144,18 @@ impl ColorSource {
     }
 }
 
-/// Resolution precedence, highest first: manual > declared > first matching rule > none.
+/// Resolution precedence, highest first: manual > trigger > declared > first matching rule >
+/// none (SPEC §4, §10.11.4).
 pub fn resolve(
     manual: Option<TabColor>,
+    trigger: Option<TabColor>,
     declared: Option<TabColor>,
     rule: Option<TabColor>,
 ) -> (Option<TabColor>, ColorSource) {
     if let Some(c) = manual {
         (Some(c), ColorSource::Manual)
+    } else if let Some(c) = trigger {
+        (Some(c), ColorSource::Trigger)
     } else if let Some(c) = declared {
         (Some(c), ColorSource::Declared)
     } else if let Some(c) = rule {
@@ -168,28 +175,51 @@ mod tests {
 
     #[test]
     fn precedence_table() {
+        // manual, trigger, declared, rule -> color, source
         let cases = [
             (
-                Some(RED),
-                Some(BLUE),
-                Some(TEAL),
+                [Some(RED), Some(TEAL), Some(BLUE), Some(TEAL)],
                 Some(RED),
                 ColorSource::Manual,
             ),
             (
-                None,
-                Some(BLUE),
+                [None, Some(TEAL), Some(BLUE), Some(TEAL)],
                 Some(TEAL),
+                ColorSource::Trigger,
+            ),
+            (
+                [None, None, Some(BLUE), Some(TEAL)],
                 Some(BLUE),
                 ColorSource::Declared,
             ),
-            (None, None, Some(TEAL), Some(TEAL), ColorSource::Rule),
-            (None, None, None, None, ColorSource::None),
-            (Some(RED), None, Some(TEAL), Some(RED), ColorSource::Manual),
-            (Some(RED), Some(BLUE), None, Some(RED), ColorSource::Manual),
+            (
+                [None, None, None, Some(TEAL)],
+                Some(TEAL),
+                ColorSource::Rule,
+            ),
+            ([None, None, None, None], None, ColorSource::None),
+            (
+                [Some(RED), None, None, Some(TEAL)],
+                Some(RED),
+                ColorSource::Manual,
+            ),
+            (
+                [None, Some(RED), None, Some(TEAL)],
+                Some(RED),
+                ColorSource::Trigger,
+            ),
+            (
+                [None, Some(RED), Some(BLUE), None],
+                Some(RED),
+                ColorSource::Trigger,
+            ),
         ];
-        for (m, d, r, color, source) in cases {
-            assert_eq!(resolve(m, d, r), (color, source), "{m:?} {d:?} {r:?}");
+        for ([m, t, d, r], color, source) in cases {
+            assert_eq!(
+                resolve(m, t, d, r),
+                (color, source),
+                "{m:?} {t:?} {d:?} {r:?}"
+            );
         }
     }
 

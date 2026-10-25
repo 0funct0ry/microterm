@@ -495,6 +495,161 @@ fn snippet_verb(
     }
 }
 
+fn trigger_verb(
+    call: &mut dyn FnMut(Request) -> Result<Value, CtlError>,
+    cmd: crate::ctl::TriggerCmd,
+    ctx: &mut Ctx<'_>,
+) -> Result<Output, CtlError> {
+    use crate::ctl::TriggerCmd;
+    let json = ctx.json;
+    let env = ctx.env;
+    let result = |v: Value, plain: &dyn Fn(Value) -> Result<Output, CtlError>| {
+        if json {
+            Ok(Output::new(Body::Json(v)))
+        } else {
+            plain(v)
+        }
+    };
+    let id_params = |id: String| mt_proto::TriggerIdParams { id };
+    match cmd {
+        TriggerCmd::List => {
+            let v = call(Request::TriggerList)?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let rows = v["triggers"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .map(|r| {
+                    let t = |k: &str| r[k].as_str().unwrap_or_default().to_string();
+                    vec![
+                        t("id"),
+                        t("name"),
+                        flag(r["enabled"].as_bool().unwrap_or(false)),
+                        t("kind"),
+                        t("panes"),
+                        r["fired"].as_u64().unwrap_or(0).to_string(),
+                        r["suppressed"].as_u64().unwrap_or(0).to_string(),
+                        t("last_error"),
+                    ]
+                })
+                .collect();
+            let mut out = table(
+                vec![
+                    Column::new("ID", ColKind::Text),
+                    Column::new("NAME", ColKind::Text),
+                    Column::low("ON", ColKind::Text, 1),
+                    Column::low("KIND", ColKind::Text, 2),
+                    Column::low("PANES", ColKind::Text, 3),
+                    Column::low("FIRED", ColKind::Text, 4),
+                    Column::low("SUPPRESSED", ColKind::Text, 5),
+                    Column::low("LAST ERROR", ColKind::Text, 6),
+                ],
+                rows,
+                "trigger",
+            );
+            let dropped = v["dropped_lines"].as_u64().unwrap_or(0);
+            if dropped > 0 {
+                out.notes
+                    .push(format!("{dropped} lines dropped (the worker was behind)"));
+            }
+            if v["paused"].as_bool().unwrap_or(false) {
+                out.notes.push("triggers are paused".to_string());
+            }
+            Ok(out)
+        }
+        TriggerCmd::Get { id } => {
+            let v = call(Request::TriggerGet(id_params(id)))?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let t = |k: &str| v[k].as_str().unwrap_or_default().to_string();
+            let kv = vec![
+                ("id".to_string(), t("id")),
+                ("name".into(), t("name")),
+                (
+                    "enabled".into(),
+                    v["enabled"].as_bool().unwrap_or(false).to_string(),
+                ),
+                ("kind".into(), t("kind")),
+                ("panes".into(), t("panes")),
+                (
+                    "cooldown_ms".into(),
+                    v["cooldown_ms"].as_u64().unwrap_or(0).to_string(),
+                ),
+                ("fired".into(), v["fired"].as_u64().unwrap_or(0).to_string()),
+                (
+                    "suppressed".into(),
+                    v["suppressed"].as_u64().unwrap_or(0).to_string(),
+                ),
+                ("last_error".into(), t("last_error")),
+            ];
+            Ok(Output::new(Body::Card(kv)))
+        }
+        TriggerCmd::Enable { id } => {
+            let v = call(Request::TriggerEnable(id_params(id)))?;
+            result(v, &|v| {
+                Ok(Output::new(Body::Raw(format!(
+                    "{} enabled for this session\n",
+                    v["id"].as_str().unwrap_or_default()
+                ))))
+            })
+        }
+        TriggerCmd::Disable { id } => {
+            let v = call(Request::TriggerDisable(id_params(id)))?;
+            result(v, &|v| {
+                Ok(Output::new(Body::Raw(format!(
+                    "{} disabled for this session\n",
+                    v["id"].as_str().unwrap_or_default()
+                ))))
+            })
+        }
+        TriggerCmd::Pause => {
+            let v = call(Request::TriggerPause)?;
+            result(v, &|_| {
+                Ok(Output::new(Body::Raw("triggers paused\n".into())))
+            })
+        }
+        TriggerCmd::Resume => {
+            let v = call(Request::TriggerResume)?;
+            result(v, &|_| {
+                Ok(Output::new(Body::Raw("triggers resumed\n".into())))
+            })
+        }
+        TriggerCmd::Test { id, pane, expr } => {
+            let target = pane_target(PaneTarget { pane, expr }, env);
+            let v = call(Request::TriggerTest(mt_proto::TriggerTestParams {
+                id,
+                target,
+            }))?;
+            if json {
+                return Ok(Output::new(Body::Json(v)));
+            }
+            let mut text = String::new();
+            let firings = v["firings"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if firings.is_empty() {
+                text.push_str("nothing would fire (nothing was run)\n");
+            }
+            for f in firings {
+                text.push_str(&format!("{}\n", f["input"].as_str().unwrap_or_default()));
+                for a in f["actions"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                {
+                    text.push_str(&format!("  would: {}\n", a.as_str().unwrap_or_default()));
+                }
+            }
+            Ok(Output::new(Body::Raw(text)))
+        }
+    }
+}
+
 fn recording_verb(
     call: &mut dyn FnMut(Request) -> Result<Value, CtlError>,
     cmd: RecordingCmd,
@@ -1523,6 +1678,7 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
         }
         CtlAction::Snippet(cmd) => snippet_verb(&mut call, cmd, ctx),
         CtlAction::Recording(cmd) => recording_verb(&mut call, cmd, ctx),
+        CtlAction::Trigger(cmd) => trigger_verb(&mut call, cmd, ctx),
         CtlAction::Menu(MenuCmd::Show { menu, target }) => {
             let v = call(Request::MenuShow(mt_proto::MenuShowParams {
                 target: pane_target(target, env),

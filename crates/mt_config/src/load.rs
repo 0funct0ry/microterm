@@ -56,6 +56,11 @@ pub fn snippets_path(config_path: &Path) -> PathBuf {
     config_dir(config_path).join("snippets.toml")
 }
 
+/// `<config_dir>/triggers.toml` (SPEC §10.11.2).
+pub fn triggers_path(config_path: &Path) -> PathBuf {
+    config_dir(config_path).join("triggers.toml")
+}
+
 /// Load from disk. A missing file means all defaults.
 pub fn load(path: &Path) -> Result<Loaded, Vec<Diagnostic>> {
     match std::fs::read_to_string(path) {

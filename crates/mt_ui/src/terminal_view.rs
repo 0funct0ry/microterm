@@ -174,6 +174,8 @@ pub struct TerminalPaint {
     /// Hyperlink under the pointer: `(row, start col, end col exclusive)`; drawn with a
     /// dotted accent underline.
     pub hover_link: Option<(usize, usize, usize)>,
+    /// Trigger highlights and marker marks (SPEC §10.11.4); empty while triggers are off.
+    pub deco: crate::triggers::paint::PaintDeco,
 }
 
 /// Selected columns `start..end` (end exclusive) on viewport row `r`.
@@ -654,6 +656,20 @@ pub fn paint_terminal(
                     .selection_bg
                     .map_or(t.term.selection_bg, |[r, g, b]| rgb_hsla(r, g, b)),
             );
+        }
+        // 1c. Trigger highlights: tinted under the glyphs (never recolouring them), or an
+        // underline, plus the 3 px mark at the left edge of a marked line.
+        for d in p.deco.rects.iter().filter(|d| d.row == r) {
+            let x = ox + d.start as f32 * m.width;
+            let w = (d.end - d.start) as f32 * m.width;
+            if d.underline {
+                quad(window, x, y + m.height - 2.0, w, 2.0, d.color);
+            } else {
+                quad(window, x, y, w, m.height, d.color);
+            }
+        }
+        for (_, c) in p.deco.edges.iter().filter(|e| e.0 == r) {
+            quad(window, ox, y, 3.0, m.height, *c);
         }
         // OSC 5 / 17 / 19 overrides recolour cells on a private copy of the row.
         let adjusted = adjust_row(row, &snap.vt, sel);
