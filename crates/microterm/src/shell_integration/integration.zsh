@@ -88,4 +88,56 @@ if [[ -o interactive && -z "${__mt_integrated-}" ]]; then
         ;;
     esac
   }
+
+  # Pane-scoped key bindings and palette entries (OSC 7723 and 7724, SPEC sections 6.4.10-11):
+  #   mt-key add [--id ID] [--ctl] CHORD -- COMMAND [ARG...]     mt-key clear [ID]
+  #   mt-palette add [--id ID] [--ctl] LABEL -- COMMAND [ARG...] mt-palette clear [ID]
+  # They act only on this pane, only while it has focus, and never override your own or a
+  # built-in key. `send` (default) types the quoted command plus Enter; `--ctl` runs
+  # `microterm ctl COMMAND` for this pane. Both vanish when the shell exits.
+  __mt_pane_reg() {
+    local ns=$1 num=$2 verb=$3; shift 3
+    case $verb in
+      add)
+        local id='' kind=send first=''
+        while (( $# )); do
+          case $1 in
+            --id) id=${2-}; shift; shift ;;
+            --ctl) kind=ctl; shift ;;
+            --) shift; break ;;
+            *)
+              if [[ -z $first ]]; then
+                first=$1; shift
+              else
+                echo "mt-$ns: unexpected argument: $1" >&2; return 2
+              fi ;;
+          esac
+        done
+        if [[ -z $first || $# -eq 0 ]]; then
+          echo "usage: mt-$ns add [--id ID] [--ctl] ${ns/key/CHORD} -- COMMAND [ARG...]" >&2
+          return 2
+        fi
+        if [[ -z $id ]]; then
+          id=$(printf '%s' "$first" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')
+        fi
+        local payload
+        payload=$(printf '%q ' "$@")
+        payload=${payload% }
+        if [[ $ns == key ]]; then
+          printf '\e]%s;key;add;%s;%s;%s;%s\a' "$num" "$id" "$first" "$kind" "$(__mt_b64 "$payload")"
+        else
+          printf '\e]%s;palette;add;%s;%s;%s;%s\a' "$num" "$id" "$(__mt_b64 "$first")" "$kind" "$(__mt_b64 "$payload")"
+        fi
+        ;;
+      clear)
+        printf '\e]%s;%s;clear%s\a' "$num" "$ns" "${1:+;$1}"
+        ;;
+      *)
+        echo "usage: mt-$ns add [--id ID] [--ctl] ARG -- COMMAND [ARG...] | mt-$ns clear [ID]" >&2
+        return 2
+        ;;
+    esac
+  }
+  mt-key() { __mt_pane_reg key 7723 "$@"; }
+  mt-palette() { __mt_pane_reg palette 7724 "$@"; }
 fi

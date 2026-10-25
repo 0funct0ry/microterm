@@ -18,6 +18,14 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.74 — Pane-scoped key bindings (7723) and palette entries (7724).** A program can register a
+  chord (`mt-key add --id t ctrl+alt+t -- make test`) and a "From pane" command-palette entry
+  (`mt-palette add "Run tests" -- make test`) that act only on its own pane while it has focus. They
+  run through the same Tier 2 rules as shell-registered menu items (sanitised `send`, own-pane
+  `ctl`, no `spawn`, remote and serial panes need `allow_remote_items`), never override a user,
+  built-in or reserved chord (such a chord is refused and counted), share the rate window with
+  `7717`, are replayed by `microterm-mux` and are cleared by the master switch, the `key` /
+  `palette` gates, RIS and pane exit.
 - **M12.73 — Pane badge (`7718`) and gutter marks (`7722`).** Two more display-only members of the
   private OSC range (SPEC §6.4.8, §6.4.9). `7718;badge;set|clear`: a pill badge (dot and bold text; theme tokens
   `muted|accent|success|warning|error`, 24 characters) in the bottom-right of the pane, click-through,

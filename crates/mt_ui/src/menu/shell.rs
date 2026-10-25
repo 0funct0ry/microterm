@@ -19,6 +19,9 @@ use mt_config::menu::{Kind, SpawnWhere};
 /// Row-id prefixes: `viewport/shell:<id>` and `viewport/project:<id>`.
 pub const SHELL_PREFIX: &str = "shell:";
 pub const PROJECT_PREFIX: &str = "project:";
+/// Row ids of `OSC 7723` bindings and `OSC 7724` palette entries. Never rendered as menu rows.
+pub const PANE_KEY_PREFIX: &str = "pane-key:";
+pub const PANE_ENTRY_PREFIX: &str = "pane-entry:";
 /// Row id of the diagnostic shown when a project file is ignored.
 pub const IGNORED_ID: &str = "project:ignored";
 
@@ -28,6 +31,10 @@ pub enum Origin {
     Shell,
     /// Read from a project menu file (`.microterm-menu.toml` or an alias) in a trusted directory.
     Project,
+    /// Registered over `OSC 7723`: a chord bound to its own pane.
+    PaneKey,
+    /// Registered over `OSC 7724`: a "From pane" palette entry.
+    PaneEntry,
 }
 
 impl Origin {
@@ -35,6 +42,8 @@ impl Origin {
         match self {
             Origin::Shell => SHELL_PREFIX,
             Origin::Project => PROJECT_PREFIX,
+            Origin::PaneKey => PANE_KEY_PREFIX,
+            Origin::PaneEntry => PANE_ENTRY_PREFIX,
         }
     }
 
@@ -42,6 +51,8 @@ impl Origin {
         match self {
             Origin::Shell => "shell",
             Origin::Project => "project",
+            Origin::PaneKey => "pane-key",
+            Origin::PaneEntry => "pane-entry",
         }
     }
 }
@@ -92,6 +103,24 @@ pub fn collect(
                     kind: r.kind,
                     payload: r.payload,
                     origin: Origin::Shell,
+                });
+            }
+            for k in t.pane_keys() {
+                st.items.push(ShellItem {
+                    label: k.chord.clone(),
+                    id: k.id,
+                    kind: k.kind,
+                    payload: k.payload,
+                    origin: Origin::PaneKey,
+                });
+            }
+            for e in t.pane_palette() {
+                st.items.push(ShellItem {
+                    id: e.id,
+                    label: e.label,
+                    kind: e.kind,
+                    payload: e.payload,
+                    origin: Origin::PaneEntry,
                 });
             }
         }
@@ -183,6 +212,7 @@ pub fn rows(cfg: &Config, f: &Facts) -> Vec<MenuRow> {
             (Origin::Shell, true) => header("shell-header", "Shell (remote)"),
             (Origin::Shell, false) => header("shell-header", "Shell"),
             (Origin::Project, _) => header("project-header", "Project"),
+            (Origin::PaneKey | Origin::PaneEntry, _) => continue,
         });
         for it in items {
             let label: String = it.label.chars().filter(|c| !c.is_control()).collect();
@@ -218,6 +248,10 @@ pub fn origin_of(row_id: &str) -> Option<&'static str> {
         Some("shell")
     } else if row_id.starts_with(PROJECT_PREFIX) {
         Some("project")
+    } else if row_id.starts_with(PANE_KEY_PREFIX) {
+        Some("pane-key")
+    } else if row_id.starts_with(PANE_ENTRY_PREFIX) {
+        Some("pane-entry")
     } else {
         None
     }
@@ -258,6 +292,11 @@ pub fn plan(cfg: &Config, menu: &str, item: &str, f: &Facts) -> Result<Invocatio
         .find(|i| i.row_id() == item)
         .ok_or_else(|| PlanError::UnknownItem(addr.clone()))?;
     usable(cfg, f, it).map_err(|e| PlanError::Unavailable(format!("{addr}: {e}")))?;
+    if matches!(it.origin, Origin::PaneKey | Origin::PaneEntry) && it.kind == RegKind::Spawn {
+        return Err(PlanError::Unavailable(format!(
+            "{addr}: spawn is not available to pane key bindings or palette entries"
+        )));
+    }
     let bad = |m: String| PlanError::Expand(format!("{addr}: {m}"));
     let (kind, plan) = match it.kind {
         RegKind::Send => {

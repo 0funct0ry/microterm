@@ -94,4 +94,70 @@ if status is-interactive; and not set -q __mt_integrated
                 return 2
         end
     end
+
+    # Pane-scoped key bindings and palette entries (OSC 7723 and 7724, SPEC sections 6.4.10-11):
+    #   mt-key add [--id ID] [--ctl] CHORD -- COMMAND [ARG...]     mt-key clear [ID]
+    #   mt-palette add [--id ID] [--ctl] LABEL -- COMMAND [ARG...] mt-palette clear [ID]
+    function __mt_pane_reg
+        set -l ns $argv[1]
+        set -l num $argv[2]
+        set -l verb $argv[3]
+        set -e argv[1..3]
+        switch "$verb"
+            case add
+                set -l id ''
+                set -l kind send
+                set -l first ''
+                while set -q argv[1]
+                    switch $argv[1]
+                        case --id
+                            set id $argv[2]
+                            set -e argv[1]
+                            set -e argv[1]
+                        case --ctl
+                            set kind ctl
+                            set -e argv[1]
+                        case --
+                            set -e argv[1]
+                            break
+                        case '*'
+                            if test -z "$first"
+                                set first $argv[1]
+                                set -e argv[1]
+                            else
+                                echo "mt-$ns: unexpected argument: $argv[1]" >&2
+                                return 2
+                            end
+                    end
+                end
+                if test -z "$first"; or not set -q argv[1]
+                    echo "usage: mt-$ns add [--id ID] [--ctl] ARG -- COMMAND [ARG...]" >&2
+                    return 2
+                end
+                if test -z "$id"
+                    set id (printf '%s' $first | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//;s/-*$//')
+                end
+                set -l payload (string join ' ' (string escape --style=script -- $argv))
+                if test $ns = key
+                    printf '\e]%s;key;add;%s;%s;%s;%s\a' $num $id $first $kind (__mt_b64 $payload)
+                else
+                    printf '\e]%s;palette;add;%s;%s;%s;%s\a' $num $id (__mt_b64 $first) $kind (__mt_b64 $payload)
+                end
+            case clear
+                if set -q argv[1]
+                    printf '\e]%s;%s;clear;%s\a' $num $ns $argv[1]
+                else
+                    printf '\e]%s;%s;clear\a' $num $ns
+                end
+            case '*'
+                echo "usage: mt-$ns add [--id ID] [--ctl] ARG -- COMMAND [ARG...] | mt-$ns clear [ID]" >&2
+                return 2
+        end
+    end
+    function mt-key
+        __mt_pane_reg key 7723 $argv
+    end
+    function mt-palette
+        __mt_pane_reg palette 7724 $argv
+    end
 end

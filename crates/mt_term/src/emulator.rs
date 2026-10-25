@@ -426,6 +426,16 @@ impl Emulator {
         self.tracker.progress_bars()
     }
 
+    /// The `7723` key bindings the program registered.
+    pub fn pane_keys(&self) -> Vec<crate::private_osc::PaneKey> {
+        self.tracker.pane_keys()
+    }
+
+    /// The `7724` palette entries the program registered.
+    pub fn pane_palette(&self) -> Vec<crate::private_osc::PaneEntry> {
+        self.tracker.pane_palette()
+    }
+
     /// The `7718` badge the program set.
     pub fn badge(&self) -> Option<crate::private_osc::Badge> {
         self.tracker.badge()

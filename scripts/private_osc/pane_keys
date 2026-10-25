@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 7723 and 7724: pane-scoped key bindings and palette entries.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. A binding and a palette entry"
+key_add t ctrl+alt+t send "echo tests would run here"
+palette_add run "Run tests" send "echo tests would run here"
+echo "   expected: Ctrl+Alt+T types the echo command in THIS pane only;"
+echo "   the command palette shows 'Run tests' (chip 'pane') while this pane has focus"
+pause
+
+step "2. A reserved chord is refused"
+key_add q cmd+q send "exit"
+echo "   expected: nothing happens (counted as malformed in 'microterm ctl private-osc status')"
+pause
+
+step "3. Clear"
+key_clear; palette_clear
+echo "   expected: the chord does nothing and the palette entry is gone"

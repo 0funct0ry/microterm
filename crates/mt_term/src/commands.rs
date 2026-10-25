@@ -493,6 +493,18 @@ impl CommandTracker {
         self.private.progress.replay(out);
         self.private.tab.replay(out);
         self.private.badge.replay(out);
+        self.private.keys.replay(out);
+        self.private.palette.replay(out);
+    }
+
+    /// The `7723` bindings of this pane.
+    pub fn pane_keys(&self) -> Vec<crate::private_osc::PaneKey> {
+        self.private.keys.keys().to_vec()
+    }
+
+    /// The `7724` palette entries of this pane.
+    pub fn pane_palette(&self) -> Vec<crate::private_osc::PaneEntry> {
+        self.private.palette.entries().to_vec()
     }
 
     /// The `7718` badge of this pane.

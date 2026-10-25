@@ -32,6 +32,8 @@ fn every_snippet_emits_all_four_marks_and_the_working_directory() {
             "]7;file://",
             "]7717;menu;add",
             "mt-menu",
+            "mt-key",
+            "mt-palette",
         ] {
             assert!(text.contains(needle), "{shell} snippet lacks {needle}");
         }
@@ -205,5 +207,63 @@ fn zsh_mt_menu_registers_items() {
 fn fish_mt_menu_registers_items() {
     if let Some(t) = session("fish", &["--no-config", "-i"], "source") {
         menu_registration(&t);
+    }
+}
+
+/// `mt-key` and `mt-palette` reach the pane's stores with the exact text.
+fn pane_registration(t: &Terminal) {
+    use mt_term::menu_reg::RegKind;
+    t.set_vt_config(mt_term::VtConfig {
+        private: mt_term::private_osc::PrivateGate {
+            enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    until("the first prompt", || t.has_marks());
+    t.write(b"mt-key add --id t ctrl+alt+t -- make test\r".to_vec());
+    until("the key binding", || !t.pane_keys().is_empty());
+    let k = &t.pane_keys()[0];
+    assert_eq!((k.id.as_str(), k.chord.as_str()), ("t", "ctrl-alt-t"));
+    assert_eq!(k.kind, RegKind::Send);
+    assert_eq!(k.payload, "make test");
+
+    t.write(b"mt-palette add \"Run tests\" -- make test\r".to_vec());
+    until("the palette entry", || !t.pane_palette().is_empty());
+    let e = &t.pane_palette()[0];
+    assert_eq!(
+        (e.id.as_str(), e.label.as_str()),
+        ("run-tests", "Run tests")
+    );
+
+    // A reserved chord registers nothing.
+    t.write(b"mt-key add --id q cmd+q -- exit\r".to_vec());
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(t.pane_keys().len(), 1);
+
+    t.write(b"mt-key clear\r".to_vec());
+    until("the key clear", || t.pane_keys().is_empty());
+    t.write(b"mt-palette clear\r".to_vec());
+    until("the palette clear", || t.pane_palette().is_empty());
+}
+
+#[test]
+fn bash_mt_key_and_palette_register() {
+    if let Some(t) = session("bash", &["--noprofile", "--norc", "-i"], ".") {
+        pane_registration(&t);
+    }
+}
+
+#[test]
+fn zsh_mt_key_and_palette_register() {
+    if let Some(t) = session("zsh", &["-f", "-i"], ".") {
+        pane_registration(&t);
+    }
+}
+
+#[test]
+fn fish_mt_key_and_palette_register() {
+    if let Some(t) = session("fish", &["--no-config", "-i"], "source") {
+        pane_registration(&t);
     }
 }

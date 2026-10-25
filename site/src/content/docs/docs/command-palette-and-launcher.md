@@ -59,3 +59,10 @@ command = ["tail", "-f", "/var/log/api.log"]
 
 Edits to `[[launch]]` appear in the launcher right after the config hot-reloads, even if the
 launcher is open. A profile with no `command` opens your shell in `cwd`.
+
+## "From pane" entries
+
+A program running in the focused pane can add its own rows to the palette with `mt-palette add`
+(`OSC 7724`, see [Private OSC](/docs/private-osc/#7723-pane-key-bindings-and-7724-palette-entries)).
+They sit at the top with the chip `pane`, exist only while that pane has focus, and run under the same
+safety rules as shell-registered menu items. Pane key bindings never override your own keys.

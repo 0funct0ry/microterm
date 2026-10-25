@@ -452,6 +452,94 @@ mod shell_items {
         c.menu_security.trusted_dirs = vec![dir.into()];
     }
 
+    fn pane_item(id: &str, origin: Origin, kind: RegKind, payload: &str) -> ShellItem {
+        ShellItem {
+            origin,
+            ..item(id, kind, payload)
+        }
+    }
+
+    #[test]
+    fn pane_keys_and_entries_never_appear_as_menu_rows() {
+        let (c, f) = with(
+            vec![
+                pane_item("k", Origin::PaneKey, RegKind::Send, "make test"),
+                pane_item("e", Origin::PaneEntry, RegKind::Send, "make test"),
+            ],
+            None,
+            false,
+        );
+        let rows = resolve(&c, "viewport", &f);
+        assert!(rows
+            .iter()
+            .all(|r| !r.id.starts_with("pane-key:") && !r.id.starts_with("pane-entry:")));
+    }
+
+    #[test]
+    fn pane_items_use_the_tier_2_rules_unchanged() {
+        for (origin, row) in [
+            (Origin::PaneKey, "pane-key:t"),
+            (Origin::PaneEntry, "pane-entry:t"),
+        ] {
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Send, "make test")],
+                None,
+                false,
+            );
+            let inv = plan(&c, "viewport", row, &f).unwrap();
+            assert_eq!(inv.pane, f.pane);
+            assert_eq!(
+                inv.plan,
+                Plan::Send {
+                    text: "make test\n".into()
+                }
+            );
+            assert!(inv.confirm.is_none());
+            // Hostile payloads.
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Send, "a\nb")],
+                None,
+                false,
+            );
+            assert!(matches!(
+                plan(&c, "viewport", row, &f),
+                Err(PlanError::Expand(_))
+            ));
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Send, "rm -rf /")],
+                None,
+                false,
+            );
+            assert!(plan(&c, "viewport", row, &f).unwrap().confirm.is_some());
+            // ctl: own pane only.
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Ctl, "pane notify")],
+                None,
+                false,
+            );
+            assert!(plan(&c, "viewport", row, &f).is_ok());
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Ctl, "pane notify --pane 2")],
+                None,
+                false,
+            );
+            assert!(plan(&c, "viewport", row, &f).is_err());
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Ctl, "tab close")],
+                None,
+                false,
+            );
+            assert!(plan(&c, "viewport", row, &f).is_err());
+            // spawn is never available, even from a trusted directory.
+            let (c, f) = with(
+                vec![pane_item("t", origin, RegKind::Spawn, "[\"ls\"]")],
+                None,
+                false,
+            );
+            assert!(plan(&c, "viewport", row, &f).is_err());
+        }
+    }
+
     #[test]
     fn rows_follow_config_rows_under_a_header_with_an_origin() {
         let (c, f) = with(vec![item("t", RegKind::Send, "make test")], None, false);

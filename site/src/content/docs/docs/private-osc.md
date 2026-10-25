@@ -193,6 +193,42 @@ switch and the `mark` gate clear them.
 Both sequences work in SSH and serial panes, and `microterm-mux` replays them after a reconnect
 (marks keep their rows).
 
+## `7723` pane key bindings and `7724` palette entries
+
+A program can register chords and command-palette entries that act **only on its own pane**.
+
+```sh
+mt-key add --id t ctrl+alt+t -- make test          # Ctrl+Alt+T types "make test" + Enter
+mt-key add --id n --ctl ctrl+alt+n -- pane notify   # run `microterm ctl pane notify`
+mt-key clear [ID]
+mt-palette add "Run tests" -- make test            # a "From pane" palette entry
+mt-palette clear [ID]
+```
+
+`mt-key` and `mt-palette` are defined by `microterm shell-integration` (bash, zsh, fish) and write
+`ESC ] 7723 ; key ; add ; <id> ; <chord> ; <send|ctl> ; <b64 payload> ST` and
+`ESC ] 7724 ; palette ; add ; <id> ; <b64 label> ; <send|ctl> ; <b64 payload> ST`;
+`clear` removes one entry or all of the pane's. Up to 16 of each per pane, payloads up to 1 KiB,
+labels up to 256 bytes, ids `[a-z0-9_-]{1,32}`. Keys accept 5 commands per second and palette
+entries 10, in one window shared with `7717` menu items.
+
+- **A chord needs `ctrl`, `alt` or `cmd`** (or be a function key such as `f5`).
+- **They never override you.** A chord you bound in `[[keys]]`, a built-in default, or a reserved chord
+  (anything that quits, closes, copies, pastes, opens the palette, leaves copy mode or toggles the
+  master switch, such as `cmd+q`) is refused and counted as malformed. Pane bindings are looked at last,
+  and only while that pane has focus, so the same chord does nothing in another pane.
+- **Palette entries** appear at the top of the command palette with the chip `pane` while that pane has
+  focus. They are never added to the right-click menu (that is `7717`).
+- **Safety.** They run under the same rules as [shell-registered menu items](/docs/context-menus/#items-registered-by-the-shell):
+  `send` text is sanitised, must be one line and is confirmed when it looks dangerous or the pane is
+  remote; `ctl` can only act on the pane itself; `spawn` is not available. In SSH and serial panes both are
+  ignored until `[menu_security] allow_remote_items = true`. Anything that can print to the terminal can
+  register them, so treat them like the menu items.
+
+They are removed when the program exits, on a terminal reset, with `mt-key clear`, when the pane closes
+and when the switch or the `key` / `palette` gate goes off. `microterm-mux` replays them after a
+reconnect. Agents (MCP) have no tool for them.
+
 ## Checking the state
 
 ```sh

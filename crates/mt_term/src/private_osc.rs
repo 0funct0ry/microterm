@@ -46,6 +46,14 @@ pub const MARK_NOTE_MAX: usize = 120;
 pub const MARKS_MAX: usize = 500;
 /// `7722` commands per pane and second.
 pub const MARK_RATE_PER_SEC: u32 = 20;
+/// `7723` key bindings per pane.
+pub const KEY_BINDINGS_MAX: usize = 16;
+/// `7724` palette entries per pane.
+pub const PALETTE_ENTRIES_MAX: usize = 16;
+/// `7723` `add`/`clear` commands per pane and second.
+pub const KEY_RATE_PER_SEC: u32 = 5;
+/// `7724` commands per pane and second, shared with `7723` and `7717`.
+pub const PALETTE_RATE_PER_SEC: u32 = 10;
 const WINDOW_MS: u64 = 1000;
 
 /// One member of the range, named as in the §6.4 table.
@@ -128,7 +136,9 @@ impl Feature {
             | Feature::Progress
             | Feature::Tab
             | Feature::Badge
-            | Feature::Mark => 1,
+            | Feature::Mark
+            | Feature::Key
+            | Feature::Palette => 1,
             _ => 0,
         }
     }
@@ -377,6 +387,8 @@ pub enum PrivCmd {
     Tab(TabCmd),
     Badge(BadgeCmd),
     Mark(MarkCmd),
+    Key(KeyCmd),
+    Palette(PaletteCmd),
     /// Allocated but not built yet, or an unallocated number: nothing to do once it is allowed.
     Reserved(Option<Feature>),
     /// Namespace mismatch, bad fields or an oversized string; `None` when the number is unknown.
@@ -393,6 +405,8 @@ impl PrivCmd {
             PrivCmd::Tab(_) => Some(Feature::Tab),
             PrivCmd::Badge(_) => Some(Feature::Badge),
             PrivCmd::Mark(_) => Some(Feature::Mark),
+            PrivCmd::Key(_) => Some(Feature::Key),
+            PrivCmd::Palette(_) => Some(Feature::Palette),
             PrivCmd::Reserved(f) | PrivCmd::Malformed(f) => *f,
         }
     }
@@ -470,6 +484,14 @@ pub fn parse(p: &[u8]) -> Option<PrivCmd> {
         },
         Feature::Mark => match parse_mark(verbs) {
             Some(c) => PrivCmd::Mark(c),
+            None => return bad(),
+        },
+        Feature::Key => match parse_key(verbs) {
+            Some(c) => PrivCmd::Key(c),
+            None => return bad(),
+        },
+        Feature::Palette => match parse_palette(verbs) {
+            Some(c) => PrivCmd::Palette(c),
             None => return bad(),
         },
         _ => PrivCmd::Reserved(Some(f)),
@@ -711,6 +733,263 @@ fn parse_mark(verbs: &[u8]) -> Option<MarkCmd> {
                 return None;
             }
             Some(MarkCmd::Add { kind, note, replay })
+        }
+        _ => None,
+    }
+}
+
+/// What a pane-registered item does (`spawn` stays a `7717` privilege).
+pub use crate::menu_reg::RegKind as PaneKind;
+
+/// One `7723` binding: a canonical chord (`ctrl-alt-t`) and what it does in its own pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneKey {
+    pub id: String,
+    pub chord: String,
+    pub kind: PaneKind,
+    pub payload: String,
+}
+
+/// One `7724` palette entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneEntry {
+    pub id: String,
+    pub label: String,
+    pub kind: PaneKind,
+    pub payload: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyCmd {
+    Add { key: PaneKey, replay: bool },
+    Clear(Option<String>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaletteCmd {
+    Add { entry: PaneEntry, replay: bool },
+    Clear(Option<String>),
+}
+
+static TAKEN_CHORDS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Publishes the canonical chords the live keymap (user `[[keys]]` and defaults) uses, so a
+/// pane binding on one of them is refused as malformed. Process-wide: one keymap per GUI.
+pub fn set_taken_chords(chords: impl IntoIterator<Item = String>) {
+    let mut v: Vec<String> = chords
+        .into_iter()
+        .filter_map(|c| canonical_chord(&c))
+        .collect();
+    v.sort();
+    v.dedup();
+    *TAKEN_CHORDS.write().unwrap_or_else(|e| e.into_inner()) = v;
+}
+
+fn is_taken(chord: &str) -> bool {
+    TAKEN_CHORDS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|c| c == chord)
+}
+
+/// Chords that close, quit, copy, paste, open the palette or toggle the master switch whatever
+/// the user's keymap says (SPEC §6.4.11a).
+const RESERVED_CHORDS: &[&str] = &[
+    "cmd-q",
+    "cmd-w",
+    "shift-cmd-w",
+    "cmd-c",
+    "cmd-v",
+    "shift-cmd-p",
+    "shift-cmd-c",
+    "shift-cmd-v",
+    "shift-cmd-q",
+    "ctrl-shift-q",
+    "ctrl-shift-w",
+    "ctrl-shift-c",
+    "ctrl-shift-v",
+    "ctrl-shift-p",
+    "ctrl-shift-x",
+    "alt-f4",
+    "ctrl-insert",
+    "shift-insert",
+    "ctrl-q",
+    "ctrl-w",
+];
+
+/// Parses `ctrl+alt+t` (§9.1 syntax) into the canonical `ctrl-alt-shift-cmd-key` form. `None`
+/// for bad syntax; this mirrors `mt_config::keys::Keystroke`, which `mt_term` cannot depend on.
+pub fn canonical_chord(s: &str) -> Option<String> {
+    let s = s.trim();
+    let (mods, key) = if s == "+" {
+        ("", "+")
+    } else if let Some(m) = s.strip_suffix("++") {
+        (m, "+")
+    } else {
+        s.rsplit_once('+').unwrap_or(("", s))
+    };
+    let (mut cmd, mut ctrl, mut alt, mut shift) = (false, false, false, false);
+    if !mods.is_empty() {
+        for m in mods.split('+') {
+            let flag = match m.trim().to_ascii_lowercase().as_str() {
+                "cmd" | "super" => &mut cmd,
+                "ctrl" | "control" => &mut ctrl,
+                "alt" | "opt" | "option" => &mut alt,
+                "shift" => &mut shift,
+                _ => return None,
+            };
+            if *flag {
+                return None;
+            }
+            *flag = true;
+        }
+    }
+    let key = key.to_ascii_lowercase();
+    let named = [
+        "enter",
+        "tab",
+        "space",
+        "escape",
+        "backspace",
+        "delete",
+        "insert",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+        "up",
+        "down",
+        "left",
+        "right",
+    ];
+    let function = key
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n));
+    if !(key.chars().count() == 1 || named.contains(&key.as_str()) || function) {
+        return None;
+    }
+    // A modifier (not shift alone) or a function key is required.
+    if !(ctrl || alt || cmd || function) {
+        return None;
+    }
+    let mut out = String::new();
+    for (on, name) in [(ctrl, "ctrl"), (alt, "alt"), (shift, "shift"), (cmd, "cmd")] {
+        if on {
+            out.push_str(name);
+            out.push('-');
+        }
+    }
+    out.push_str(&key);
+    Some(out)
+}
+
+/// Canonical `ctrl-alt-t` back to the `+` syntax of §9.1 (`ctrl+alt+t`; the key may be `-`).
+fn chord_syntax(chord: &str) -> String {
+    let mut rest = chord;
+    let mut parts: Vec<&str> = Vec::new();
+    while let Some((m, tail)) = ["ctrl-", "alt-", "shift-", "cmd-"]
+        .iter()
+        .find_map(|m| rest.strip_prefix(m).map(|t| (m.trim_end_matches('-'), t)))
+    {
+        if tail.is_empty() {
+            break;
+        }
+        parts.push(m);
+        rest = tail;
+    }
+    parts.push(rest);
+    parts.join("+")
+}
+
+/// Like [`set_taken_chords`] for GPUI keystroke strings (`cmd-shift-p`).
+pub fn set_taken_gpui_chords<'a>(chords: impl IntoIterator<Item = &'a str>) {
+    set_taken_chords(chords.into_iter().map(chord_syntax));
+}
+
+fn parse_pane_kind(s: &str) -> Option<PaneKind> {
+    match s {
+        "send" => Some(PaneKind::Send),
+        "ctl" => Some(PaneKind::Ctl),
+        _ => None,
+    }
+}
+
+fn pane_payload(b64: &str) -> Option<String> {
+    let p = String::from_utf8(b64_decode(b64)?).ok()?;
+    (!p.is_empty() && p.len() <= menu_reg::MAX_PAYLOAD).then_some(p)
+}
+
+fn parse_clear(f: &[&str]) -> Option<Option<String>> {
+    match f {
+        [] | [""] => Some(None),
+        [id] if valid_slot(id) => Some(Some((*id).to_string())),
+        _ => None,
+    }
+}
+
+fn parse_key(verbs: &[u8]) -> Option<KeyCmd> {
+    let s = std::str::from_utf8(verbs).ok()?;
+    let fields: Vec<&str> = s.split(';').collect();
+    match fields.as_slice() {
+        ["clear", rest @ ..] => parse_clear(rest).map(KeyCmd::Clear),
+        ["add", id, chord, kind, payload, rest @ ..] => {
+            let replay = match rest {
+                [] => false,
+                ["replay"] => true,
+                _ => return None,
+            };
+            if !valid_slot(id) {
+                return None;
+            }
+            Some(KeyCmd::Add {
+                key: PaneKey {
+                    id: (*id).to_string(),
+                    chord: canonical_chord(chord)?,
+                    kind: parse_pane_kind(kind)?,
+                    payload: pane_payload(payload)?,
+                },
+                replay,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_palette(verbs: &[u8]) -> Option<PaletteCmd> {
+    let s = std::str::from_utf8(verbs).ok()?;
+    let fields: Vec<&str> = s.split(';').collect();
+    match fields.as_slice() {
+        ["clear", rest @ ..] => parse_clear(rest).map(PaletteCmd::Clear),
+        ["add", id, label, kind, payload, rest @ ..] => {
+            let replay = match rest {
+                [] => false,
+                ["replay"] => true,
+                _ => return None,
+            };
+            if !valid_slot(id) {
+                return None;
+            }
+            let label: String = String::from_utf8(b64_decode(label)?)
+                .ok()?
+                .chars()
+                .filter(|c| !c.is_control() && !is_bidi(*c))
+                .collect::<String>()
+                .trim()
+                .to_string();
+            if label.is_empty() || label.len() > menu_reg::MAX_LABEL {
+                return None;
+            }
+            Some(PaletteCmd::Add {
+                entry: PaneEntry {
+                    id: (*id).to_string(),
+                    label,
+                    kind: parse_pane_kind(kind)?,
+                    payload: pane_payload(payload)?,
+                },
+                replay,
+            })
         }
         _ => None,
     }
@@ -1100,6 +1379,136 @@ impl StateOwner for MarkStore {
     }
 }
 
+/// The `7723` bindings of one pane, in registration order.
+#[derive(Clone, Debug, Default)]
+pub struct KeyStore {
+    keys: Vec<PaneKey>,
+}
+
+impl KeyStore {
+    pub fn keys(&self) -> &[PaneKey] {
+        &self.keys
+    }
+
+    pub fn find(&self, chord: &str) -> Option<&PaneKey> {
+        self.keys.iter().find(|k| k.chord == chord)
+    }
+
+    /// `Ok(false)` unchanged, `Err(())` refused (cap, reserved or taken chord): malformed.
+    fn apply(&mut self, cmd: KeyCmd) -> Result<bool, ()> {
+        match cmd {
+            KeyCmd::Clear(None) => Ok(StateOwner::clear(self)),
+            KeyCmd::Clear(Some(id)) => {
+                let n = self.keys.len();
+                self.keys.retain(|k| k.id != id);
+                Ok(n != self.keys.len())
+            }
+            KeyCmd::Add { key, .. } => {
+                if RESERVED_CHORDS.contains(&key.chord.to_ascii_lowercase().as_str())
+                    || is_taken(&key.chord)
+                {
+                    return Err(());
+                }
+                // A chord belongs to one id; another id on it is a collision.
+                if self
+                    .keys
+                    .iter()
+                    .any(|k| k.chord == key.chord && k.id != key.id)
+                {
+                    return Err(());
+                }
+                if let Some(slot) = self.keys.iter_mut().find(|k| k.id == key.id) {
+                    let changed = *slot != key;
+                    *slot = key;
+                    Ok(changed)
+                } else if self.keys.len() >= KEY_BINDINGS_MAX {
+                    Err(())
+                } else {
+                    self.keys.push(key);
+                    Ok(true)
+                }
+            }
+        }
+    }
+
+    pub fn replay(&self, out: &mut String) {
+        for k in &self.keys {
+            let _ = write!(
+                out,
+                "\x1b]7723;key;add;{};{};{};{};replay\x07",
+                k.id,
+                chord_syntax(&k.chord),
+                k.kind.name(),
+                b64_encode(k.payload.as_bytes())
+            );
+        }
+    }
+}
+
+impl StateOwner for KeyStore {
+    fn clear(&mut self) -> bool {
+        let changed = !self.keys.is_empty();
+        self.keys.clear();
+        changed
+    }
+}
+
+/// The `7724` palette entries of one pane, in registration order.
+#[derive(Clone, Debug, Default)]
+pub struct PaletteStore {
+    entries: Vec<PaneEntry>,
+}
+
+impl PaletteStore {
+    pub fn entries(&self) -> &[PaneEntry] {
+        &self.entries
+    }
+
+    fn apply(&mut self, cmd: PaletteCmd) -> Result<bool, ()> {
+        match cmd {
+            PaletteCmd::Clear(None) => Ok(StateOwner::clear(self)),
+            PaletteCmd::Clear(Some(id)) => {
+                let n = self.entries.len();
+                self.entries.retain(|e| e.id != id);
+                Ok(n != self.entries.len())
+            }
+            PaletteCmd::Add { entry, .. } => {
+                if let Some(slot) = self.entries.iter_mut().find(|e| e.id == entry.id) {
+                    let changed = *slot != entry;
+                    *slot = entry;
+                    Ok(changed)
+                } else if self.entries.len() >= PALETTE_ENTRIES_MAX {
+                    Err(())
+                } else {
+                    self.entries.push(entry);
+                    Ok(true)
+                }
+            }
+        }
+    }
+
+    pub fn replay(&self, out: &mut String) {
+        for e in &self.entries {
+            let _ = write!(
+                out,
+                "\x1b]7724;palette;add;{};{};{};{};replay\x07",
+                e.id,
+                b64_encode(e.label.as_bytes()),
+                e.kind.name(),
+                b64_encode(e.payload.as_bytes())
+            );
+        }
+    }
+}
+
+impl StateOwner for PaletteStore {
+    fn clear(&mut self) -> bool {
+        let changed = !self.entries.is_empty();
+        self.entries.clear();
+        changed
+    }
+}
+
 /// Per-pane counters named in §6.4.2 item 7.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
@@ -1132,6 +1541,10 @@ pub struct PrivateState {
     pub tab: DeclaredTab,
     pub badge: BadgeState,
     pub marks: MarkStore,
+    pub keys: KeyStore,
+    pub palette: PaletteStore,
+    /// Window shared by `7723`, `7724` and `7717`.
+    pane_rate: RateWindow,
     /// Stable id of the cursor row, set by the caller before each `handle`; `None` on the
     /// alternate screen.
     pub cursor_line: Option<u64>,
@@ -1174,6 +1587,8 @@ impl PrivateState {
                 | PrivCmd::Tab(TabCmd { replay: true, .. })
                 | PrivCmd::Badge(BadgeCmd::Set { replay: true, .. })
                 | PrivCmd::Mark(MarkCmd::Add { replay: true, .. })
+                | PrivCmd::Key(KeyCmd::Add { replay: true, .. })
+                | PrivCmd::Palette(PaletteCmd::Add { replay: true, .. })
         );
         if !replay {
             if now_ms.saturating_sub(self.window_start) >= WINDOW_MS || self.window_count == 0 {
@@ -1188,6 +1603,10 @@ impl PrivateState {
         }
         match cmd {
             PrivCmd::Menu(c) => {
+                if !replay {
+                    // Counts against the window `7723`/`7724` share; 7717 keeps its own limit.
+                    self.pane_rate.admit(now_ms, u32::MAX);
+                }
                 self.counters.applied += 1;
                 if menus.apply(c, now_ms) {
                     Outcome::Changed(Feature::Menu)
@@ -1257,6 +1676,50 @@ impl PrivateState {
                     }
                 }
             },
+            PrivCmd::Key(c) => {
+                if !replay
+                    && !self
+                        .pane_rate
+                        .admit(now_ms, KEY_RATE_PER_SEC.min(PALETTE_RATE_PER_SEC))
+                {
+                    self.counters.dropped += 1;
+                    return Outcome::Nothing;
+                }
+                match self.keys.apply(c) {
+                    Err(()) => {
+                        self.counters.malformed += 1;
+                        Outcome::Nothing
+                    }
+                    Ok(changed) => {
+                        self.counters.applied += 1;
+                        if changed {
+                            Outcome::Changed(Feature::Key)
+                        } else {
+                            Outcome::Nothing
+                        }
+                    }
+                }
+            }
+            PrivCmd::Palette(c) => {
+                if !replay && !self.pane_rate.admit(now_ms, PALETTE_RATE_PER_SEC) {
+                    self.counters.dropped += 1;
+                    return Outcome::Nothing;
+                }
+                match self.palette.apply(c) {
+                    Err(()) => {
+                        self.counters.malformed += 1;
+                        Outcome::Nothing
+                    }
+                    Ok(changed) => {
+                        self.counters.applied += 1;
+                        if changed {
+                            Outcome::Changed(Feature::Palette)
+                        } else {
+                            Outcome::Nothing
+                        }
+                    }
+                }
+            }
             _ => Outcome::Nothing,
         }
     }
@@ -1303,6 +1766,8 @@ impl PrivateState {
             Feature::Tab => self.tab.clear(),
             Feature::Badge => self.badge.clear(),
             Feature::Mark => self.marks.clear(),
+            Feature::Key => self.keys.clear(),
+            Feature::Palette => self.palette.clear(),
             _ => false,
         }
     }
@@ -1329,7 +1794,7 @@ pub fn caps_reply(gate: &PrivateGate, st_bel: bool) -> Vec<u8> {
         let _ = write!(features, "\"{}\":{v}", f.name());
     }
     let json = format!(
-        "{{\"v\":1,\"microterm\":\"{}\",\"features\":{{{features}}},\"limits\":{{\"status_slots\":{STATUS_SLOTS},\"status_text\":{STATUS_TEXT_MAX},\"status_tooltip\":{STATUS_TOOLTIP_MAX},\"progress_bars\":{PROGRESS_BARS},\"progress_label\":{PROGRESS_LABEL_MAX},\"badge_text\":{BADGE_TEXT_MAX},\"marks\":{MARKS_MAX},\"mark_note\":{MARK_NOTE_MAX},\"max_osc\":{MAX_OSC}}},\"remote\":true}}",
+        "{{\"v\":1,\"microterm\":\"{}\",\"features\":{{{features}}},\"limits\":{{\"status_slots\":{STATUS_SLOTS},\"status_text\":{STATUS_TEXT_MAX},\"status_tooltip\":{STATUS_TOOLTIP_MAX},\"progress_bars\":{PROGRESS_BARS},\"progress_label\":{PROGRESS_LABEL_MAX},\"badge_text\":{BADGE_TEXT_MAX},\"marks\":{MARKS_MAX},\"mark_note\":{MARK_NOTE_MAX},\"pane_keys\":{KEY_BINDINGS_MAX},\"pane_palette\":{PALETTE_ENTRIES_MAX},\"max_osc\":{MAX_OSC}}},\"remote\":true}}",
         env!("CARGO_PKG_VERSION")
     );
     let mut out = format!("\x1b]7727;caps;{}", b64_encode(json.as_bytes())).into_bytes();
@@ -1340,6 +1805,227 @@ pub fn caps_reply(gate: &PrivateGate, st_bel: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn keyseq(id: &str, chord: &str, kind: &str, payload: &str) -> Vec<u8> {
+        format!(
+            "7723;key;add;{id};{chord};{kind};{}",
+            b64_encode(payload.as_bytes())
+        )
+        .into_bytes()
+    }
+
+    fn palseq(id: &str, label: &str, kind: &str, payload: &str) -> Vec<u8> {
+        format!(
+            "7724;palette;add;{id};{};{kind};{}",
+            b64_encode(label.as_bytes()),
+            b64_encode(payload.as_bytes())
+        )
+        .into_bytes()
+    }
+
+    fn feed(st: &mut PrivateState, p: &[u8], now: u64) -> Outcome {
+        let mut menus = MenuRegistry::default();
+        st.handle(&on(), &mut menus, parse(p).unwrap(), false, now)
+    }
+
+    #[test]
+    fn key_parsing_table() {
+        assert!(matches!(
+            parse(&keyseq("t", "ctrl+alt+t", "send", "make test")),
+            Some(PrivCmd::Key(KeyCmd::Add { .. }))
+        ));
+        assert!(matches!(
+            parse(&keyseq("t", "f5", "ctl", "pane notify")),
+            Some(PrivCmd::Key(_))
+        ));
+        for bad in [
+            keyseq("t", "t", "send", "x"),
+            keyseq("t", "shift+t", "send", "x"),
+            keyseq("t", "ctrl+nope", "send", "x"),
+            keyseq("t", "ctrl+t", "spawn", "[]"),
+            keyseq("T", "ctrl+t", "send", "x"),
+            keyseq("t", "ctrl+t", "send", ""),
+            keyseq("t", "ctrl+ctrl+t", "send", "x"),
+        ] {
+            assert!(matches!(
+                parse(&bad),
+                Some(PrivCmd::Malformed(Some(Feature::Key)))
+            ));
+        }
+        assert_eq!(
+            canonical_chord("cmd+shift+P").as_deref(),
+            Some("shift-cmd-p")
+        );
+        assert_eq!(canonical_chord("ctrl+alt+t").as_deref(), Some("ctrl-alt-t"));
+    }
+
+    #[test]
+    fn palette_parsing_strips_controls_and_rejects_spawn() {
+        let Some(PrivCmd::Palette(PaletteCmd::Add { entry, .. })) =
+            parse(&palseq("r", "Run\x1b[31m tests\n", "send", "make test"))
+        else {
+            panic!()
+        };
+        assert_eq!(entry.label, "Run[31m tests");
+        assert!(matches!(
+            parse(&palseq("r", "x", "spawn", "[]")),
+            Some(PrivCmd::Malformed(Some(Feature::Palette)))
+        ));
+        assert!(matches!(
+            parse(&palseq("r", &"a".repeat(257), "send", "x")),
+            Some(PrivCmd::Malformed(_))
+        ));
+        assert!(matches!(
+            parse(&palseq("r", "ok", "send", &"a".repeat(1025))),
+            Some(PrivCmd::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn reserved_chords_are_malformed_and_counted() {
+        let mut st = PrivateState::default();
+        for (i, c) in ["cmd+q", "cmd+w", "cmd+c", "cmd+v", "cmd+shift+p"]
+            .iter()
+            .enumerate()
+        {
+            let out = feed(&mut st, &keyseq("k", c, "send", "x"), i as u64 * 300);
+            assert_eq!(out, Outcome::Nothing);
+        }
+        assert_eq!(st.counters.malformed, 5);
+        assert!(st.keys.keys().is_empty());
+    }
+
+    #[test]
+    fn keys_cap_replace_clear_and_rate() {
+        let mut st = PrivateState::default();
+        assert_eq!(
+            feed(&mut st, &keyseq("a", "ctrl+alt+a", "send", "x"), 0),
+            Outcome::Changed(Feature::Key)
+        );
+        // Same id replaces, same chord on another id collides.
+        assert_eq!(
+            feed(&mut st, &keyseq("a", "ctrl+alt+a", "send", "y"), 1),
+            Outcome::Changed(Feature::Key)
+        );
+        feed(&mut st, &keyseq("b", "ctrl+alt+a", "send", "x"), 2);
+        assert_eq!(st.counters.malformed, 1);
+        assert_eq!(st.keys.keys().len(), 1);
+        // 5 per second, shared window.
+        for i in 0..6 {
+            feed(
+                &mut st,
+                &keyseq(
+                    "c",
+                    &format!("ctrl+alt+{}", (b'b' + i) as char),
+                    "send",
+                    "x",
+                ),
+                3,
+            );
+        }
+        assert!(st.counters.dropped >= 1);
+        assert_eq!(
+            feed(&mut st, b"7723;key;clear", 5000),
+            Outcome::Changed(Feature::Key)
+        );
+        assert!(st.keys.keys().is_empty());
+    }
+
+    #[test]
+    fn key_cap_is_sixteen() {
+        let mut st = PrivateState::default();
+        for i in 0..17u64 {
+            let c = format!("ctrl+alt+{}", (b'a' + i as u8) as char);
+            feed(
+                &mut st,
+                &keyseq(&format!("k{i}"), &c, "send", "x"),
+                i * 1000,
+            );
+        }
+        assert_eq!(st.keys.keys().len(), KEY_BINDINGS_MAX);
+        assert_eq!(st.counters.malformed, 1);
+    }
+
+    #[test]
+    fn palette_shares_the_window_with_menu_and_keys() {
+        let mut st = PrivateState::default();
+        let mut menus = MenuRegistry::default();
+        let gate = on();
+        for i in 0..8 {
+            let seq = format!(
+                "7717;menu;add;m{i};{};send;{}",
+                b64_encode(b"x"),
+                b64_encode(b"x")
+            );
+            st.handle(&gate, &mut menus, parse(seq.as_bytes()).unwrap(), false, 0);
+        }
+        let mut dropped_before = st.counters.dropped;
+        for i in 0..4 {
+            st.handle(
+                &gate,
+                &mut menus,
+                parse(&palseq(&format!("p{i}"), "l", "send", "x")).unwrap(),
+                false,
+                0,
+            );
+        }
+        // 8 menu adds + 2 palette adds fill the window of 10.
+        assert_eq!(st.palette.entries().len(), 2);
+        dropped_before += 2;
+        assert_eq!(st.counters.dropped, dropped_before);
+    }
+
+    #[test]
+    fn replay_round_trips_keys_and_palette() {
+        let mut st = PrivateState::default();
+        feed(&mut st, &keyseq("t", "ctrl+alt+t", "send", "make test"), 0);
+        feed(&mut st, &palseq("r", "Run tests", "ctl", "pane notify"), 0);
+        let mut out = String::new();
+        st.keys.replay(&mut out);
+        st.palette.replay(&mut out);
+        let mut st2 = PrivateState::default();
+        for seq in out.split('\x07').filter(|s| !s.is_empty()) {
+            let p = seq.trim_start_matches('\x1b').trim_start_matches(']');
+            feed(&mut st2, p.as_bytes(), 0);
+        }
+        assert_eq!(st2.keys.keys(), st.keys.keys());
+        assert_eq!(st2.palette.entries(), st.palette.entries());
+    }
+
+    #[test]
+    fn gates_and_clear_all_remove_keys_and_palette() {
+        let mut st = PrivateState::default();
+        let mut menus = MenuRegistry::default();
+        feed(&mut st, &keyseq("t", "ctrl+alt+t", "send", "x"), 0);
+        feed(&mut st, &palseq("r", "R", "send", "x"), 0);
+        let mut off = on();
+        off.features.set(Feature::Key, false);
+        assert_eq!(st.gate_changed(&on(), &off, &mut menus), vec![Feature::Key]);
+        assert!(st.keys.keys().is_empty());
+        assert_eq!(st.palette.entries().len(), 1);
+        assert_eq!(st.clear_all(&mut menus), vec![Feature::Palette]);
+    }
+
+    #[test]
+    fn gpui_chords_and_dash_key_round_trip() {
+        assert_eq!(chord_syntax("ctrl-alt-t"), "ctrl+alt+t");
+        assert_eq!(chord_syntax("ctrl-alt--"), "ctrl+alt+-");
+        assert_eq!(
+            canonical_chord(&chord_syntax("ctrl-alt--")).as_deref(),
+            Some("ctrl-alt--")
+        );
+        assert_eq!(chord_syntax("f5"), "f5");
+    }
+
+    #[test]
+    fn taken_chords_are_refused() {
+        set_taken_chords(["ctrl+alt+z".to_string()]);
+        let mut st = PrivateState::default();
+        feed(&mut st, &keyseq("z", "ctrl+alt+z", "send", "x"), 0);
+        set_taken_chords(Vec::<String>::new());
+        assert!(st.keys.keys().is_empty());
+        assert_eq!(st.counters.malformed, 1);
+    }
 
     fn on() -> PrivateGate {
         PrivateGate {

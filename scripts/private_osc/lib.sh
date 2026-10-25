@@ -25,6 +25,13 @@ badge_clear() { printf '\e]7718;badge;clear\a'; }
 mark_add() { printf '\e]7722;mark;add;%s;%s\a' "$1" "$(b64 "$2")"; }
 mark_clear() { printf '\e]7722;mark;clear\a'; }
 
+# key_add ID CHORD KIND PAYLOAD   (7723; KIND is send|ctl)
+key_add() { printf '\e]7723;key;add;%s;%s;%s;%s\a' "$1" "$2" "$3" "$(b64 "$4")"; }
+key_clear() { printf '\e]7723;key;clear%s\a' "${1:+;$1}"; }
+# palette_add ID LABEL KIND PAYLOAD   (7724)
+palette_add() { printf '\e]7724;palette;add;%s;%s;%s;%s\a' "$1" "$(b64 "$2")" "$3" "$(b64 "$4")"; }
+palette_clear() { printf '\e]7724;palette;clear%s\a' "${1:+;$1}"; }
+
 require_pane() {
   [ -t 1 ] || { echo "run this in a microterm pane" >&2; exit 1; }
 }

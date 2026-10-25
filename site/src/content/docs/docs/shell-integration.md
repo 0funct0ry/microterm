@@ -40,6 +40,20 @@ a shared rc file. It also works over SSH: a remote shell with the snippet sends 
 The snippets keep your own prompt: they wrap whatever `PS1`, `PROMPT` or `fish_prompt` contains and do not
 replace `PROMPT_COMMAND` or the zsh hook arrays (bash's array form is supported).
 
+## Pane keys and palette entries: `mt-key`, `mt-palette`
+
+```sh
+mt-key add [--id ID] [--ctl] CHORD -- COMMAND [ARG...]
+mt-palette add [--id ID] [--ctl] LABEL -- COMMAND [ARG...]
+mt-key clear [ID]    mt-palette clear [ID]
+```
+
+They register a key chord or a "From pane" command-palette entry that works only in this pane
+(`OSC 7723` / `OSC 7724`; see [Private OSC](/docs/private-osc/#7723-pane-key-bindings-and-7724-palette-entries)).
+The command is quoted for your shell and typed into the pane; `--ctl` runs `microterm ctl COMMAND`
+for this pane. They never override your own or a built-in key, and are inert until
+`[private_osc] enabled = true`.
+
 ## Menu items: `mt-menu`
 
 The snippets also define `mt-menu`, which adds items to the right-click menu of the current pane

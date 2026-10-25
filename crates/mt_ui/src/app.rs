@@ -196,6 +196,8 @@ pub enum Target {
     Snippet(String),
     /// A trigger marker of the focused pane, by stable line id (`%` provider).
     Marker(u64),
+    /// A `7724` palette entry of the focused pane, by menu row id (`pane-entry:<id>`).
+    PaneEntry(String),
 }
 
 /// Provider groups of the command palette (the `u8` tag in `PickerState`).
@@ -1031,6 +1033,16 @@ impl AppWindow {
             // Reads other windows' terminals, so it runs once this update has finished.
             cx.defer(move |cx| crate::triggers::runtime::sync_program_marks(cx, pane));
         }
+        if private_changed.iter().any(|f| {
+            matches!(
+                f,
+                mt_term::private_osc::Feature::Key | mt_term::private_osc::Feature::Palette
+            )
+        }) && self.focused_pane() == Some(pane)
+        {
+            // An open palette shows the focused pane's "From pane" group: rebuild it.
+            self.refresh_picker(cx);
+        }
         for f in private_changed {
             mux_host::host(cx)
                 .mux
@@ -1121,7 +1133,54 @@ impl AppWindow {
             }
             return;
         }
+        // Pane bindings (`OSC 7723`) come last: only the focused pane's, and only for chords the
+        // user's and the built-in bindings did not consume (they never reach this point).
+        if !ev.is_held && self.run_pane_key(&ev.keystroke, window, cx) {
+            return;
+        }
         self.send_key(&ev.keystroke, ev.is_held, KeyEventKind::Press, cx);
+    }
+
+    /// Runs the focused pane's `7723` binding for `ks`, if it has one. Facts are rebuilt now.
+    fn run_pane_key(
+        &mut self,
+        ks: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let m = &ks.modifiers;
+        if !(m.control || m.alt || m.platform || ks.key.starts_with('f') && ks.key.len() > 1) {
+            return false;
+        }
+        let mut chord = String::new();
+        for (on, name) in [
+            (m.control, "ctrl-"),
+            (m.alt, "alt-"),
+            (m.shift, "shift-"),
+            (m.platform, "cmd-"),
+        ] {
+            if on {
+                chord.push_str(name);
+            }
+        }
+        chord.push_str(&ks.key.to_ascii_lowercase());
+        let Some(pane) = self.focused_pane() else {
+            return false;
+        };
+        let Some(facts) = self.menu_facts(pane, cx) else {
+            return false;
+        };
+        let Some(item) = facts
+            .shell
+            .items
+            .iter()
+            .find(|i| i.origin == crate::menu::shell::Origin::PaneKey && i.label == chord)
+        else {
+            return false;
+        };
+        let row = item.row_id();
+        self.invoke_menu("viewport", &row, facts, window, cx);
+        true
     }
 
     pub(crate) fn on_viewport_key_up(&mut self, ev: &KeyUpEvent, cx: &mut Context<Self>) {
@@ -1767,6 +1826,31 @@ impl AppWindow {
                 items.push((format!("Snippet: {}", s.title), e));
             }
         }
+        // "From pane": entries the focused pane registered over 7724 (Tier 2, same facts as a
+        // menu item, so remote panes need `allow_remote_items`). First, so they rank on top.
+        {
+            if let Some(pane) = self.focused_pane() {
+                if let Some(f) = self.menu_facts(pane, cx) {
+                    let mut own: Vec<(String, Entry)> = Vec::new();
+                    for it in f
+                        .shell
+                        .items
+                        .iter()
+                        .filter(|i| i.origin == crate::menu::shell::Origin::PaneEntry)
+                    {
+                        let mut e = Entry::new(
+                            Target::PaneEntry(it.row_id()),
+                            format!("pane-entry:{pane}:{}", it.id),
+                        );
+                        e.icon = Some(IconName::Terminal);
+                        e.chip = Some("pane".to_string());
+                        e.detail = Some(format!("From pane · pane {pane} (7724)"));
+                        own.push((it.label.clone(), e));
+                    }
+                    items.splice(0..0, own);
+                }
+            }
+        }
         {
             if let (Some(pane), Some(rt)) = (
                 self.focused_pane(),
@@ -2036,6 +2120,14 @@ impl AppWindow {
                 }
             }
             Target::MenuItem(addr) => self.invoke_menu_address(&addr, window, cx),
+            Target::PaneEntry(row) => {
+                // Facts are rebuilt now, so trust, config and the remote opt-in are re-checked.
+                if let Some(pane) = self.focused_pane() {
+                    if let Some(facts) = self.menu_facts(pane, cx) {
+                        self.invoke_menu("viewport", &row, facts, window, cx);
+                    }
+                }
+            }
             Target::Marker(line) => {
                 if let Some(pane) = self.focused_pane() {
                     cx.defer(move |cx| crate::triggers::runtime::jump_to_line(cx, pane, line));

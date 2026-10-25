@@ -1637,6 +1637,8 @@ pub fn build_keymap(
         )
     };
     let plan = plan_keymap(platform, user);
+    // Pane key bindings (`OSC 7723`) may never take a chord of the live keymap.
+    mt_term::private_osc::set_taken_gpui_chords(plan.binds.iter().map(|b| b.0.as_str()));
     let mut warnings = plan.warnings;
     let mut out = Vec::new();
     for (ks, action, ctx) in plan.binds {
