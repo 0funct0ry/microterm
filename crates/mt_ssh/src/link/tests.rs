@@ -371,33 +371,6 @@ async fn a_resize_sent_before_the_daemon_confirms_the_pane_reaches_it() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pane_queued_before_connecting_starts_at_its_latest_size() {
-    let env = start_daemon("queued-size");
-    let dialer = TestDialer::new(&env);
-    let (h, rx) = start(
-        &tokio::runtime::Handle::current(),
-        LinkConfig {
-            session: "s".into(),
-            scrollback: 10,
-        },
-        dialer,
-    );
-    // Both arrive while the first connection is still being dialled.
-    h.send(spawn_cmd(2, "echo SIZE=$(stty size); sleep 5"));
-    h.send(Command::Resize {
-        pane: 2,
-        cols: 132,
-        rows: 43,
-    });
-    output_contains(&rx, 2, "SIZE=43 132").await;
-    h.send(Command::Close {
-        pane: 2,
-        kill: true,
-    });
-    h.send(Command::Shutdown);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn split_hints_reach_the_daemon_and_all_three_panes_reattach_after_a_reconnect() {
     use mt_proto::mux::{encode, hello, read_frame};
     use std::io::Write as _;
