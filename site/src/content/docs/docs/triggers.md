@@ -140,7 +140,7 @@ bidirectional overrides removed, whitespace collapsed, at most 120 characters). 
 | `bell` | Rings the pane bell with `[bell].mode` (visual, audible or none). | 1 per second per pane |
 | `counter` | Counts firings per rule and pane, exactly: a rule with only highlight, marker and counter actions is not rate limited (set `cooldown_ms = 0` to count every match) and shows a pill (`12`, `99+`) after the tab title. `reset_on` is `focus` (default), `command_start` or `never`. | stops at 9999 |
 | `title` | Gives the tab a title (60 characters). A rename you type wins, and ends it; it wins over the program's own title. | |
-| `marker` | Marks the matched line: a tick on the scrollbar, a 3 px mark at the left edge, `NextMarker`/`PreviousMarker` to jump, a "Markers" palette section (`%`). Written to a recording of the pane too. | 1000 per pane |
+| `marker` | Marks the matched line (programs can add their own marks to the same list with [`7722`](/docs/private-osc/)): a tick on the scrollbar, a 3 px mark at the left edge, `NextMarker`/`PreviousMarker` to jump, a "Markers" palette section (`%`). Written to a recording of the pane too. | 1000 per pane |
 | `findings` | Adds an entry to the Findings list (and a marker). | 500 per window |
 | `recording` | `start` records the pane through the recorder **without input** (always) and marks the sidecar `origin.trigger = "trigger:<id>"`; `stop` stops only recordings that a trigger started. Needs `recording.enabled`. Optional `stop_after_s`. | one per pane |
 | `clipboard` | Copies the match (or a capture) to the system clipboard as one sanitised line of at most 4 KiB, and **always** shows a toast saying so. Never the PRIMARY selection. | gate `allow_clipboard`; 1 per 5 s per rule |

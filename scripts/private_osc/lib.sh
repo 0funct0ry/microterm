@@ -18,6 +18,13 @@ progress_clear() { printf '\e]7720;progress;clear%s\a' "${1:+;$1}"; }
 # tab_color VALUE   (7719; empty clears)
 tab_color() { printf '\e]7719;tab;color;%s\a' "$1"; }
 
+# badge_set TEXT [TOKEN]   (7718; TOKEN is muted|accent|success|warning|error)
+badge_set() { printf '\e]7718;badge;set;%s;%s\a' "$(b64 "$1")" "${2:-muted}"; }
+badge_clear() { printf '\e]7718;badge;clear\a'; }
+# mark_add KIND NOTE   (7722; KIND is info|warn|error)
+mark_add() { printf '\e]7722;mark;add;%s;%s\a' "$1" "$(b64 "$2")"; }
+mark_clear() { printf '\e]7722;mark;clear\a'; }
+
 require_pane() {
   [ -t 1 ] || { echo "run this in a microterm pane" >&2; exit 1; }
 }

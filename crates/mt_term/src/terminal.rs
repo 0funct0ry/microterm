@@ -831,6 +831,26 @@ impl Terminal {
         self.tracker().progress_bars()
     }
 
+    /// The `7718` badge this pane's program set.
+    pub fn badge(&self) -> Option<crate::private_osc::Badge> {
+        self.tracker().badge()
+    }
+
+    /// Drops the `7722` marks (`ClearMarkers`); emits `PrivateOscChanged(mark)` when any went.
+    pub fn clear_program_marks(&self) -> bool {
+        let changed = self.tracker().clear_program_marks();
+        if changed {
+            self.shared
+                .notify_cleared(vec![crate::private_osc::Feature::Mark]);
+        }
+        changed
+    }
+
+    /// The `7722` marks this pane's program set, oldest first.
+    pub fn program_marks(&self) -> Vec<crate::private_osc::ProgramMark> {
+        self.tracker().program_marks()
+    }
+
     /// The color this pane's program declared for its tab (`7719`), as sent.
     pub fn declared_tab_color(&self) -> Option<String> {
         self.tracker().declared_tab_color()

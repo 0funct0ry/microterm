@@ -53,6 +53,10 @@ shown as plain text only.
 | 7717 | `menu` | shell-registered context-menu items |
 | 7727 | `caps` | asks what this terminal supports |
 | 7725 | `status` | named status segments in the status bar |
+| 7720 | `progress` | named progress bars with ETA |
+| 7719 | `tab` | the color of the sender's tab |
+| 7718 | `badge` | a small pill badge in the pane |
+| 7722 | `mark` | notes pinned to output rows (gutter and scrollbar) |
 
 Everything else in 7700–7799 is reserved and ignored.
 
@@ -141,6 +145,53 @@ switch or the `tab` gate goes off.
 
 Both sequences work in SSH and serial panes, and the `microterm-mux` daemon replays them after a
 reconnect.
+
+## `7718` pane badge
+
+`ESC ] 7718 ; badge ; set ; <b64 text> [; <token>] ST` shows a small pill badge (a dot in the token color and bold text) in the
+bottom-right of the pane that sent it; `badge ; clear ST` removes it. `token` is one of `muted`
+(default), `accent`, `success`, `warning` or `error`: theme tokens only, an arbitrary color is
+malformed. The text is at most 24 characters on one line; 2 changes per second.
+
+```sh
+ssh() { command ssh "$@"; printf '\e]7718;badge;clear\a'; }   # wrapper: badge only while connected
+printf '\e]7718;badge;set;%s;error\a' "$(printf PROD | base64)"
+```
+
+The badge is drawn by the interface, above the terminal: a little larger than the terminal font, never taller than
+22 % of the pane, click-through, hidden in panes narrower than 24 columns and still shown on the
+alternate screen. It is not part of the text grid, so selection, copy, `get-text`, GIF and
+screenshot exports never contain it. The pane's right-click menu names it as set by a program. It
+is removed when the program exits, on a terminal reset, when the pane closes and when the switch or
+the `badge` gate goes off.
+
+## `7722` gutter marks
+
+`ESC ] 7722 ; mark ; add ; <kind> ; <b64 note> ST` pins a note to the **row the cursor is on**;
+`mark ; clear ST` removes the pane's marks. `kind` is `info`, `warn` or `error`; the note is at
+most 120 characters. Up to 500 marks per pane (the oldest is dropped), 20 per second, primary
+screen only (on the alternate screen the sequence is malformed).
+
+```sh
+# make wrapper: mark every line that says "error:"
+make "$@" 2>&1 | while IFS= read -r line; do
+  case $line in *error:*) printf '\e]7722;mark;add;error;%s\a' "$(printf %s "$line" | cut -c1-120 | base64 | tr -d '\n')";; esac
+  printf '%s\n' "$line"   # the mark goes first: it pins to the row the cursor is on
+done
+```
+
+A mark shows as an edge mark in the gutter and a tick on the scrollbar, in the color of its kind.
+The tick sits where the row is in the whole scrollback, so with a long history it is not level with
+the edge mark. It is anchored to the line's stable id, so it stays on its row when the window is
+resized and goes away only when the line leaves the scrollback. Program marks join the same list as
+[trigger markers](/docs/triggers/): `NextMarker`, `PreviousMarker` and `ClearMarkers` visit and
+clear both, and the palette's Markers section shows `program (7722)` or `rule <name>` as the
+origin. They work with `triggers.enabled = false`. While the pane is being recorded, each new mark
+also adds a marker to the recording. `ED 3` (clear scrollback), a terminal reset, pane exit, the
+switch and the `mark` gate clear them.
+
+Both sequences work in SSH and serial panes, and `microterm-mux` replays them after a reconnect
+(marks keep their rows).
 
 ## Checking the state
 

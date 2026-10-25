@@ -1027,6 +1027,10 @@ impl AppWindow {
         if private_changed.contains(&mt_term::private_osc::Feature::Tab) {
             self.sync_osc_colors(cx);
         }
+        if private_changed.contains(&mt_term::private_osc::Feature::Mark) {
+            // Reads other windows' terminals, so it runs once this update has finished.
+            cx.defer(move |cx| crate::triggers::runtime::sync_program_marks(cx, pane));
+        }
         for f in private_changed {
             mux_host::host(cx)
                 .mux
@@ -1763,17 +1767,25 @@ impl AppWindow {
                 items.push((format!("Snippet: {}", s.title), e));
             }
         }
-        if triggers_on {
+        {
             if let (Some(pane), Some(rt)) = (
                 self.focused_pane(),
                 cx.try_global::<crate::triggers::runtime::TriggerRuntime>(),
             ) {
                 for m in rt.deco.markers(pane) {
+                    let program = m.rule == crate::triggers::deco::PROGRAM_RULE;
+                    if !program && !triggers_on {
+                        continue;
+                    }
                     let mut e =
                         Entry::new(Target::Marker(m.line), format!("marker:{pane}:{}", m.line));
                     e.group = group::MARKERS;
                     e.icon = Some(IconName::Search);
-                    e.detail = Some(format!("rule {}", m.rule));
+                    e.detail = Some(if program {
+                        "program (7722)".to_string()
+                    } else {
+                        format!("rule {}", m.rule)
+                    });
                     let name = if m.label.is_empty() {
                         "marker".to_string()
                     } else {

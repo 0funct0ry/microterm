@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 7718: a faint pane watermark.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. A red PROD badge"
+badge_set PROD error
+echo "   expected: a faint red PROD in the bottom-right; clicks and selection pass through it"
+pause
+
+step "2. Other tokens"
+for t in accent success warning muted; do badge_set "$t" "$t"; sleep 1; done
+echo "   (2 changes per second are accepted, so some steps may be skipped)"
+pause
+
+step "3. Clear"
+badge_clear
+echo "   expected: the badge is gone"

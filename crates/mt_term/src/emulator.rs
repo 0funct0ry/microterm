@@ -426,6 +426,21 @@ impl Emulator {
         self.tracker.progress_bars()
     }
 
+    /// The `7718` badge the program set.
+    pub fn badge(&self) -> Option<crate::private_osc::Badge> {
+        self.tracker.badge()
+    }
+
+    /// The `7722` marks the program set, oldest first.
+    pub fn program_marks(&self) -> Vec<crate::private_osc::ProgramMark> {
+        self.tracker.program_marks()
+    }
+
+    /// Stable id of the oldest line still in the grid (see `cursor_line_id`).
+    pub fn line_id_base(&self) -> u64 {
+        self.tracker.line_id_base()
+    }
+
     /// The `7719` color the program declared for its tab.
     pub fn declared_tab_color(&self) -> Option<String> {
         self.tracker.declared_tab_color()

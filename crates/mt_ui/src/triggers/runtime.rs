@@ -441,12 +441,64 @@ pub fn recent_lines(term: &mt_term::Terminal, scope: mt_triggers::MatchIn) -> Ve
     lines
 }
 
+/// Mirrors the `7722` marks of `pane`'s terminal into the decoration store, so the gutter,
+/// scrollbar, `NextMarker` and the palette treat them like trigger markers. A mark that is new
+/// while the pane is being recorded also lands in the recording.
+pub fn sync_program_marks(cx: &mut App, pane: u64) {
+    let Some(term) = mux_host::terminal(cx, pane) else {
+        return;
+    };
+    let marks = term.program_marks();
+    let base = term.line_base();
+    let known: Vec<(u64, String)> = cx
+        .try_global::<TriggerRuntime>()
+        .map(|rt| {
+            rt.deco
+                .markers(pane)
+                .into_iter()
+                .filter(|m| m.rule == super::deco::PROGRAM_RULE)
+                .map(|m| (m.line, m.label))
+                .collect()
+        })
+        .unwrap_or_default();
+    let fresh: Vec<&mt_term::private_osc::ProgramMark> = marks
+        .iter()
+        .filter(|m| m.line >= base && !known.contains(&(m.line, m.note.clone())))
+        .collect();
+    if !fresh.is_empty() && mux_host::host(cx).store_recorders.is_recording(pane) {
+        for m in &fresh {
+            let label = if m.note.is_empty() {
+                m.kind.name()
+            } else {
+                &m.note
+            };
+            let _ = mux_host::host(cx)
+                .store_recorders
+                .marker(pane, &term, Some(label));
+        }
+    }
+    let deco: Vec<super::deco::Marker> = marks
+        .iter()
+        .filter(|m| m.line >= base)
+        .map(|m| super::deco::Marker {
+            line: m.line,
+            label: m.note.clone(),
+            color: match m.kind {
+                mt_term::private_osc::MarkKind::Info => "info",
+                mt_term::private_osc::MarkKind::Warn => "warning",
+                mt_term::private_osc::MarkKind::Error => "error",
+            }
+            .to_string(),
+            rule: super::deco::PROGRAM_RULE.to_string(),
+        })
+        .collect();
+    cx.update_global::<TriggerRuntime, _>(|rt, _| rt.deco.set_program_markers(pane, deco));
+    mux_host::refresh_windows(cx);
+}
+
 /// `NextMarker` / `PreviousMarker`: scrolls the focused pane to the next or previous marker.
 /// Returns whether it moved.
 pub fn step_marker(cx: &mut App, forward: bool) -> bool {
-    if !active(cx) {
-        return false;
-    }
     let Some(pane) = mux_host::rows(cx).focused_pane else {
         return false;
     };
@@ -472,6 +524,9 @@ pub fn step_marker(cx: &mut App, forward: bool) -> bool {
 /// `ClearMarkers`: removes the focused pane's markers.
 pub fn clear_markers(cx: &mut App) {
     if let Some(pane) = mux_host::rows(cx).focused_pane {
+        if let Some(term) = mux_host::terminal(cx, pane) {
+            term.clear_program_marks();
+        }
         cx.update_global::<TriggerRuntime, _>(|rt, _| rt.deco.clear_markers(pane));
         mux_host::refresh_windows(cx);
     }

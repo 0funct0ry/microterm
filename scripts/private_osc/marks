@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 7722: notes pinned to output rows.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Three marks"
+# A mark pins to the row the cursor is on, so it goes out before the line it marks.
+mark_add info "start";             echo "compiling..."
+mark_add warn "unused variable";   echo "warning: unused variable"
+mark_add error "expected ;";       echo "error: expected ;"
+seq 1 30
+echo "   expected: edge marks on the three lines above; scrollbar ticks at their place in the scrollback"
+echo "   Run NextMarker / PreviousMarker from the palette: they visit the marks."
+pause
+
+step "2. Clear"
+mark_clear
+echo "   expected: all marks are gone"

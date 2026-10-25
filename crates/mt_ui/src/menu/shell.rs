@@ -203,6 +203,12 @@ pub fn rows(cfg: &Config, f: &Facts) -> Vec<MenuRow> {
             }
         }
     }
+    if let Some(text) = &f.program_badge {
+        out.push(header(
+            "badge-header",
+            &format!("Badge \"{text}\" set by a program"),
+        ));
+    }
     out
 }
 

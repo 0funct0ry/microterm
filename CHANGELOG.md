@@ -18,6 +18,15 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.73 — Pane badge (`7718`) and gutter marks (`7722`).** Two more display-only members of the
+  private OSC range (SPEC §6.4.8, §6.4.9). `7718;badge;set|clear`: a pill badge (dot and bold text; theme tokens
+  `muted|accent|success|warning|error`, 24 characters) in the bottom-right of the pane, click-through,
+  hidden below 24 columns, never part of the grid, copy, `get-text` or exports; the pane menu names
+  it as program-set. `7722;mark;add|clear`: notes (`info|warn|error`, 120 characters, 500 per pane)
+  pinned to the cursor row by its stable line id, shown in the gutter and scrollbar and joined with
+  trigger markers for `NextMarker`, `PreviousMarker`, `ClearMarkers` and the palette (origin
+  `program (7722)`); they work with triggers off and add a marker to a running recording. Cleared by
+  the master switch, their gates, RIS, ED 3 (marks), pane exit; replayed by `microterm-mux`.
 - **M12.72 — Progress bars (`7720`) and declared tab color (`7719`).** Two display-only members of
   the private OSC range (SPEC §6.4.6, §6.4.7). `7720;progress;set|done|clear`: up to 6 named bars
   per pane with label, percent (or indeterminate) and ETA; the tab shows one aggregate line (mean

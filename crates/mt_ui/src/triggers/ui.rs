@@ -246,12 +246,9 @@ impl AppWindow {
         had
     }
 
-    /// `NextMarker` / `PreviousMarker` on the focused pane. Both are palette entries that only
-    /// toast while the feature is off.
+    /// `NextMarker` / `PreviousMarker` on the focused pane (trigger and program markers). Both
+    /// are palette entries; with triggers off only `7722` marks exist.
     pub(crate) fn step_marker(&mut self, forward: bool, cx: &mut Context<Self>) {
-        if !self.triggers_guard(cx) {
-            return;
-        }
         // The jump reads other windows' terminals, so it runs once this update has finished.
         cx.defer(move |cx| {
             runtime::step_marker(cx, forward);
@@ -260,9 +257,6 @@ impl AppWindow {
 
     /// `ClearMarkers` on the focused pane.
     pub(crate) fn clear_trigger_markers(&mut self, cx: &mut Context<Self>) {
-        if !self.triggers_guard(cx) {
-            return;
-        }
         cx.defer(runtime::clear_markers);
     }
 

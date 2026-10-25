@@ -28,6 +28,20 @@ fn push_mark(out: &mut String, m: &Mark) {
             };
         }
         Mark::Cwd(p) => push_cwd(out, p),
+        Mark::Private {
+            cmd:
+                crate::private_osc::PrivCmd::Mark(crate::private_osc::MarkCmd::Add {
+                    kind, note, ..
+                }),
+            ..
+        } => {
+            let _ = write!(
+                out,
+                "\x1b]7722;mark;add;{};{};replay\x07",
+                kind.name(),
+                crate::menu_reg::b64_encode(note.as_bytes())
+            );
+        }
         Mark::Reset
         | Mark::Restored(_)
         | Mark::Vt(_)

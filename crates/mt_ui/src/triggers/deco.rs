@@ -29,6 +29,9 @@ pub struct Highlight {
     pub rule: String,
 }
 
+/// `Marker::rule` of a mark a program set with `7722`.
+pub const PROGRAM_RULE: &str = "osc:7722";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Marker {
     pub line: u64,
@@ -157,6 +160,16 @@ impl Decorations {
             .unwrap_or_default();
         v.sort_by_key(|m| m.line);
         v
+    }
+
+    /// Replaces the pane's program (`7722`) markers by `marks`; trigger markers are untouched.
+    pub fn set_program_markers(&mut self, pane: u64, marks: Vec<Marker>) {
+        if marks.is_empty() && !self.panes.contains_key(&pane) {
+            return;
+        }
+        let d = self.pane(pane);
+        d.markers.retain(|m| m.rule != PROGRAM_RULE);
+        d.markers.extend(marks);
     }
 
     pub fn clear_markers(&mut self, pane: u64) {

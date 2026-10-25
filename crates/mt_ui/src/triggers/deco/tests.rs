@@ -301,3 +301,42 @@ fn a_highlight_is_drawn_only_while_its_text_is_still_there() {
     e.advance(b"X");
     assert!(d.rects(1, &snap(&mut e), 0).is_empty());
 }
+
+fn program(line: u64, note: &str) -> Marker {
+    Marker {
+        line,
+        label: note.into(),
+        color: "error".into(),
+        rule: PROGRAM_RULE.into(),
+    }
+}
+
+#[test]
+fn program_marks_share_the_marker_list_without_touching_trigger_markers() {
+    let mut e = Emulator::new(20, 4, 100);
+    e.advance(b"a\r\nb\r\nc\r\n");
+    let s = snap(&mut e);
+    let mut d = Decorations::default();
+    let trig = Marker {
+        line: s.line_base + 1,
+        label: "t".into(),
+        color: "red".into(),
+        rule: "r".into(),
+    };
+    d.add_marker(1, trig.clone(), 10);
+    d.set_program_markers(1, vec![program(s.line_base + 3, "p")]);
+    let all = d.markers(1);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0], trig);
+    assert_eq!(
+        d.step_marker(1, View::of(&s), true),
+        Some(s.line_base + 3),
+        "program marks are visited"
+    );
+    // Replacing the program marks keeps the trigger marker; an empty list removes only them.
+    d.set_program_markers(1, vec![program(s.line_base, "q")]);
+    assert_eq!(d.markers(1).len(), 2);
+    d.set_program_markers(1, Vec::new());
+    assert_eq!(d.markers(1), vec![trig]);
+    assert_eq!(d.ticks(1, &s).len(), 1);
+}

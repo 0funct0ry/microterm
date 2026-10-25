@@ -81,6 +81,8 @@ pub struct Facts {
     /// `recording.enabled`: the "Start/Stop recording" row exists only while it is on.
     pub recording_enabled: bool,
     pub triggers_enabled: bool,
+    /// The text of the pane's `7718` badge: the menu names it as program-set.
+    pub program_badge: Option<String>,
 }
 
 impl Facts {
@@ -184,6 +186,7 @@ impl Facts {
             snippets_enabled: crate::snippets::gate::SnippetsGate::of_config(cfg).enabled,
             recording_enabled: crate::recording::gate::RecordingGate::of_config(cfg).enabled,
             triggers_enabled: crate::triggers::TriggerGate::of_config(cfg).enabled,
+            program_badge: term.and_then(|t| t.badge()).map(|b| b.text),
         })
     }
 

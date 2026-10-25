@@ -450,6 +450,17 @@ impl Render for AppWindow {
     }
 }
 
+/// The badge is hidden in panes narrower than this (SPEC §6.4.8).
+const BADGE_MIN_COLS: usize = 24;
+/// Opacity of the pill behind the badge text.
+const BADGE_PILL_ALPHA: f32 = 0.9;
+
+/// Font size of the badge: a little larger than the terminal font, and its pill never exceeds
+/// 22 % of the pane height.
+pub(crate) fn badge_font_size(cell_font: f32, pane_height: f32) -> f32 {
+    (cell_font * 1.3).min(pane_height * 0.22 / 2.0).max(1.0)
+}
+
 impl AppWindow {
     // ------------------------------------------------------------------ title bar
 
@@ -1014,6 +1025,15 @@ impl AppWindow {
                     .size_full(),
                 ),
         );
+        if let Some(badge) = session.term.badge() {
+            el = el.child(Self::badge_overlay(
+                &badge,
+                t,
+                &cell,
+                session.snapshot.cols,
+                session.snapshot.rows,
+            ));
+        }
         if is_focus {
             el = el.child(self.live_marks(t, hits, copy_cursor));
             if self.overlays.contains(OverlayKind::QuickSelect) {
@@ -1048,6 +1068,51 @@ impl AppWindow {
             );
         }
         el
+    }
+
+    /// The `7718` badge (SPEC §6.4.8): a pill in the bottom-right, a plain element
+    /// without hitbox or handlers so mouse events fall through to the terminal, and never part of
+    /// the grid, so selection, copy, `get-text` and exports cannot see it. Hidden below 24 columns.
+    fn badge_overlay(
+        badge: &mt_term::private_osc::Badge,
+        t: &Theme,
+        cell: &crate::terminal_view::CellMetrics,
+        cols: usize,
+        rows: usize,
+    ) -> gpui::Div {
+        use mt_term::private_osc::BadgeToken;
+        let hidden = cols < BADGE_MIN_COLS;
+        let color = match badge.token {
+            BadgeToken::Muted => t.text_muted,
+            BadgeToken::Accent => t.accent,
+            BadgeToken::Success => t.success,
+            BadgeToken::Warning => t.warning,
+            BadgeToken::Error => t.error,
+        };
+        let pane_h = rows as f32 * cell.height;
+        let size = badge_font_size(cell.font_size, pane_h);
+        let el = div().absolute().inset_0().flex().items_end().justify_end();
+        if hidden {
+            return el;
+        }
+        // A pill with a dot in the token color, like the recording indicator.
+        el.child(
+            div().pr(px(cell.width * 2.0)).pb(px(cell.height)).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(size * 0.55))
+                    .px(px(size * 0.9))
+                    .py(px(size * 0.4))
+                    .rounded_full()
+                    .bg(t.elevated_surface.opacity(BADGE_PILL_ALPHA))
+                    .text_size(px(size))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(t.text)
+                    .child(div().size(px(size * 0.75)).rounded_full().bg(color))
+                    .child(badge.text.clone()),
+            ),
+        )
     }
 
     /// The draggable line between the two halves of `split`: 1 px visible, 6 px to grab.
@@ -1978,4 +2043,17 @@ fn styled_line(
         return StyledText::new(SharedString::from(" "));
     }
     StyledText::new(text).with_runs(runs)
+}
+
+#[cfg(test)]
+mod badge_tests {
+    use super::badge_font_size;
+
+    #[test]
+    fn the_watermark_never_exceeds_a_fifth_of_the_pane() {
+        assert!((badge_font_size(14.0, 10_000.0) - 18.2).abs() < 0.01);
+        let s = badge_font_size(14.0, 100.0);
+        assert!(s * 2.0 <= 100.0 * 0.22 + 0.01);
+        assert!(badge_font_size(14.0, 0.0) >= 1.0);
+    }
 }

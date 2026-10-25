@@ -36,6 +36,16 @@ pub const PROGRESS_STALE_MS: u64 = 600_000;
 pub const PROGRESS_DONE_MS: u64 = 2000;
 /// Largest `eta_s`.
 pub const ETA_MAX: u32 = 359_999;
+/// `7718` text length in characters.
+pub const BADGE_TEXT_MAX: usize = 24;
+/// `7718` commands per pane and second.
+pub const BADGE_RATE_PER_SEC: u32 = 2;
+/// `7722` note length in characters.
+pub const MARK_NOTE_MAX: usize = 120;
+/// `7722` marks kept per pane (oldest evicted).
+pub const MARKS_MAX: usize = 500;
+/// `7722` commands per pane and second.
+pub const MARK_RATE_PER_SEC: u32 = 20;
 const WINDOW_MS: u64 = 1000;
 
 /// One member of the range, named as in the §6.4 table.
@@ -112,7 +122,13 @@ impl Feature {
     /// Protocol version of the sequence, `0` while it is not built yet.
     pub fn version(self) -> u8 {
         match self {
-            Feature::Menu | Feature::Caps | Feature::Status | Feature::Progress | Feature::Tab => 1,
+            Feature::Menu
+            | Feature::Caps
+            | Feature::Status
+            | Feature::Progress
+            | Feature::Tab
+            | Feature::Badge
+            | Feature::Mark => 1,
             _ => 0,
         }
     }
@@ -261,6 +277,96 @@ pub struct TabCmd {
     pub replay: bool,
 }
 
+/// The theme token of a `7718` badge: tokens only, never an arbitrary color.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BadgeToken {
+    #[default]
+    Muted,
+    Accent,
+    Success,
+    Warning,
+    Error,
+}
+
+impl BadgeToken {
+    pub fn name(self) -> &'static str {
+        match self {
+            BadgeToken::Muted => "muted",
+            BadgeToken::Accent => "accent",
+            BadgeToken::Success => "success",
+            BadgeToken::Warning => "warning",
+            BadgeToken::Error => "error",
+        }
+    }
+
+    fn parse(s: &str) -> Option<BadgeToken> {
+        Some(match s {
+            "muted" => BadgeToken::Muted,
+            "accent" => BadgeToken::Accent,
+            "success" => BadgeToken::Success,
+            "warning" => BadgeToken::Warning,
+            "error" => BadgeToken::Error,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Badge {
+    pub text: String,
+    pub token: BadgeToken,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BadgeCmd {
+    Set { badge: Badge, replay: bool },
+    Clear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkKind {
+    Info,
+    Warn,
+    Error,
+}
+
+impl MarkKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            MarkKind::Info => "info",
+            MarkKind::Warn => "warn",
+            MarkKind::Error => "error",
+        }
+    }
+
+    fn parse(s: &str) -> Option<MarkKind> {
+        match s {
+            "info" => Some(MarkKind::Info),
+            "warn" => Some(MarkKind::Warn),
+            "error" => Some(MarkKind::Error),
+            _ => None,
+        }
+    }
+}
+
+/// One `7722` mark, pinned to a stable line id (`trimmed + absolute row`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProgramMark {
+    pub line: u64,
+    pub kind: MarkKind,
+    pub note: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MarkCmd {
+    Add {
+        kind: MarkKind,
+        note: String,
+        replay: bool,
+    },
+    Clear,
+}
+
 /// One decoded 77xx sequence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrivCmd {
@@ -269,6 +375,8 @@ pub enum PrivCmd {
     Status(StatusCmd),
     Progress(ProgressCmd),
     Tab(TabCmd),
+    Badge(BadgeCmd),
+    Mark(MarkCmd),
     /// Allocated but not built yet, or an unallocated number: nothing to do once it is allowed.
     Reserved(Option<Feature>),
     /// Namespace mismatch, bad fields or an oversized string; `None` when the number is unknown.
@@ -283,6 +391,8 @@ impl PrivCmd {
             PrivCmd::Status(_) => Some(Feature::Status),
             PrivCmd::Progress(_) => Some(Feature::Progress),
             PrivCmd::Tab(_) => Some(Feature::Tab),
+            PrivCmd::Badge(_) => Some(Feature::Badge),
+            PrivCmd::Mark(_) => Some(Feature::Mark),
             PrivCmd::Reserved(f) | PrivCmd::Malformed(f) => *f,
         }
     }
@@ -352,6 +462,14 @@ pub fn parse(p: &[u8]) -> Option<PrivCmd> {
         },
         Feature::Tab => match parse_tab(verbs) {
             Some(c) => PrivCmd::Tab(c),
+            None => return bad(),
+        },
+        Feature::Badge => match parse_badge(verbs) {
+            Some(c) => PrivCmd::Badge(c),
+            None => return bad(),
+        },
+        Feature::Mark => match parse_mark(verbs) {
+            Some(c) => PrivCmd::Mark(c),
             None => return bad(),
         },
         _ => PrivCmd::Reserved(Some(f)),
@@ -545,6 +663,79 @@ fn parse_tab(verbs: &[u8]) -> Option<TabCmd> {
         value: value.to_string(),
         replay,
     })
+}
+
+fn parse_badge(verbs: &[u8]) -> Option<BadgeCmd> {
+    let s = std::str::from_utf8(verbs).ok()?;
+    let mut f = s.split(';');
+    match f.next()? {
+        "set" => {
+            let fields: Vec<&str> = f.collect();
+            let replay = match fields.len() {
+                1 | 2 => false,
+                3 if fields[2] == "replay" => true,
+                _ => return None,
+            };
+            let text = sanitize(&decode_text(fields[0])?);
+            if text.is_empty() || text.chars().count() > BADGE_TEXT_MAX {
+                return None;
+            }
+            let token = match fields.get(1) {
+                None => BadgeToken::Muted,
+                Some(t) => BadgeToken::parse(t)?,
+            };
+            Some(BadgeCmd::Set {
+                badge: Badge { text, token },
+                replay,
+            })
+        }
+        "clear" if f.next().is_none() => Some(BadgeCmd::Clear),
+        _ => None,
+    }
+}
+
+fn parse_mark(verbs: &[u8]) -> Option<MarkCmd> {
+    let s = std::str::from_utf8(verbs).ok()?;
+    let fields: Vec<&str> = s.split(';').collect();
+    match fields.as_slice() {
+        ["clear"] => Some(MarkCmd::Clear),
+        ["add", kind, note, rest @ ..] => {
+            let replay = match rest {
+                [] => false,
+                ["replay"] => true,
+                _ => return None,
+            };
+            let kind = MarkKind::parse(kind)?;
+            let note = sanitize(&decode_text(note)?);
+            if note.chars().count() > MARK_NOTE_MAX {
+                return None;
+            }
+            Some(MarkCmd::Add { kind, note, replay })
+        }
+        _ => None,
+    }
+}
+
+/// A one-second rate window shared by the `7718` and `7722` stores.
+#[derive(Clone, Copy, Debug, Default)]
+struct RateWindow {
+    start: u64,
+    count: u32,
+}
+
+impl RateWindow {
+    /// Whether one more command fits into the window ending `WINDOW_MS` after its first.
+    fn admit(&mut self, now_ms: u64, limit: u32) -> bool {
+        if now_ms.saturating_sub(self.start) >= WINDOW_MS || self.count == 0 {
+            self.start = now_ms;
+            self.count = 0;
+        }
+        if self.count >= limit {
+            return false;
+        }
+        self.count += 1;
+        true
+    }
 }
 
 /// State a feature keeps for one pane; cleared when the master switch or its gate goes off, on
@@ -800,6 +991,115 @@ impl StateOwner for DeclaredTab {
     }
 }
 
+/// The `7718` badge of one pane.
+#[derive(Clone, Debug, Default)]
+pub struct BadgeState {
+    badge: Option<Badge>,
+    rate: RateWindow,
+}
+
+impl BadgeState {
+    pub fn badge(&self) -> Option<&Badge> {
+        self.badge.as_ref()
+    }
+
+    /// `Err(())` when the rate window dropped the command, else whether anything changed.
+    fn apply(&mut self, cmd: BadgeCmd, now_ms: u64) -> Result<bool, ()> {
+        let replay = matches!(cmd, BadgeCmd::Set { replay: true, .. });
+        if !replay && !self.rate.admit(now_ms, BADGE_RATE_PER_SEC) {
+            return Err(());
+        }
+        let new = match cmd {
+            BadgeCmd::Set { badge, .. } => Some(badge),
+            BadgeCmd::Clear => None,
+        };
+        let changed = self.badge != new;
+        self.badge = new;
+        Ok(changed)
+    }
+
+    pub fn replay(&self, out: &mut String) {
+        if let Some(b) = &self.badge {
+            let _ = write!(
+                out,
+                "\x1b]7718;badge;set;{};{};replay\x07",
+                b64_encode(b.text.as_bytes()),
+                b.token.name()
+            );
+        }
+    }
+}
+
+impl StateOwner for BadgeState {
+    fn clear(&mut self) -> bool {
+        self.badge.take().is_some()
+    }
+}
+
+/// The `7722` marks of one pane, oldest first.
+#[derive(Clone, Debug, Default)]
+pub struct MarkStore {
+    marks: std::collections::VecDeque<ProgramMark>,
+    rate: RateWindow,
+}
+
+impl MarkStore {
+    pub fn marks(&self) -> Vec<ProgramMark> {
+        self.marks.iter().cloned().collect()
+    }
+
+    /// Drops marks whose line left the history (`line < base`).
+    pub fn prune(&mut self, base: u64) -> bool {
+        let n = self.marks.len();
+        self.marks.retain(|m| m.line >= base);
+        n != self.marks.len()
+    }
+
+    /// `line` is `None` on the alternate screen. `Err(())` means rate-dropped.
+    fn apply(&mut self, cmd: MarkCmd, line: Option<u64>, now_ms: u64) -> Result<Option<bool>, ()> {
+        let replay = matches!(cmd, MarkCmd::Add { replay: true, .. });
+        if !replay && !self.rate.admit(now_ms, MARK_RATE_PER_SEC) {
+            return Err(());
+        }
+        Ok(match cmd {
+            MarkCmd::Clear => Some(self.clear()),
+            MarkCmd::Add { kind, note, .. } => {
+                // Row-anchored state is primary screen only: `None` is malformed.
+                let Some(line) = line else {
+                    return Ok(None);
+                };
+                let new = ProgramMark { line, kind, note };
+                if let Some(cur) = self.marks.iter_mut().find(|m| m.line == line) {
+                    let changed = *cur != new;
+                    *cur = new;
+                    Some(changed)
+                } else {
+                    if self.marks.len() >= MARKS_MAX {
+                        self.marks.pop_front();
+                    }
+                    self.marks.push_back(new);
+                    Some(true)
+                }
+            }
+        })
+    }
+}
+
+impl MarkStore {
+    /// `StateOwner::clear` for callers that do not import the trait.
+    pub fn clear_all(&mut self) -> bool {
+        StateOwner::clear(self)
+    }
+}
+
+impl StateOwner for MarkStore {
+    fn clear(&mut self) -> bool {
+        let changed = !self.marks.is_empty();
+        self.marks.clear();
+        changed
+    }
+}
+
 /// Per-pane counters named in §6.4.2 item 7.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
@@ -830,6 +1130,11 @@ pub struct PrivateState {
     pub status: StatusSegments,
     pub progress: ProgressBars,
     pub tab: DeclaredTab,
+    pub badge: BadgeState,
+    pub marks: MarkStore,
+    /// Stable id of the cursor row, set by the caller before each `handle`; `None` on the
+    /// alternate screen.
+    pub cursor_line: Option<u64>,
 }
 
 impl PrivateState {
@@ -867,6 +1172,8 @@ impl PrivateState {
                 | PrivCmd::Status(StatusCmd::Set { replay: true, .. })
                 | PrivCmd::Progress(ProgressCmd::Set { replay: true, .. })
                 | PrivCmd::Tab(TabCmd { replay: true, .. })
+                | PrivCmd::Badge(BadgeCmd::Set { replay: true, .. })
+                | PrivCmd::Mark(MarkCmd::Add { replay: true, .. })
         );
         if !replay {
             if now_ms.saturating_sub(self.window_start) >= WINDOW_MS || self.window_count == 0 {
@@ -918,6 +1225,38 @@ impl PrivateState {
                     Outcome::Nothing
                 }
             }
+            PrivCmd::Badge(c) => match self.badge.apply(c, now_ms) {
+                Err(()) => {
+                    self.counters.dropped += 1;
+                    Outcome::Nothing
+                }
+                Ok(changed) => {
+                    self.counters.applied += 1;
+                    if changed {
+                        Outcome::Changed(Feature::Badge)
+                    } else {
+                        Outcome::Nothing
+                    }
+                }
+            },
+            PrivCmd::Mark(c) => match self.marks.apply(c, self.cursor_line, now_ms) {
+                Err(()) => {
+                    self.counters.dropped += 1;
+                    Outcome::Nothing
+                }
+                Ok(None) => {
+                    self.counters.malformed += 1;
+                    Outcome::Nothing
+                }
+                Ok(Some(changed)) => {
+                    self.counters.applied += 1;
+                    if changed {
+                        Outcome::Changed(Feature::Mark)
+                    } else {
+                        Outcome::Nothing
+                    }
+                }
+            },
             _ => Outcome::Nothing,
         }
     }
@@ -962,6 +1301,8 @@ impl PrivateState {
             Feature::Status => self.status.clear(),
             Feature::Progress => self.progress.clear(),
             Feature::Tab => self.tab.clear(),
+            Feature::Badge => self.badge.clear(),
+            Feature::Mark => self.marks.clear(),
             _ => false,
         }
     }
@@ -988,7 +1329,7 @@ pub fn caps_reply(gate: &PrivateGate, st_bel: bool) -> Vec<u8> {
         let _ = write!(features, "\"{}\":{v}", f.name());
     }
     let json = format!(
-        "{{\"v\":1,\"microterm\":\"{}\",\"features\":{{{features}}},\"limits\":{{\"status_slots\":{STATUS_SLOTS},\"status_text\":{STATUS_TEXT_MAX},\"status_tooltip\":{STATUS_TOOLTIP_MAX},\"progress_bars\":{PROGRESS_BARS},\"progress_label\":{PROGRESS_LABEL_MAX},\"max_osc\":{MAX_OSC}}},\"remote\":true}}",
+        "{{\"v\":1,\"microterm\":\"{}\",\"features\":{{{features}}},\"limits\":{{\"status_slots\":{STATUS_SLOTS},\"status_text\":{STATUS_TEXT_MAX},\"status_tooltip\":{STATUS_TOOLTIP_MAX},\"progress_bars\":{PROGRESS_BARS},\"progress_label\":{PROGRESS_LABEL_MAX},\"badge_text\":{BADGE_TEXT_MAX},\"marks\":{MARKS_MAX},\"mark_note\":{MARK_NOTE_MAX},\"max_osc\":{MAX_OSC}}},\"remote\":true}}",
         env!("CARGO_PKG_VERSION")
     );
     let mut out = format!("\x1b]7727;caps;{}", b64_encode(json.as_bytes())).into_bytes();
@@ -1230,9 +1571,204 @@ mod tests {
         assert_eq!(parse(b"7727;caps;query"), Some(PrivCmd::CapsQuery));
         assert_eq!(parse(b"7799;x;y"), Some(PrivCmd::Reserved(None)));
         assert_eq!(
-            parse(b"7718;badge;set;eA=="),
-            Some(PrivCmd::Reserved(Some(Feature::Badge)))
+            parse(b"7721;fold;x"),
+            Some(PrivCmd::Reserved(Some(Feature::Fold)))
         );
+        assert_eq!(
+            parse(b"7718;mark;clear"),
+            Some(PrivCmd::Malformed(Some(Feature::Badge)))
+        );
+    }
+
+    fn badge(text: &str, tok: &str) -> Vec<u8> {
+        format!("7718;badge;set;{};{tok}", b64_encode(text.as_bytes())).into_bytes()
+    }
+
+    fn mark(kind: &str, note: &str) -> Vec<u8> {
+        format!("7722;mark;add;{kind};{}", b64_encode(note.as_bytes())).into_bytes()
+    }
+
+    #[test]
+    fn badge_parsing_tables() {
+        let Some(PrivCmd::Badge(BadgeCmd::Set { badge: b, replay })) =
+            parse(&badge("PROD", "error"))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (b.text.as_str(), b.token, replay),
+            ("PROD", BadgeToken::Error, false)
+        );
+        let Some(PrivCmd::Badge(BadgeCmd::Set { badge: b, .. })) =
+            parse(format!("7718;badge;set;{}", b64_encode(b"dev")).as_bytes())
+        else {
+            panic!()
+        };
+        assert_eq!(b.token, BadgeToken::Muted);
+        assert_eq!(
+            parse(b"7718;badge;clear"),
+            Some(PrivCmd::Badge(BadgeCmd::Clear))
+        );
+        for bad in [
+            String::from_utf8(badge("PROD", "red")).unwrap(),
+            String::from_utf8(badge("PROD", "#ff0000")).unwrap(),
+            String::from_utf8(badge(&"x".repeat(25), "error")).unwrap(),
+            "7718;badge;set;!!".to_string(),
+            "7718;badge;set;".to_string(),
+            "7718;badge;set".to_string(),
+            "7718;badge;clear;x".to_string(),
+            "7718;badge;nope".to_string(),
+            format!("7718;badge;set;{};error;x", b64_encode(b"a")),
+        ] {
+            assert_eq!(
+                parse(bad.as_bytes()),
+                Some(PrivCmd::Malformed(Some(Feature::Badge))),
+                "{bad}"
+            );
+        }
+        // Control characters and line breaks are removed: one line only.
+        let Some(PrivCmd::Badge(BadgeCmd::Set { badge: b, .. })) =
+            parse(&badge("A\nB\x1b", "accent"))
+        else {
+            panic!()
+        };
+        assert_eq!(b.text, "A B");
+        assert!(parse(&badge(&"é".repeat(24), "muted")).is_some());
+    }
+
+    #[test]
+    fn mark_parsing_tables() {
+        let Some(PrivCmd::Mark(MarkCmd::Add { kind, note, replay })) = parse(&mark("warn", "slow"))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (kind, note.as_str(), replay),
+            (MarkKind::Warn, "slow", false)
+        );
+        assert_eq!(
+            parse(b"7722;mark;clear"),
+            Some(PrivCmd::Mark(MarkCmd::Clear))
+        );
+        assert!(parse(&mark("info", &"x".repeat(120))).is_some());
+        for bad in [
+            String::from_utf8(mark("fatal", "x")).unwrap(),
+            String::from_utf8(mark("info", &"x".repeat(121))).unwrap(),
+            "7722;mark;add;info".to_string(),
+            "7722;mark;add;info;!!".to_string(),
+            "7722;mark;clear;x".to_string(),
+            "7722;mark;del".to_string(),
+            "7722;badge;clear".to_string(),
+        ] {
+            assert_eq!(
+                parse(bad.as_bytes()),
+                Some(PrivCmd::Malformed(Some(Feature::Mark))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn badge_follows_gates_rate_and_replay() {
+        let mut st = PrivateState::default();
+        let mut menus = MenuRegistry::default();
+        let off = PrivateGate::default();
+        assert_eq!(
+            run(&mut st, &mut menus, &off, &badge("PROD", "error"), 0),
+            Outcome::Nothing
+        );
+        assert!(st.badge.badge().is_none());
+        let g = on();
+        assert_eq!(
+            run(&mut st, &mut menus, &g, &badge("PROD", "error"), 0),
+            Outcome::Changed(Feature::Badge)
+        );
+        assert_eq!(st.badge.badge().unwrap().text, "PROD");
+        let mut out = String::new();
+        st.badge.replay(&mut out);
+        assert!(out.starts_with("\x1b]7718;badge;set;") && out.ends_with(";error;replay\x07"));
+        // 2 per second.
+        run(&mut st, &mut menus, &g, &badge("A", "muted"), 10);
+        let d = st.counters.dropped;
+        assert_eq!(
+            run(&mut st, &mut menus, &g, &badge("B", "muted"), 20),
+            Outcome::Nothing
+        );
+        assert_eq!(st.counters.dropped, d + 1);
+        assert_eq!(st.badge.badge().unwrap().text, "A");
+        // Replay is exempt from the windows.
+        let r = format!("7718;badge;set;{};accent;replay", b64_encode(b"B"));
+        assert_eq!(
+            run(&mut st, &mut menus, &g, r.as_bytes(), 30),
+            Outcome::Changed(Feature::Badge)
+        );
+        // A feature gate clears and swallows.
+        let mut no = g;
+        no.features.set(Feature::Badge, false);
+        assert_eq!(st.gate_changed(&g, &no, &mut menus), vec![Feature::Badge]);
+        assert!(st.badge.badge().is_none());
+        assert_eq!(
+            run(&mut st, &mut menus, &no, &badge("X", "muted"), 5000),
+            Outcome::Nothing
+        );
+        assert_eq!(st.counters.swallowed_disabled, 1);
+    }
+
+    #[test]
+    fn marks_anchor_dedupe_evict_and_prune() {
+        let mut st = PrivateState::default();
+        let mut menus = MenuRegistry::default();
+        let g = PrivateGate { rate: 100, ..on() };
+        st.cursor_line = Some(7);
+        assert_eq!(
+            run(&mut st, &mut menus, &g, &mark("error", "a"), 0),
+            Outcome::Changed(Feature::Mark)
+        );
+        // Same row: replaced.
+        run(&mut st, &mut menus, &g, &mark("warn", "b"), 1);
+        let m = st.marks.marks();
+        assert_eq!(m.len(), 1);
+        assert_eq!(
+            (m[0].line, m[0].kind, m[0].note.as_str()),
+            (7, MarkKind::Warn, "b")
+        );
+        // Alternate screen: malformed.
+        st.cursor_line = None;
+        assert_eq!(
+            run(&mut st, &mut menus, &g, &mark("info", "c"), 2),
+            Outcome::Nothing
+        );
+        assert_eq!(st.counters.malformed, 1);
+        assert_eq!(st.marks.marks().len(), 1);
+        // 500 cap, oldest evicted. Replay marks bypass the 20/s window.
+        for i in 0..520u64 {
+            st.cursor_line = Some(1000 + i);
+            let r = format!("7722;mark;add;info;{};replay", b64_encode(b"n"));
+            run(&mut st, &mut menus, &g, r.as_bytes(), 3);
+        }
+        let m = st.marks.marks();
+        assert_eq!(m.len(), MARKS_MAX);
+        assert_eq!(m[0].line, 1020);
+        assert!(st.marks.prune(1500));
+        assert_eq!(st.marks.marks()[0].line, 1500);
+        assert_eq!(
+            run(&mut st, &mut menus, &g, b"7722;mark;clear", 4),
+            Outcome::Changed(Feature::Mark)
+        );
+        assert!(st.marks.marks().is_empty());
+    }
+
+    #[test]
+    fn marks_are_rate_limited_to_twenty_per_second() {
+        let mut st = PrivateState::default();
+        let mut menus = MenuRegistry::default();
+        let g = PrivateGate { rate: 100, ..on() };
+        for i in 0..30u64 {
+            st.cursor_line = Some(i);
+            run(&mut st, &mut menus, &g, &mark("info", "x"), 5);
+        }
+        assert_eq!(st.marks.marks().len(), 20);
+        assert_eq!(st.counters.dropped, 10);
     }
 
     #[test]
@@ -1337,7 +1873,11 @@ mod tests {
             json.contains("\"status\":0") && json.contains("\"caps\":1"),
             "{json}"
         );
-        assert!(json.contains("\"badge\":0") && json.contains("\"progress\":1"));
+        assert!(
+            json.contains("\"fold\":0")
+                && json.contains("\"badge\":1")
+                && json.contains("\"progress\":1")
+        );
     }
 
     #[test]

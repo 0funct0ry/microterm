@@ -492,6 +492,27 @@ impl CommandTracker {
         self.private.status.replay(out);
         self.private.progress.replay(out);
         self.private.tab.replay(out);
+        self.private.badge.replay(out);
+    }
+
+    /// The `7718` badge of this pane.
+    pub fn badge(&self) -> Option<crate::private_osc::Badge> {
+        self.private.badge.badge().cloned()
+    }
+
+    /// The `7722` marks of this pane, oldest first.
+    pub fn program_marks(&self) -> Vec<crate::private_osc::ProgramMark> {
+        self.private.marks.marks()
+    }
+
+    /// Drops this pane's `7722` marks (the `ClearMarkers` action); returns whether any existed.
+    pub fn clear_program_marks(&mut self) -> bool {
+        self.private.marks.clear_all()
+    }
+
+    /// Stable id of the oldest line still in the grid; marks below it are gone.
+    pub fn line_id_base(&self) -> u64 {
+        self.trimmed
     }
 
     /// The `7720` bars of this pane, in id order.
@@ -657,6 +678,7 @@ impl CommandTracker {
             }
         }
         self.observed = h;
+        self.private.marks.prune(self.trimmed);
         self.evict();
     }
 
@@ -882,6 +904,26 @@ impl CommandTracker {
                 }
             }
         }
+        for m in self.private.marks.marks() {
+            if let Some(line) = m.line.checked_sub(self.trimmed).map(|l| l as usize) {
+                if line >= first_line {
+                    v.push(ReplayMark {
+                        mark: Mark::Private {
+                            cmd: crate::private_osc::PrivCmd::Mark(
+                                crate::private_osc::MarkCmd::Add {
+                                    kind: m.kind,
+                                    note: m.note,
+                                    replay: true,
+                                },
+                            ),
+                            st_bel: true,
+                        },
+                        line,
+                        col: 0,
+                    });
+                }
+            }
+        }
         // Stable: marks at the same cell (a `D` and the next `A`) keep their order.
         v.sort_by_key(|m| (m.line, m.col));
         v
@@ -950,6 +992,9 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
                     shared.notify_cleared(tracker.clear_private());
                 }
                 Mark::ClearHistory => {
+                    if tracker.private.marks.clear_all() {
+                        shared.notify_cleared(vec![crate::private_osc::Feature::Mark]);
+                    }
                     if tracker.menus.reset() {
                         shared.notify(crate::TermEvent::MenuItemsChanged);
                     }
@@ -962,6 +1007,11 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
                         .unwrap_or_else(|e| e.into_inner())
                         .cfg
                         .private;
+                    tracker.private.cursor_line = if term.mode().contains(TermMode::ALT_SCREEN) {
+                        None
+                    } else {
+                        Some(tracker.anchor(term).id)
+                    };
                     let out = tracker.private.handle(
                         &gate,
                         &mut tracker.menus,
@@ -1435,6 +1485,71 @@ mod tests {
         r.advance(bar.as_bytes());
         r.advance(b"\x1bc");
         assert!(r.progress_bars().is_empty() && r.declared_tab_color().is_none());
+    }
+
+    #[test]
+    fn badge_and_marks_follow_the_lifecycle_anchor_and_replay() {
+        use crate::menu_reg::b64_encode;
+        let m = |kind: &str, note: &str| {
+            format!(
+                "\x1b]7722;mark;add;{kind};{}\x07",
+                b64_encode(note.as_bytes())
+            )
+        };
+        let badge = format!("\x1b]7718;badge;set;{};error\x07", b64_encode(b"PROD"));
+        let mut off = gated(40, 4, false);
+        off.advance(badge.as_bytes());
+        off.advance(m("error", "x").as_bytes());
+        assert!(off.badge().is_none() && off.program_marks().is_empty());
+
+        let mut e = gated(40, 4, true);
+        e.advance(badge.as_bytes());
+        e.advance(b"one\r\ntwo\r\n");
+        e.advance(m("error", "bad line").as_bytes());
+        e.advance(b"three\r\nfour\r\nfive\r\n"); // scrolls the marked row into history
+        e.advance(m("warn", "later").as_bytes());
+        assert_eq!(e.badge().unwrap().text, "PROD");
+        let marks = e.program_marks();
+        assert_eq!(marks.len(), 2);
+        assert_eq!((marks[0].line, marks[0].note.as_str()), (2, "bad line"));
+        let evs = e.drain_events();
+        assert!(evs.iter().any(|ev| matches!(
+            ev,
+            crate::TermEvent::PrivateOscChanged(crate::private_osc::Feature::Mark)
+        )));
+
+        // Replay keeps the badge and puts each mark back on its row.
+        let mut b = gated(40, 4, true);
+        b.advance(&e.replay_bytes(100));
+        assert_eq!(b.badge(), e.badge());
+        assert_eq!(b.program_marks(), e.program_marks());
+
+        // The alternate screen takes no marks.
+        e.advance(b"\x1b[?1049h");
+        let n = e.program_marks().len();
+        e.advance(m("info", "alt").as_bytes());
+        assert_eq!(e.program_marks().len(), n);
+        e.advance(b"\x1b[?1049l");
+
+        // ED 3 clears marks (not the badge); RIS clears both.
+        e.advance(b"\x1b[3J");
+        assert!(e.program_marks().is_empty() && e.badge().is_some());
+        e.advance(m("info", "again").as_bytes());
+        e.advance(b"\x1bc");
+        assert!(e.program_marks().is_empty() && e.badge().is_none());
+        assert_eq!(row0(&e), "", "nothing was printed");
+    }
+
+    #[test]
+    fn marks_leave_with_history_trimming() {
+        use crate::menu_reg::b64_encode;
+        let mut e = gated(20, 3, true);
+        e.advance(format!("\x1b]7722;mark;add;info;{}\x07", b64_encode(b"n")).as_bytes());
+        assert_eq!(e.program_marks().len(), 1);
+        for i in 0..400 {
+            e.advance(format!("l{i}\r\n").as_bytes());
+        }
+        assert!(e.program_marks().is_empty(), "history cap is 100");
     }
 
     #[test]
