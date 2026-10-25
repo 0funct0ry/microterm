@@ -115,6 +115,13 @@ delete a rule: rules that react to terminal output are written by you in the pan
 `triggers.toml`. `ctl trigger enable|disable|pause|resume` change only the running session, and
 `ctl events` shows `pane.bell` and `trigger.fired` so you can watch what rules do.
 
+### The private OSC master switch is not available to agents
+
+There is no MCP tool for the [private OSC](/docs/private-osc/) range, and `ctl private-osc` has
+`status` and `disable` but no `enable`. Turning the range on is done by you, in `microterm.toml`
+or with the **Toggle private OSC** action; a program in a pane, a remote host or an agent cannot
+do it. `ctl events` reports `private_osc.changed` (the feature name, never its content).
+
 ## Security: read this before enabling it
 
 `ctl`, the socket and the MCP server are, by design, remote control of every pane. The only

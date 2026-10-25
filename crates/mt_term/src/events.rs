@@ -80,6 +80,8 @@ pub enum TermEvent {
     Notify(String),
     /// The pane's shell-registered menu items changed (`OSC 7717`, SPEC §10.9.7).
     MenuItemsChanged,
+    /// Private-OSC state of a feature other than `menu` changed (`OSC 7725` …, SPEC §6.4).
+    PrivateOscChanged(crate::private_osc::Feature),
 }
 
 impl std::fmt::Debug for TermEvent {
@@ -98,6 +100,7 @@ impl std::fmt::Debug for TermEvent {
             Self::Progress { state, value } => write!(f, "Progress({state:?}, {value:?})"),
             Self::Notify(t) => write!(f, "Notify({t:?})"),
             Self::MenuItemsChanged => write!(f, "MenuItemsChanged"),
+            Self::PrivateOscChanged(x) => write!(f, "PrivateOscChanged({})", x.name()),
         }
     }
 }
@@ -219,6 +222,16 @@ impl Shared {
     /// Queues an event for the UI, as the reader does.
     pub(crate) fn notify(&self, ev: TermEvent) {
         self.push(ev);
+    }
+
+    /// Reports private-OSC state changes: `menu` keeps its own event.
+    pub(crate) fn notify_cleared(&self, features: Vec<crate::private_osc::Feature>) {
+        for f in features {
+            self.notify(match f {
+                crate::private_osc::Feature::Menu => TermEvent::MenuItemsChanged,
+                f => TermEvent::PrivateOscChanged(f),
+            });
+        }
     }
 
     pub(crate) fn write_pty(&self, bytes: Vec<u8>) {

@@ -2271,7 +2271,8 @@ fn menu_icons_lists_names_without_an_instance() {
 
 #[test]
 fn shell_registered_items_are_listed_run_and_limited_headlessly() {
-    let mt = Instance::start();
+    // 7717 is part of the private OSC range: inert until the master switch is on (§6.4.2).
+    let mt = Instance::start_with(Some("[private_osc]\nenabled = true\n"));
     let pane = mt.spawn_sh(r#"printf '\033]7717;menu;add;t;UnVuIHRlc3Rz;send;ZWNobyBtZW51LSQoKDYqNykp\007\033]7717;menu;add;sp;U3Bhd24gaXQ=;spawn;WyJzaCJd\007\033]7717;menu;add;evil;RXZpbA==;ctl;cGFuZSBjbG9zZSAtLXBhbmUgMSAtLWZvcmNl\007'; echo ready; exec sh"#, &["--title", "reg"]);
     mt.wait_text(&pane, "ready");
     mt.until("the registrations", |mt| {
@@ -3222,4 +3223,52 @@ fn there_is_no_way_to_create_edit_or_delete_a_rule_over_ctl() {
             "{err}"
         );
     }
+}
+
+const STATUS_SET: &str =
+    r#"printf '\033]7725;status;set;git;bWFpbg==;ok\007'; echo ready; exec sh"#;
+
+fn private_osc_pane<'a>(status: &'a Value, pane: &str) -> &'a Value {
+    status["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pane"].as_u64().map(|n| n.to_string()).as_deref() == Some(pane))
+        .expect("pane row")
+}
+
+#[test]
+fn private_osc_is_inert_by_default_and_counted() {
+    let mt = Instance::start();
+    let pane = mt.spawn_sh(STATUS_SET, &[]);
+    mt.wait_text(&pane, "ready");
+    let s = mt.json(&["private-osc", "status"]);
+    assert_eq!(s["enabled"], false);
+    let row = private_osc_pane(&s, &pane);
+    assert_eq!(
+        (row["segments"].as_u64(), row["swallowed_off"].as_u64()),
+        (Some(0), Some(1))
+    );
+    assert!(
+        !mt.text(&pane, &[]).contains("bWFpbg"),
+        "nothing is printed"
+    );
+}
+
+#[test]
+fn private_osc_works_when_enabled_and_disable_is_one_way() {
+    let mt = Instance::start_with(Some("[private_osc]\nenabled = true\n"));
+    let pane = mt.spawn_sh(STATUS_SET, &[]);
+    mt.wait_text(&pane, "ready");
+    mt.until("the segment", |mt| {
+        private_osc_pane(&mt.json(&["private-osc", "status"]), &pane)["segments"] == 1
+    });
+    let s = mt.json(&["private-osc", "disable"]);
+    assert_eq!(s["enabled"], false);
+    assert_eq!(s["session_override"], true);
+    assert_eq!(private_osc_pane(&s, &pane)["segments"], 0);
+    // Nothing in ctl turns it back on: there is no verb for it.
+    let (code, _) = mt.ctl_err(&["private-osc", "enable"]);
+    assert_ne!(code, 0);
+    assert_eq!(mt.json(&["private-osc", "status"])["enabled"], false);
 }

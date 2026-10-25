@@ -186,6 +186,23 @@ panel_width = 360                # px, 280-600
 panel_open_on_start = false
 confirm_delete = true
 
+[private_osc]                    # private OSC range 7700-7799 (SPEC §6.4)
+enabled = false                  # ABSOLUTE master switch for 7700-7799 (incl. 7717): false swallows and ignores every sequence and clears all private-OSC state; only this file or the TogglePrivateOsc action turns it on
+fold_commands = false            # use OSC 133 command output as the default fold unit (OSC 7721)
+rate_per_second = 20             # stateful sequences per pane per second (2-100)
+# [private_osc.features]         # per-sequence switches, all true once enabled = true
+# menu = true                    # 7717
+# caps = true                    # 7727
+# status = true                  # 7725
+# progress = true                # 7720
+# tab = true                     # 7719
+# badge = true                   # 7718
+# mark = true                    # 7722
+# key = true                     # 7723
+# palette = true                 # 7724
+# fold = true                    # 7721
+# link = true                    # 7726
+
 [recording.export]               # defaults for the export dialog and `ctl recording export`
 default_format = "gif"           # "gif" | "vhs" | "cast" | any registered exporter id
 output_dir = ""                  # "" = ask (save panel) in the GUI, current directory in ctl

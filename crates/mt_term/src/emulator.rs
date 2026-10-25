@@ -408,8 +408,22 @@ impl Emulator {
     }
 
     /// Applies the `[terminal]` settings.
-    pub fn set_vt_config(&self, cfg: crate::vt::VtConfig) {
-        self.shared.vt.lock().unwrap().cfg = cfg;
+    pub fn set_vt_config(&mut self, cfg: crate::vt::VtConfig) {
+        let old = std::mem::replace(&mut self.shared.vt.lock().unwrap().cfg, cfg).private;
+        if old != cfg.private {
+            let cleared = self.tracker.private_gate_changed(&old, &cfg.private);
+            self.shared.notify_cleared(cleared);
+        }
+    }
+
+    /// The `7725` status segments the program set.
+    pub fn status_segments(&self) -> Vec<crate::private_osc::Segment> {
+        self.tracker.status_segments()
+    }
+
+    /// Private-OSC counters.
+    pub fn private_counters(&self) -> crate::private_osc::Counters {
+        self.tracker.private_counters()
     }
 
     /// A byte stream that, fed to a fresh emulator of the same size, reproduces this one's

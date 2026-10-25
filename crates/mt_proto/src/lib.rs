@@ -860,6 +860,10 @@ pub enum Request {
     TriggerPause,
     TriggerResume,
     TriggerTest(TriggerTestParams),
+    /// State of the private OSC master switch, the gates and the per-pane counters (SPEC §6.4.2).
+    PrivateOscStatus,
+    /// Turns the master switch off for this session. There is deliberately no counterpart.
+    PrivateOscDisable,
 }
 
 /// Every method name, in a stable order; a test pins this list.
@@ -928,6 +932,8 @@ pub const METHODS: &[&str] = &[
     "trigger.pause",
     "trigger.resume",
     "trigger.test",
+    "private_osc.status",
+    "private_osc.disable",
 ];
 
 impl Request {
@@ -990,6 +996,8 @@ impl Request {
             Request::TriggerPause => "trigger.pause",
             Request::TriggerResume => "trigger.resume",
             Request::TriggerTest(_) => "trigger.test",
+            Request::PrivateOscStatus => "private_osc.status",
+            Request::PrivateOscDisable => "private_osc.disable",
             Request::SnippetList(_) => "snippet.list",
             Request::SnippetGet(_) => "snippet.get",
             Request::SnippetExpand(_) => "snippet.expand",
@@ -1019,6 +1027,8 @@ impl Request {
             | Request::TriggerList
             | Request::TriggerPause
             | Request::TriggerResume
+            | Request::PrivateOscStatus
+            | Request::PrivateOscDisable
             | Request::MenuBarList => json!({}),
             Request::TriggerGet(p) | Request::TriggerEnable(p) | Request::TriggerDisable(p) => {
                 to(p)
@@ -1177,6 +1187,8 @@ impl Request {
             "trigger.pause" => Request::TriggerPause,
             "trigger.resume" => Request::TriggerResume,
             "trigger.test" => Request::TriggerTest(p(method, params)?),
+            "private_osc.status" => Request::PrivateOscStatus,
+            "private_osc.disable" => Request::PrivateOscDisable,
             "snippet.list" => Request::SnippetList(p(method, params)?),
             "snippet.get" => Request::SnippetGet(p(method, params)?),
             "snippet.expand" => Request::SnippetExpand(p(method, params)?),
@@ -1592,6 +1604,11 @@ pub enum Event {
     MenuItemsChanged {
         pane: u64,
     },
+    /// A pane's private-OSC state changed (SPEC §6.4.3); `feature` is the sequence name.
+    PrivateOscChanged {
+        pane: u64,
+        feature: String,
+    },
     /// First line of a `subscribe` with `snapshot`: the whole tree (the `mux.list` result).
     Snapshot {
         tree: Value,
@@ -1637,6 +1654,7 @@ impl Event {
             Event::DomainStateChanged { .. } => "domain.state_changed",
             Event::MenuInvoked { .. } => "menu.invoked",
             Event::MenuItemsChanged { .. } => "menu.items_changed",
+            Event::PrivateOscChanged { .. } => "private_osc.changed",
             Event::Snapshot { .. } => "snapshot",
         }
     }
@@ -1656,7 +1674,8 @@ impl Event {
             | Event::Bell { pane }
             | Event::TriggerFired { pane, .. }
             | Event::MenuInvoked { pane, .. }
-            | Event::MenuItemsChanged { pane } => Subject::Pane(*pane),
+            | Event::MenuItemsChanged { pane }
+            | Event::PrivateOscChanged { pane, .. } => Subject::Pane(*pane),
             Event::TabAdded { tab, .. }
             | Event::TabRemoved { tab, .. }
             | Event::TabMoved { tab, .. }
@@ -2108,6 +2127,8 @@ mod tests {
                 id: "t_a".into(),
                 target: Target::pane(3),
             }),
+            Request::PrivateOscStatus,
+            Request::PrivateOscDisable,
         ];
         let methods: Vec<&str> = reqs.iter().map(Request::method).collect();
         assert_eq!(methods, METHODS, "METHODS lists every request in order");
@@ -2152,8 +2173,16 @@ mod tests {
              recording.list recording.get recording.start recording.stop recording.marker \
              recording.rename recording.remove recording.export recording.formats \
              trigger.list trigger.get trigger.enable trigger.disable trigger.pause trigger.resume \
-             trigger.test"
+             trigger.test private_osc.status private_osc.disable"
         );
+        // The master switch is turned on by the config or the action, never over IPC (§6.4.2).
+        for banned in [
+            "private_osc.enable",
+            "private_osc.set",
+            "private_osc.toggle",
+        ] {
+            assert!(!METHODS.contains(&banned), "{banned}");
+        }
         // Rules are created, edited and deleted in the panel or the file, never over IPC (T6).
         for banned in [
             "trigger.new",

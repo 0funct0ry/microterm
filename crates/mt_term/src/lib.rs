@@ -18,6 +18,7 @@ mod lines;
 mod linetap;
 pub mod menu_reg;
 mod mouse;
+pub mod private_osc;
 mod process;
 mod replay;
 mod selection;

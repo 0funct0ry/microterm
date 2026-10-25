@@ -129,6 +129,8 @@ the resource is a usage error (exit 1). Acting verbs need exactly one match (0 �
 - `microterm ctl trigger pause` — Stop every rule from firing for this session (the panel's "Pause all")
 - `microterm ctl trigger resume` — Let rules fire again
 - `microterm ctl trigger test` — Dry run: what the rule would do on the last 200 lines of a pane. Runs nothing
+- `microterm ctl private-osc status` — Show the master switch, the per-feature switches and the per-pane counters
+- `microterm ctl private-osc disable` — Turn the master switch off for this session: all private-OSC state of every pane is cleared and is not restored when the switch is turned on again
 
 Run `microterm ctl <resource> <verb> --help` for flags.
 

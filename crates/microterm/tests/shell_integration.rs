@@ -148,6 +148,14 @@ fn fish_snippet_produces_exact_command_records() {
 /// `mt-menu add|clear` in a real shell reach the pane's registry with the exact text.
 fn menu_registration(t: &Terminal) {
     use mt_term::menu_reg::RegKind;
+    // 7717 is part of the private OSC range: inert until the master switch is on.
+    t.set_vt_config(mt_term::VtConfig {
+        private: mt_term::private_osc::PrivateGate {
+            enabled: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
     until("the first prompt", || t.has_marks());
     t.write(b"mt-menu add \"Run tests\" -- make test 'a b'\r".to_vec());
     until("the registration", || !t.menu_items().0.is_empty());

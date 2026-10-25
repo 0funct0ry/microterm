@@ -1664,6 +1664,18 @@ pub fn handle_call(cx: &mut App, request: Request) -> Reply {
         | Request::SnippetRemove(_)) => {
             crate::snippets::ipc::handle(&mut crate::snippets::ipc::GuiHost(cx), r)
         }
+        Request::PrivateOscStatus => {
+            let cfg = cx.global::<Settings>().config.clone();
+            let terms = pane_terminals(cx);
+            Ok(crate::private_osc::status_json(&cfg, &terms))
+        }
+        Request::PrivateOscDisable => {
+            crate::private_osc::disable();
+            crate::private_osc::push_gate(cx);
+            let cfg = cx.global::<Settings>().config.clone();
+            let terms = pane_terminals(cx);
+            Ok(crate::private_osc::status_json(&cfg, &terms))
+        }
         Request::MenuShow(p) => {
             let rows = rows(cx);
             let cfg = cx.global::<Settings>().config.clone();

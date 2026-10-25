@@ -78,6 +78,8 @@ pub struct VtConfig {
     pub report: ColorReport,
     pub osc_notifications: bool,
     pub allow_shift_capture: bool,
+    /// The private OSC gate (`[private_osc]`, SPEC §6.4.2). Closed by default.
+    pub private: crate::private_osc::PrivateGate,
 }
 
 impl Default for VtConfig {
@@ -86,6 +88,7 @@ impl Default for VtConfig {
             report: ColorReport::Bit16,
             osc_notifications: true,
             allow_shift_capture: true,
+            private: crate::private_osc::PrivateGate::default(),
         }
     }
 }

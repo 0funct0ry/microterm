@@ -249,6 +249,12 @@ pub enum MuxEvent {
     MenuItemsChanged {
         pane: Id,
     },
+    /// A pane's private-OSC state changed (SPEC §6.4.3); `feature` is the sequence name. The
+    /// content is not carried.
+    PrivateOscChanged {
+        pane: Id,
+        feature: String,
+    },
     TabAdded {
         window: Id,
         tab: Id,
@@ -1181,6 +1187,16 @@ impl Mux {
     pub fn notify_menu_items_changed(&mut self, pane: Id) {
         if self.pane(pane).is_some() {
             self.emit(MuxEvent::MenuItemsChanged { pane });
+        }
+    }
+
+    /// A pane's private-OSC state of `feature` (a sequence name) changed.
+    pub fn notify_private_osc_changed(&mut self, pane: Id, feature: &str) {
+        if self.pane(pane).is_some() {
+            self.emit(MuxEvent::PrivateOscChanged {
+                pane,
+                feature: feature.to_string(),
+            });
         }
     }
 

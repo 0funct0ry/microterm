@@ -49,8 +49,12 @@ pub enum Mark {
     Reset,
     /// `CSI 3 J`: the program cleared the scrollback (what `clear` sends).
     ClearHistory,
-    /// `OSC 7717;menu;…`: a shell-registered menu item (see `menu_reg.rs`).
-    MenuReg(crate::menu_reg::RegCmd),
+    /// A sequence of the private OSC block `7700–7799` (see `private_osc.rs`); `st_bel` is
+    /// whether it ended in BEL.
+    Private {
+        cmd: crate::private_osc::PrivCmd,
+        st_bel: bool,
+    },
     /// A sequence the engine does not model (colours, OSC 9, OSC 22, XTSHIFTESCAPE): see `vt.rs`.
     Vt(crate::vt::VtSeq),
 }
@@ -185,7 +189,16 @@ impl OscSniffer {
                     0x1b => self.state = SniffState::OscEsc,
                     0x18 | 0x1a => self.state = SniffState::Ground,
                     _ => {
-                        if self.buf.len() < crate::vt::MAX_OSC_PAYLOAD {
+                        // The private block is capped at 8 KiB; the rest is discarded up to ST
+                        // without being buffered.
+                        let cap = if self.buf.len() >= crate::private_osc::MAX_OSC
+                            && crate::private_osc::is_private(&self.buf)
+                        {
+                            crate::private_osc::MAX_OSC
+                        } else {
+                            crate::vt::MAX_OSC_PAYLOAD
+                        };
+                        if self.buf.len() < cap {
                             self.buf.push(b);
                         } else {
                             self.overflow = true;
@@ -215,14 +228,23 @@ impl OscSniffer {
             if let Some(m) = parse_payload(&self.buf, st) {
                 out.push((end, m));
             }
+        } else if crate::private_osc::is_private(&self.buf) {
+            let f = crate::private_osc::feature_of_payload(&self.buf);
+            out.push((
+                end,
+                Mark::Private {
+                    cmd: crate::private_osc::PrivCmd::Malformed(f),
+                    st_bel: !st,
+                },
+            ));
         }
         self.buf.clear();
     }
 }
 
 fn parse_payload(p: &[u8], st: bool) -> Option<Mark> {
-    if let Some(rest) = p.strip_prefix(b"7717;") {
-        return crate::menu_reg::parse(rest).map(Mark::MenuReg);
+    if let Some(cmd) = crate::private_osc::parse(p) {
+        return Some(Mark::Private { cmd, st_bel: !st });
     }
     // Marks carry short payloads; anything longer is not one of ours.
     if p.len() > MAX_PAYLOAD && (p.starts_with(b"133;") || p.starts_with(b"7;")) {
@@ -394,6 +416,7 @@ pub struct CommandTracker {
     cols: usize,
     cwd: Option<String>,
     menus: crate::menu_reg::MenuRegistry,
+    private: crate::private_osc::PrivateState,
     seen: bool,
     next_seq: u64,
     finished_total: u64,
@@ -415,6 +438,7 @@ impl CommandTracker {
             cols,
             cwd: None,
             menus: Default::default(),
+            private: Default::default(),
             seen: false,
             next_seq: 1,
             finished_total: 0,
@@ -450,9 +474,32 @@ impl CommandTracker {
         &self.menus
     }
 
-    /// Drops the registered menu items (the process exited). Returns whether any existed.
-    pub fn clear_menus(&mut self) -> bool {
-        self.menus.reset()
+    /// Drops all private-OSC state (the process exited, RIS). Returns the features that had any.
+    pub fn clear_private(&mut self) -> Vec<crate::private_osc::Feature> {
+        self.private.clear_all(&mut self.menus)
+    }
+
+    /// Applies a new gate: clears what it no longer allows. Returns the features that changed.
+    pub fn private_gate_changed(
+        &mut self,
+        old: &crate::private_osc::PrivateGate,
+        new: &crate::private_osc::PrivateGate,
+    ) -> Vec<crate::private_osc::Feature> {
+        self.private.gate_changed(old, new, &mut self.menus)
+    }
+
+    pub(crate) fn private_status_replay(&self, out: &mut String) {
+        self.private.status.replay(out);
+    }
+
+    /// The `7725` segments of this pane, in slot-name order.
+    pub fn status_segments(&self) -> Vec<crate::private_osc::Segment> {
+        self.private.status.segments()
+    }
+
+    /// Private-OSC counters of this pane.
+    pub fn private_counters(&self) -> crate::private_osc::Counters {
+        self.private.counters
     }
 
     /// The last OSC 7 working directory.
@@ -630,7 +677,10 @@ impl CommandTracker {
             self.cwd = Some(p);
             return None;
         }
-        if matches!(mark, Mark::Vt(_) | Mark::MenuReg(_) | Mark::ClearHistory) {
+        if matches!(
+            mark,
+            Mark::Vt(_) | Mark::Private { .. } | Mark::ClearHistory
+        ) {
             return None;
         }
         if mark == Mark::Reset {
@@ -645,7 +695,11 @@ impl CommandTracker {
         let restored = matches!(mark, Mark::Restored(_));
         let at = self.anchor(term);
         match mark {
-            Mark::Cwd(_) | Mark::Reset | Mark::Vt(_) | Mark::MenuReg(_) | Mark::ClearHistory => {}
+            Mark::Cwd(_)
+            | Mark::Reset
+            | Mark::Vt(_)
+            | Mark::Private { .. }
+            | Mark::ClearHistory => {}
             Mark::PromptStart { secondary: true } => {}
             Mark::PromptStart { .. } => {
                 if self.prompts.back() != Some(&at.id) {
@@ -876,9 +930,7 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
                 Mark::Vt(seq) => crate::vt::apply(term, shared, seq.clone()),
                 Mark::Reset => {
                     crate::vt::reset(term, shared);
-                    if tracker.menus.reset() {
-                        shared.notify(crate::TermEvent::MenuItemsChanged);
-                    }
+                    shared.notify_cleared(tracker.clear_private());
                 }
                 Mark::ClearHistory => {
                     if tracker.menus.reset() {
@@ -886,9 +938,24 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
                     }
                 }
                 Mark::OutputStart => shared.notify(crate::TermEvent::CommandStart),
-                Mark::MenuReg(cmd) => {
-                    if tracker.menus.apply(cmd.clone(), now_ms()) {
-                        shared.notify(crate::TermEvent::MenuItemsChanged);
+                Mark::Private { cmd, st_bel } => {
+                    let gate = shared
+                        .vt
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .cfg
+                        .private;
+                    let out = tracker.private.handle(
+                        &gate,
+                        &mut tracker.menus,
+                        cmd.clone(),
+                        *st_bel,
+                        now_ms(),
+                    );
+                    match out {
+                        crate::private_osc::Outcome::Nothing => {}
+                        crate::private_osc::Outcome::Changed(f) => shared.notify_cleared(vec![f]),
+                        crate::private_osc::Outcome::Reply(b) => shared.write_pty(b),
                     }
                 }
                 _ => {}
@@ -1233,9 +1300,124 @@ mod tests {
         .into_bytes()
     }
 
+    fn gated(cols: usize, rows: usize, on: bool) -> Emulator {
+        let mut e = Emulator::new(cols, rows, 100);
+        e.set_vt_config(crate::VtConfig {
+            private: crate::private_osc::PrivateGate {
+                enabled: on,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        e
+    }
+
+    fn status(slot: &str, text: &str) -> Vec<u8> {
+        use crate::menu_reg::b64_encode;
+        format!(
+            "\x1b]7725;status;set;{slot};{};ok\x07",
+            b64_encode(text.as_bytes())
+        )
+        .into_bytes()
+    }
+
+    fn row0(e: &Emulator) -> String {
+        e.logical_lines().first().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn private_osc_is_inert_until_enabled() {
+        let mut e = gated(40, 5, false);
+        let replies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let r = replies.clone();
+        e.set_reply_sink(move |b| r.lock().unwrap().extend(b));
+        e.advance(&reg("tests"));
+        e.advance(&status("git", "main"));
+        e.advance(b"\x1b]7727;caps;query\x07");
+        assert!(e.menu_items().is_empty() && e.status_segments().is_empty());
+        assert!(replies.lock().unwrap().is_empty());
+        assert_eq!(e.private_counters().swallowed_off, 3);
+        assert_eq!(row0(&e), "", "nothing is printed");
+    }
+
+    #[test]
+    fn caps_and_status_when_enabled_and_gate_off_clears_for_good() {
+        let mut e = gated(40, 5, true);
+        let replies = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let r = replies.clone();
+        e.set_reply_sink(move |b| r.lock().unwrap().extend(b));
+        e.advance(b"\x1b]7727;caps;query\x07");
+        assert!(replies.lock().unwrap().starts_with(b"\x1b]7727;caps;"));
+        e.advance(&status("git", "main"));
+        e.advance(&reg("tests"));
+        assert_eq!(e.status_segments()[0].text, "main");
+        assert!(e.drain_events().iter().any(|ev| matches!(
+            ev,
+            crate::TermEvent::PrivateOscChanged(crate::private_osc::Feature::Status)
+        )));
+        assert_eq!(row0(&e), "");
+        // Replay rebuilds segments and items.
+        let bytes = e.replay_bytes(100);
+        let mut b = gated(40, 5, true);
+        b.advance(&bytes);
+        assert_eq!(b.status_segments(), e.status_segments());
+        assert_eq!(b.menu_items(), e.menu_items());
+        // The switch goes off: everything vanishes and stays gone.
+        e.set_vt_config(crate::VtConfig::default());
+        assert!(e.status_segments().is_empty() && e.menu_items().is_empty());
+        e.set_vt_config(crate::VtConfig {
+            private: crate::private_osc::PrivateGate {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(e.status_segments().is_empty() && e.menu_items().is_empty());
+        // RIS clears.
+        e.advance(&status("git", "again"));
+        e.advance(b"\x1bc");
+        assert!(e.status_segments().is_empty());
+    }
+
+    #[test]
+    fn oversized_private_string_is_discarded_unbuffered_and_counted() {
+        let mut e = gated(40, 5, true);
+        let mut big = b"\x1b]7725;status;set;git;".to_vec();
+        big.extend(std::iter::repeat_n(b'A', 200_000));
+        big.push(7);
+        e.advance(&big);
+        assert_eq!(e.private_counters().malformed, 1);
+        assert!(e.status_segments().is_empty());
+        e.advance(&status("git", "ok"));
+        assert_eq!(e.status_segments().len(), 1);
+        // The sniffer never held more than the cap.
+        let mut s = OscSniffer::default();
+        s.feed(&big[..100_000]);
+        assert!(s.buf.len() <= crate::private_osc::MAX_OSC);
+    }
+
+    #[test]
+    fn hostile_cat_of_77xx_bytes_is_bounded() {
+        let mut e = gated(40, 5, true);
+        let mut file = Vec::new();
+        for i in 0..20_000u32 {
+            file.extend(
+                format!(
+                    "\x1b]77{:02};caps;x{i}\x07\x1b]7725;status;set;s{};eA==;ok\x07",
+                    i % 100,
+                    i % 12
+                )
+                .bytes(),
+            );
+        }
+        e.advance(&file);
+        assert!(e.status_segments().len() <= crate::private_osc::STATUS_SLOTS);
+        assert_eq!(row0(&e), "");
+    }
+
     #[test]
     fn menu_items_follow_the_lifecycle_and_replay() {
-        let mut e = Emulator::new(40, 5, 100);
+        let mut e = gated(40, 5, true);
         e.advance(&reg("tests"));
         e.advance(b"\x1b]7717;menu;add;lint;");
         e.advance(b"TGludA==;send;Y2FyZ28gY2xpcHB5\x1b\\");
@@ -1247,7 +1429,7 @@ mod tests {
 
         // A replay stream rebuilds the same items after its leading RIS.
         let bytes = e.replay_bytes(100);
-        let mut b = Emulator::new(40, 5, 100);
+        let mut b = gated(40, 5, true);
         b.advance(&reg("stale"));
         b.advance(&bytes);
         assert_eq!(b.menu_items(), e.menu_items());
@@ -1264,7 +1446,7 @@ mod tests {
 
     #[test]
     fn hostile_output_is_bounded() {
-        let mut e = Emulator::new(40, 5, 100);
+        let mut e = gated(40, 5, true);
         // `cat` of a file full of registrations: capped, counted, never panics.
         for i in 0..50 {
             e.advance(&reg(&format!("i{i}")));

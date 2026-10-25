@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Runs every private OSC demo in order.
+dir=$(cd "$(dirname "$0")" && pwd)
+for s in caps status master_switch; do "$dir/$s" || exit $?; done

@@ -18,6 +18,18 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.71 — Private OSC foundation.** microterm's own escape-sequence range `OSC 7700–7799`
+  (SPEC §6.4, D15) behind an absolute master switch: `[private_osc] enabled` (default `false`),
+  per-feature gates `[private_osc.features]`, a per-pane rate window (`rate_per_second`, 2–100)
+  and an 8 KiB string cap that discards the rest up to ST without buffering. A dead sequence is
+  swallowed and counted; turning the switch (or a feature) off clears all state and does not
+  restore it. The session action `TogglePrivateOsc` overrides the config in both directions (lock
+  icon in the new status bar), `microterm ctl private-osc status|disable` has no `enable` verb,
+  no MCP tool exists, and no sequence can turn the switch on. **Behaviour change:** `OSC 7717`
+  shell-registered menu items are now inert until `enabled = true`. New: `7727;caps;query`
+  (capability handshake, the only sequence that writes a reply, 2/s per pane) and `7725;status`
+  (up to 8 named status chips of the focused pane in the status bar, replayed by `microterm-mux`
+  after an SSH reconnect). New `ctl events` type `private_osc.changed`. See the new "Private OSC" docs page.
 - **M12.6 — Triggers.** Opt-in local automation rules (`[triggers] enabled = false` by default,
   SPEC §10.11, D14): *when* a regex matches a rendered line (or a pane event happens:
   `command_finished`, `cwd_changed`, `pane_exited`, `title_changed`, `bell`), run up to four

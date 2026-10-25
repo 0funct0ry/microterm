@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# The master switch: turning it off clears everything and nothing comes back.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Set a chip"
+status_set git "main ✔" ok "Branch main"
+echo "   expected: a green 'git' chip at the bottom right"
+pause
+
+step "2. Switch off"
+echo "   Run 'Toggle private OSC' from the command palette now."
+echo "   expected: the chip vanishes at once and a lock icon shows at the bottom left."
+pause
+status_set late "after off" ok
+echo "   I just sent another chip: it must NOT appear while the switch is off."
+pause
+
+step "3. Switch back on"
+echo "   Run 'Toggle private OSC' again."
+echo "   expected: nothing comes back (programs must register again), the lock is gone."
+pause
+status_set again "registered again" ok
+echo "   expected: this one appears."
+pause
+
+step "4. One-way from outside"
+echo "   In another terminal: 'microterm ctl private-osc disable' works;"
+echo "   'microterm ctl private-osc enable' is a usage error."
+pause
+status_clear

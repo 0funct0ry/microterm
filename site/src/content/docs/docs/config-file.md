@@ -152,6 +152,25 @@ vhs_sleep_cap_ms = 3000          # longest Sleep emitted
 Turning `enabled` off in a reload stops and saves every running recording. The other keys apply
 to the next recording.
 
+## Private OSC
+
+`[private_osc]` guards microterm's own escape sequences (`OSC 7700–7799`, see
+[Private OSC](/docs/private-osc/)). It is off by default and **only this file or the
+`TogglePrivateOsc` action can turn it on**.
+
+```toml
+[private_osc]
+enabled = false                  # ABSOLUTE master switch: false swallows every 7700-7799 sequence (incl. 7717) and clears their state
+fold_commands = false            # use OSC 133 command output as the default fold unit (OSC 7721)
+rate_per_second = 20             # stateful sequences per pane per second (2-100)
+# [private_osc.features]         # per-sequence switches, all true once enabled = true
+# menu = true  caps = true  status = true  progress = true  tab = true  badge = true
+# mark = true  key = true   palette = true  fold = true      link = true
+```
+
+Turning `enabled` or a feature off in a reload clears what it held in every pane and is not
+restored when it is turned on again. An invalid file leaves the last valid values in force.
+
 ## Triggers
 
 `[triggers]` turns on [triggers](/docs/triggers/), local automation rules kept in a separate

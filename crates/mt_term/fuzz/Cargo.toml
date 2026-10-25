@@ -1,0 +1,21 @@
+[package]
+name = "mt_term-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mt_term = { path = ".." }
+
+# Not part of the main workspace (run with `cargo fuzz run private_osc` from crates/mt_term).
+[workspace]
+
+[[bin]]
+name = "private_osc"
+path = "fuzz_targets/private_osc.rs"
+test = false
+doc = false

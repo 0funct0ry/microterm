@@ -184,6 +184,30 @@ EXAMPLES:
     /// session only and are never written back to the file.
     #[command(subcommand)]
     Trigger(TriggerCmd),
+    /// The private OSC range 7700-7799: show or switch off the master switch.
+    ///
+    /// There is deliberately no `enable` verb: turning the range on is done by the user, in
+    /// `[private_osc] enabled = true` or with the `TogglePrivateOsc` action, never by a process
+    /// that can drive `ctl`, a program in a pane or a remote host.
+    #[command(subcommand, name = "private-osc")]
+    PrivateOsc(PrivateOscCmd),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PrivateOscCmd {
+    /// Show the master switch, the per-feature switches and the per-pane counters.
+    ///
+    /// With --json: {"enabled","config_enabled","session_override","rate_per_second",
+    /// "features":{"menu":true,…},"panes":[{"pane","applied","malformed","dropped",
+    /// "swallowed_off","swallowed_disabled","segments"}]}.
+    #[command(after_help = "\
+EXAMPLES:
+  microterm ctl private-osc status
+  microterm ctl private-osc status --json | jq .enabled")]
+    Status,
+    /// Turn the master switch off for this session: all private-OSC state of every pane is
+    /// cleared and is not restored when the switch is turned on again.
+    Disable,
 }
 
 #[derive(Subcommand, Debug)]

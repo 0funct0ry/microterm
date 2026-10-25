@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# 7725: named status chips at the bottom right of the window (focused pane only).
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Set three chips (look at the bottom right of the window)"
+status_set git   "main ✔"    ok    "Branch main, clean tree"
+status_set build "building…" info  "cargo build --release"
+status_set tests "2 failing" error "tests::login and tests::logout"
+echo "   expected: three chips in slot-name order: build, git, tests"
+echo "   hover one: 'Set by a program in pane N' plus its tooltip"
+pause
+
+step "2. Replace one and add a warning"
+status_set build "built" ok
+status_set disk "92% full" warn
+echo "   expected: build is green and says 'built'; a yellow 'disk' chip appeared"
+pause
+
+step "3. Clear one slot"
+status_clear tests
+echo "   expected: the red 'tests' chip is gone"
+pause
+
+step "4. Other tab"
+echo "   Open another tab and come back: chips only show for the focused pane."
+pause
+
+step "5. Clean up"
+status_clear
+echo "   done. 'microterm ctl private-osc status' shows the counters for this pane."

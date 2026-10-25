@@ -554,6 +554,7 @@ pub const ICON_NAMES: &[&str] = &[
     "info",
     "layers",
     "link",
+    "lock",
     "maximize-2",
     "minus",
     "palette",

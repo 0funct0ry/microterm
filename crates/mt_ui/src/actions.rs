@@ -93,6 +93,8 @@ actions!(
         NextMarker,
         PreviousMarker,
         ClearMarkers,
+        // Private OSC (M12.71, SPEC §6.4.2): no default key.
+        TogglePrivateOsc,
         // Serial ports (M12).
         ConnectSerial,
         SerialSendBreak,
@@ -1124,6 +1126,14 @@ pub static ACTIONS: &[ActionDef] = &[
         ToggleTriggersPaused
     ),
     def!(
+        "TogglePrivateOsc",
+        "Toggle private OSC",
+        "Turn the private OSC range 7700-7799 off or on for this session, overriding `[private_osc] enabled`; turning it off clears all private-OSC state and it is not restored",
+        &[],
+        &[],
+        TogglePrivateOsc
+    ),
+    def!(
         "NextMarker",
         "Next marker",
         "Scroll the focused pane to the next marker left by a trigger",
@@ -1211,6 +1221,7 @@ pub const CATEGORIES: &[&str] = &[
     "Snippets",
     "Recording",
     "Triggers",
+    "Private OSC",
     "Serial",
     "Misc",
     "Debug",
@@ -1294,6 +1305,7 @@ impl ActionDef {
             | "NextMarker"
             | "PreviousMarker"
             | "ClearMarkers" => "Triggers",
+            "TogglePrivateOsc" => "Private OSC",
             "ConnectSerial" | "SerialSendBreak" | "SerialToggleDtr" | "SerialToggleRts" => "Serial",
             _ => "Misc",
         }

@@ -87,6 +87,9 @@ impl Render for AppWindow {
         if tab_bar_bottom && !tab_bar_hidden {
             root = root.child(self.tab_bar(cx));
         }
+        if let Some(bar) = self.status_bar(&t, cx) {
+            root = root.child(bar);
+        }
         root = root
             .child(self.toast_stack(cx))
             .when_some(self.hud, |el, (cols, rows)| {
@@ -357,6 +360,7 @@ impl Render for AppWindow {
                     this.toggle_triggers_paused(cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &TogglePrivateOsc, _, cx| this.toggle_private_osc(cx)))
             .on_action(cx.listener(|this, _: &NextMarker, _, cx| this.step_marker(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousMarker, _, cx| this.step_marker(false, cx)))
             .on_action(cx.listener(|this, _: &ClearMarkers, _, cx| this.clear_trigger_markers(cx)))

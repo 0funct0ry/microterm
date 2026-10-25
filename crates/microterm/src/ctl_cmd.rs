@@ -190,6 +190,50 @@ fn table(columns: Vec<Column>, rows: Vec<Vec<String>>, noun: &'static str) -> Ou
     }))
 }
 
+/// `private-osc status` as key/value rows.
+fn private_osc_card(v: &Value) -> Vec<(String, String)> {
+    let yn = |b: bool| if b { "on" } else { "off" }.to_string();
+    let mut kv = vec![
+        (
+            "enabled".to_string(),
+            yn(v["enabled"].as_bool().unwrap_or(false)),
+        ),
+        (
+            "config".to_string(),
+            yn(v["config_enabled"].as_bool().unwrap_or(false)),
+        ),
+        (
+            "session override".to_string(),
+            yn(v["session_override"].as_bool().unwrap_or(false)),
+        ),
+        (
+            "rate per second".to_string(),
+            v["rate_per_second"].as_u64().unwrap_or(0).to_string(),
+        ),
+    ];
+    if let Some(f) = v["features"].as_object() {
+        for (k, on) in f {
+            kv.push((format!("feature {k}"), yn(on.as_bool().unwrap_or(false))));
+        }
+    }
+    for p in v["panes"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let n = |k: &str| p[k].as_u64().unwrap_or(0);
+        kv.push((
+            format!("pane {}", n("pane")),
+            format!(
+                "applied {} malformed {} dropped {} swallowed_off {} swallowed_disabled {} segments {}",
+                n("applied"),
+                n("malformed"),
+                n("dropped"),
+                n("swallowed_off"),
+                n("swallowed_disabled"),
+                n("segments")
+            ),
+        ));
+    }
+    kv
+}
+
 fn flag(b: bool) -> String {
     if b { "*" } else { "" }.to_string()
 }
@@ -1679,6 +1723,14 @@ pub fn dispatch(c: &mut Client, action: CtlAction, ctx: &mut Ctx<'_>) -> Result<
         CtlAction::Snippet(cmd) => snippet_verb(&mut call, cmd, ctx),
         CtlAction::Recording(cmd) => recording_verb(&mut call, cmd, ctx),
         CtlAction::Trigger(cmd) => trigger_verb(&mut call, cmd, ctx),
+        CtlAction::PrivateOsc(cmd) => {
+            use crate::ctl::PrivateOscCmd;
+            let v = call(match cmd {
+                PrivateOscCmd::Status => Request::PrivateOscStatus,
+                PrivateOscCmd::Disable => Request::PrivateOscDisable,
+            })?;
+            result(v, &|v| Ok(Output::new(Body::Card(private_osc_card(&v)))))
+        }
         CtlAction::Menu(MenuCmd::Show { menu, target }) => {
             let v = call(Request::MenuShow(mt_proto::MenuShowParams {
                 target: pane_target(target, env),

@@ -54,7 +54,9 @@ The default kind types the quoted command into the pane and presses Enter. `--ct
 `microterm ctl COMMAND` for this pane, and `--spawn` opens the command in a split (trusted
 directories only). `mt-menu` writes a private escape sequence, `OSC 7717 ; menu ; add|clear ; …`,
 so it also works over ssh and inside tmux-less remote shells; anything that can print to the
-terminal can register items, which is why they are restricted.
+terminal can register items, which is why they are restricted. `OSC 7717` is part of the
+[private OSC](/docs/private-osc/) range: it is **inert until `[private_osc] enabled = true`** is set,
+and turning that off again clears every registered item.
 
 ## Checking it works
 

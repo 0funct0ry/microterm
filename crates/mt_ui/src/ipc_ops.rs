@@ -69,6 +69,10 @@ pub fn event_of(e: &MuxEvent) -> Event {
             summary: summary.clone(),
         },
         MuxEvent::MenuItemsChanged { pane } => Event::MenuItemsChanged { pane },
+        MuxEvent::PrivateOscChanged { pane, ref feature } => Event::PrivateOscChanged {
+            pane,
+            feature: feature.clone(),
+        },
         MuxEvent::TabAdded { window, tab } => Event::TabAdded { window, tab },
         MuxEvent::TabRemoved { window, tab } => Event::TabRemoved { window, tab },
         MuxEvent::TabColorChanged { tab, color, source } => Event::TabColorChanged {

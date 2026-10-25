@@ -37,6 +37,7 @@ pub struct Config {
     pub snippets: Snippets,
     pub recording: Recording,
     pub triggers: Triggers,
+    pub private_osc: PrivateOsc,
     pub menu_bar: MenuBar,
     pub notifications: Notifications,
     pub terminal: Terminal,
@@ -84,6 +85,7 @@ impl Default for Config {
             snippets: Snippets::default(),
             recording: Recording::default(),
             triggers: Triggers::default(),
+            private_osc: PrivateOsc::default(),
             menu_bar: MenuBar::default(),
             notifications: Notifications::default(),
             terminal: Terminal::default(),
@@ -774,6 +776,67 @@ impl Default for Triggers {
             panel_width: 360,
             panel_open_on_start: false,
             confirm_delete: true,
+        }
+    }
+}
+
+/// `[private_osc]`: the private OSC range 7700-7799 (SPEC §6.4, §8.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrivateOsc {
+    /// ABSOLUTE master switch: `false` swallows and ignores every sequence of the range
+    /// (including `7717`) and clears all private-OSC state. Only this file or the
+    /// `TogglePrivateOsc` action turns it on.
+    pub enabled: bool,
+    /// Use OSC 133 command output as the default fold unit (OSC 7721).
+    pub fold_commands: bool,
+    /// Stateful sequences per pane and second (2-100).
+    pub rate_per_second: u32,
+    pub features: PrivateOscFeatures,
+}
+
+impl Default for PrivateOsc {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            fold_commands: false,
+            rate_per_second: 20,
+            features: PrivateOscFeatures::default(),
+        }
+    }
+}
+
+/// `[private_osc.features]`: one switch per sequence name, all `true` once `enabled = true`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrivateOscFeatures {
+    pub menu: bool,
+    pub caps: bool,
+    pub status: bool,
+    pub progress: bool,
+    pub tab: bool,
+    pub badge: bool,
+    pub mark: bool,
+    pub key: bool,
+    pub palette: bool,
+    pub fold: bool,
+    pub link: bool,
+}
+
+impl Default for PrivateOscFeatures {
+    fn default() -> Self {
+        Self {
+            menu: true,
+            caps: true,
+            status: true,
+            progress: true,
+            tab: true,
+            badge: true,
+            mark: true,
+            key: true,
+            palette: true,
+            fold: true,
+            link: true,
         }
     }
 }

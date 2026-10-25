@@ -460,6 +460,30 @@ const ROOT: &[(&str, K)] = &[
         ]),
     ),
     (
+        "private_osc",
+        K::Table(&[
+            ("enabled", K::Leaf),
+            ("fold_commands", K::Leaf),
+            ("rate_per_second", K::Leaf),
+            (
+                "features",
+                K::Table(&[
+                    ("menu", K::Leaf),
+                    ("caps", K::Leaf),
+                    ("status", K::Leaf),
+                    ("progress", K::Leaf),
+                    ("tab", K::Leaf),
+                    ("badge", K::Leaf),
+                    ("mark", K::Leaf),
+                    ("key", K::Leaf),
+                    ("palette", K::Leaf),
+                    ("fold", K::Leaf),
+                    ("link", K::Leaf),
+                ]),
+            ),
+        ]),
+    ),
+    (
         "recording",
         K::Table(&[
             ("enabled", K::Leaf),
@@ -965,6 +989,12 @@ fn validate(src: &str, doc: &ImDocument<&str>, c: &Config, out: &mut Vec<Diagnos
         err(
             &["triggers", "capture_dir"],
             "triggers.capture_dir must be an absolute path (or empty for the default)".into(),
+        );
+    }
+    if !(2..=100).contains(&c.private_osc.rate_per_second) {
+        err(
+            &["private_osc", "rate_per_second"],
+            "private_osc.rate_per_second must be between 2 and 100".into(),
         );
     }
     if !(280..=600).contains(&c.recording.panel_width) {

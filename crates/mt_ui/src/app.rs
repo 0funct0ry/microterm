@@ -923,6 +923,7 @@ impl AppWindow {
         let mut progress = Vec::new();
         let mut notes = Vec::new();
         let mut menu_items_changed = false;
+        let mut private_changed: Vec<mt_term::private_osc::Feature> = Vec::new();
         let term = session.term.clone();
         for ev in session.term.drain_events() {
             match ev {
@@ -954,6 +955,7 @@ impl AppWindow {
                 TermEvent::Progress { state, value } => progress.push((state, value)),
                 TermEvent::Notify(text) => notes.push(text),
                 TermEvent::MenuItemsChanged => menu_items_changed = true,
+                TermEvent::PrivateOscChanged(f) => private_changed.push(f),
             }
         }
         session.refresh();
@@ -983,6 +985,11 @@ impl AppWindow {
         }
         for text in notes {
             mux_host::on_osc_notify(cx, pane, &text);
+        }
+        for f in private_changed {
+            mux_host::host(cx)
+                .mux
+                .notify_private_osc_changed(pane, f.name());
         }
         if menu_items_changed {
             mux_host::host(cx).mux.notify_menu_items_changed(pane);
@@ -3118,6 +3125,7 @@ pub fn vt_config(cfg: &mt_config::Config) -> mt_term::VtConfig {
         },
         osc_notifications: cfg.terminal.osc_notifications,
         allow_shift_capture: cfg.terminal.allow_shift_capture,
+        private: crate::private_osc::gate_of_config(cfg),
     }
 }
 

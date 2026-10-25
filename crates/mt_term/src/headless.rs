@@ -106,8 +106,15 @@ impl HeadlessPane {
         // The engine's PTY is non-blocking; these threads block instead.
         clear_nonblocking(&reader)?;
 
+        let mut emu = Emulator::new(opts.cols as usize, opts.rows as usize, opts.scrollback);
+        // The daemon keeps private-OSC state for replay and never answers a program itself;
+        // the attached client's gate decides what the replayed bytes show (SPEC §6.4.3).
+        emu.set_vt_config(crate::VtConfig {
+            private: crate::private_osc::PrivateGate::store_only(),
+            ..crate::VtConfig::default()
+        });
         let state = Arc::new(Mutex::new(State {
-            emu: Emulator::new(opts.cols as usize, opts.rows as usize, opts.scrollback),
+            emu,
             seq: 0,
             title: None,
         }));

@@ -186,6 +186,12 @@ action = "Disable"   # unbind a default
 | `PreviousMarker` | **Previous marker** — Scroll the focused pane to the previous marker left by a trigger | — | — |
 | `ClearMarkers` | **Clear markers** — Remove the focused pane's trigger markers | — | — |
 
+## Private OSC
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `TogglePrivateOsc` | **Toggle private OSC** — Turn the private OSC range 7700-7799 off or on for this session, overriding `[private_osc] enabled`; turning it off clears all private-OSC state and it is not restored | — | — |
+
 ## Serial
 
 | Action | Description | macOS | Linux |

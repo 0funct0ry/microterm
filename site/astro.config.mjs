@@ -40,6 +40,7 @@ export default defineConfig({
             { label: 'Notifications & status', slug: 'docs/notifications-and-status' },
             { label: 'Shell integration', slug: 'docs/shell-integration' },
             { label: 'Triggers', slug: 'docs/triggers' },
+            { label: 'Private OSC', slug: 'docs/private-osc' },
             { label: 'Recording & replay', slug: 'docs/recording-and-replay' },
             { label: 'Exporting recordings', slug: 'docs/exporting-recordings' },
             { label: 'Agents & automation', slug: 'docs/agents-and-automation' },

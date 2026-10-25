@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# 7727: ask microterm what it supports and print the reply.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "Capability handshake (7727)"
+printf '   asking microterm what it supports... '
+old=$(stty -g </dev/tty)
+stty -echo -icanon </dev/tty
+printf '\e]7727;caps;query\a'
+reply=""
+IFS= read -r -s -t 2 -d $'\a' reply </dev/tty || true
+stty "$old" </dev/tty
+reply=${reply#*7727;caps;}
+if [ -n "$reply" ]; then
+  echo "got a reply:"
+  printf '%s' "$reply" | unb64 | sed 's/^/   /'; echo
+else
+  echo "NO REPLY."
+  echo "   Private OSC is off (set [private_osc] enabled = true), or caps is disabled."
+  exit 1
+fi

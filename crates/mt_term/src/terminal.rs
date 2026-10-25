@@ -449,9 +449,8 @@ impl Terminal {
 
     /// Reports that a remote process exited (shows up as `TermEvent::ChildExit`).
     pub fn remote_exited(&self, status: Option<i32>) {
-        if self.tracker().clear_menus() {
-            self.shared.notify(TermEvent::MenuItemsChanged);
-        }
+        let cleared = self.tracker().clear_private();
+        self.shared.notify_cleared(cleared);
         self.shared.notify(TermEvent::ChildExit(status));
     }
 
@@ -815,7 +814,21 @@ impl Terminal {
 
     /// Applies the `[terminal]` settings (new output only).
     pub fn set_vt_config(&self, cfg: crate::vt::VtConfig) {
-        self.shared.vt.lock().unwrap().cfg = cfg;
+        let old = std::mem::replace(&mut self.shared.vt.lock().unwrap().cfg, cfg).private;
+        if old != cfg.private {
+            let cleared = self.tracker().private_gate_changed(&old, &cfg.private);
+            self.shared.notify_cleared(cleared);
+        }
+    }
+
+    /// The `7725` status segments this pane's program set (slot-name order).
+    pub fn status_segments(&self) -> Vec<crate::private_osc::Segment> {
+        self.tracker().status_segments()
+    }
+
+    /// Private-OSC counters (`applied`, `malformed`, `dropped`, `swallowed_*`).
+    pub fn private_counters(&self) -> crate::private_osc::Counters {
+        self.tracker().private_counters()
     }
 
     /// Takes queued events. Call this before `snapshot` so new output re-arms the waker.
@@ -1342,14 +1355,12 @@ fn run_reader(mut io: LocalIo, exited: ExitSlot) {
     if let Some(sig) = status.1 {
         io.shared.exit_signal.store(sig, Ordering::Relaxed);
     }
-    let had = io
+    let cleared = io
         .tracker
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .clear_menus();
-    if had {
-        io.shared.notify(TermEvent::MenuItemsChanged);
-    }
+        .clear_private();
+    io.shared.notify_cleared(cleared);
     io.shared.notify(TermEvent::ChildExit(status.0));
     io.shared.notify(TermEvent::Wakeup);
 }

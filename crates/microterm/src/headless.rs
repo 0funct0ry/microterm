@@ -228,6 +228,9 @@ impl Host {
                         }
                     }
                     TermEvent::MenuItemsChanged => self.mux.notify_menu_items_changed(pane),
+                    TermEvent::PrivateOscChanged(f) => {
+                        self.mux.notify_private_osc_changed(pane, f.name())
+                    }
                     // `ctl events` shows `pane.bell` even without a window (SPEC §10.11.3).
                     TermEvent::Bell => self.mux.bell(pane),
                     TermEvent::CommandStart => {}
@@ -797,6 +800,16 @@ impl Host {
             | Request::SnippetInsert(_)
             | Request::SnippetAdd(_)
             | Request::SnippetRemove(_)) => self.snippets(r),
+            Request::PrivateOscStatus | Request::PrivateOscDisable => {
+                if matches!(request, Request::PrivateOscDisable) {
+                    mt_ui::private_osc::disable();
+                    let vt = mt_ui::app::vt_config(&self.cfg);
+                    for t in self.panes.values() {
+                        t.set_vt_config(vt);
+                    }
+                }
+                Ok(mt_ui::private_osc::status_json(&self.cfg, &self.panes))
+            }
             Request::PaneStatusSet(p) => {
                 let rows = self.rows();
                 ipc_ops::status_set(

@@ -41,6 +41,7 @@ fn run(case: &Case) -> Result<(), String> {
         },
         osc_notifications: case.osc_notifications.unwrap_or(true),
         allow_shift_capture: case.allow_shift_capture.unwrap_or(true),
+        ..VtConfig::default()
     });
     e.advance(case.input.as_bytes());
     if let Some(want) = &case.reply {

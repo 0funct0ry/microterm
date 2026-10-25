@@ -965,6 +965,24 @@ mod tests {
         }
     }
 
+    /// Agents cannot read or change the private OSC master switch (SPEC §6.4.2, S10): no tool
+    /// exists for it, whatever the gates say.
+    #[test]
+    fn no_tool_mentions_private_osc() {
+        for t in TOOLS {
+            let hay = format!("{} {}", t.name, t.description).to_lowercase();
+            assert!(
+                !hay.contains("private_osc")
+                    && !hay.contains("private osc")
+                    && !hay.contains("7727")
+                    && !hay.contains("7725"),
+                "{} mentions private OSC",
+                t.name
+            );
+            assert!(!t.method.contains("private_osc"), "{}", t.name);
+        }
+    }
+
     #[test]
     fn recording_start_never_captures_input_unless_asked() {
         let env = CallerEnv {

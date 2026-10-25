@@ -30,6 +30,9 @@ pub enum Effect {
     /// or tear down the panel, markers and actions; turning it off clears every decoration and
     /// stops trigger recordings (SPEC §10.11.1).
     Triggers,
+    /// `private_osc.enabled`, a feature gate or the rate changed: push the gate into every
+    /// pane; what it no longer allows is cleared and not restored (SPEC §6.4.2).
+    PrivateOsc,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -157,6 +160,18 @@ pub fn diff(old: &Config, new: &Config) -> ConfigDiff {
             || old.triggers.panel_open_on_start != new.triggers.panel_open_on_start
             || old.triggers.confirm_delete != new.triggers.confirm_delete,
         "triggers",
+        &[Repaint],
+    );
+    d.mark(
+        old.private_osc.enabled != new.private_osc.enabled
+            || old.private_osc.rate_per_second != new.private_osc.rate_per_second
+            || old.private_osc.features != new.private_osc.features,
+        "private_osc.enabled",
+        &[PrivateOsc, Repaint],
+    );
+    d.mark(
+        old.private_osc.fold_commands != new.private_osc.fold_commands,
+        "private_osc",
         &[Repaint],
     );
     d.mark(old.bell != new.bell, "bell", &[Repaint]);
