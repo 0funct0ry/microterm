@@ -13,6 +13,10 @@ ignore = [
   # SSH client only signs during its own authentication. Re-check when `rsa` ships a fix, or
   # drop russh's `rsa` feature if RSA keys stop mattering.
   "RUSTSEC-2023-0071",
+  # `ttf-parser` is unmaintained (no vulnerability). mt_export uses it directly to read Noto Color
+  # Emoji CBDT strikes, and fontdue/fontdb/rustybuzz (gpui's tree) depend on it too, so it cannot
+  # be dropped. Re-check when moving mt_export to `skrifa`.
+  "RUSTSEC-2026-0192",
 ]
 
 [licenses]
