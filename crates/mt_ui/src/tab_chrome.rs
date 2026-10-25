@@ -13,6 +13,8 @@ pub struct TabChrome {
     pub dot: Option<StatusKind>,
     /// 0–100, drawn along the tab's bottom edge.
     pub progress: Option<u8>,
+    /// `7720` bars exist and none is determinate: the line is drawn as an indeterminate bar.
+    pub indeterminate: bool,
     /// Status text for the tab tooltip.
     pub tooltip: Option<String>,
     /// Attention badge raised by `pane notify`.
@@ -64,6 +66,7 @@ pub fn tab_chrome(status: Option<&Status>, attention: Option<NotifyLevel>) -> Ta
     TabChrome {
         dot: status.and_then(|s| dot_of(s.state)),
         progress: status.and_then(|s| s.progress),
+        indeterminate: false,
         tooltip: status.map(tooltip_of),
         badge: attention.map(badge_of),
         zoomed: false,
@@ -86,6 +89,20 @@ impl TabChrome {
             None => line.clone(),
         });
         self.recording = Some(line);
+        self
+    }
+
+    /// Adds the `7720` bars of the tab's panes (SPEC §6.4.6): the aggregate takes the line
+    /// unless a live status already has a determinate value, and each bar gets a tooltip row.
+    pub fn with_bars(mut self, bars: &[mt_term::private_osc::Bar]) -> Self {
+        let Some(line) = crate::progress::aggregate(bars) else {
+            return self;
+        };
+        if self.progress.is_none() {
+            self.progress = line.pct;
+            self.indeterminate = line.pct.is_none();
+        }
+        self.append_tooltip(&crate::progress::tooltip_lines(bars).join("\n"));
         self
     }
 
@@ -119,7 +136,12 @@ impl TabChrome {
         color: crate::tab_color::TabColorChrome,
         ui: &mt_theme::UiTokens,
     ) -> Self {
-        let line = crate::tab_color::tooltip(&color.name, color.source, color.rule.as_deref());
+        let line = crate::tab_color::tooltip(
+            &color.name,
+            color.source,
+            color.rule.as_deref(),
+            color.declared_by,
+        );
         self.tooltip = Some(match self.tooltip.take() {
             Some(status) => format!("{status}\n{line}"),
             None => line,
@@ -182,6 +204,42 @@ mod tests {
     }
 
     #[test]
+    fn bars_take_the_line_unless_a_live_status_has_a_value_and_list_under_it() {
+        use mt_term::private_osc::{parse, PrivCmd, ProgressCmd};
+        let bar = |id: &str, pct: &str| {
+            let p = format!(
+                "7720;progress;set;{id};{pct};{};80",
+                mt_term::menu_reg::b64_encode(b"Build")
+            );
+            match parse(p.as_bytes()) {
+                Some(PrivCmd::Progress(ProgressCmd::Set { bar, .. })) => bar,
+                _ => panic!(),
+            }
+        };
+        let bars = [bar("a", "40"), bar("b", "-")];
+        let c = tab_chrome(None, None).with_bars(&bars);
+        assert_eq!((c.progress, c.indeterminate), (Some(40), false));
+        assert_eq!(
+            c.tooltip.as_deref(),
+            Some("Build 40 % · 1 m 20 s left\nBuild … · 1 m 20 s left")
+        );
+        let c = tab_chrome(None, None).with_bars(&[bar("b", "-")]);
+        assert_eq!((c.progress, c.indeterminate), (None, true));
+        // A live status value wins and the bars are listed under it.
+        let status = st(StatusState::Working, "tests", Some(70));
+        let c = tab_chrome(Some(&status), None).with_bars(&bars);
+        assert_eq!((c.progress, c.indeterminate), (Some(70), false));
+        assert!(c
+            .tooltip
+            .unwrap()
+            .starts_with("working 70%: tests\nBuild 40 %"));
+        assert_eq!(
+            tab_chrome(None, None).with_bars(&[]),
+            tab_chrome(None, None)
+        );
+    }
+
+    #[test]
     fn progress_and_tooltip_follow_the_status() {
         let c = tab_chrome(
             Some(&st(StatusState::Working, "running tests", Some(40))),
@@ -206,6 +264,7 @@ mod tests {
             rgba,
             source: mt_mux::ColorSource::Rule,
             rule: Some("domain:prod-*".into()),
+            declared_by: None,
             style: mt_config::TabColorStyle::BarTint,
         };
         let status = st(StatusState::Error, "boom", None);

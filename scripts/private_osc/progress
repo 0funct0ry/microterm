@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 7720: three fake build stages (tab line, tab tooltip, strip above the status bar).
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Three stages (watch the tab line and the strip above the status bar)"
+for p in 0 20 40 60 80 100; do
+  progress_set fetch "$p" Fetch $(( (100 - p) / 2 ))
+  progress_set build "$(( p / 2 ))" Build $(( 120 - p ))
+  progress_set test - Test
+  sleep 1
+done
+echo "   expected: tab line = mean of fetch and build; 'Test …' pulses; hover the tab for one row per bar"
+pause
+
+step "2. Finish them"
+progress_done fetch; progress_done build; progress_done test
+echo "   expected: each bar reads 100% for 2 s, then is gone; no notification fired"

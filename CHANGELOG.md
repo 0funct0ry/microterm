@@ -18,6 +18,15 @@
 - **Notification toasts.** OSC 9 notifications raised in the visible pane lost their toast, and `ctl pane notify` showed nothing for a pane in view. OSC 9 delivery now runs after the window's update, and `[notifications] toast` defaults to `"always"` (was `"background"`).
 
 ### Added
+- **M12.72 — Progress bars (`7720`) and declared tab color (`7719`).** Two display-only members of
+  the private OSC range (SPEC §6.4.6, §6.4.7). `7720;progress;set|done|clear`: up to 6 named bars
+  per pane with label, percent (or indeterminate) and ETA; the tab shows one aggregate line (mean
+  of the determinate bars; a live `ctl pane status` or OSC 9;4 value wins) with a tooltip row per
+  bar, and the focused pane's bars show in a thin strip above the status bar. `7719;tab;color`
+  declares the tab color with the M11.3 parser; it ranks below manual and trigger colors, above
+  config colors and `color_rules`, and the tooltip names the pane. Both are replayed by
+  `microterm-mux`, cleared by the master switch, their gate, RIS and pane exit, and never raise a
+  notification or attention marker.
 - **M12.71 — Private OSC foundation.** microterm's own escape-sequence range `OSC 7700–7799`
   (SPEC §6.4, D15) behind an absolute master switch: `[private_osc] enabled` (default `false`),
   per-feature gates `[private_osc.features]`, a per-pane rate window (`rate_per_second`, 2–100)

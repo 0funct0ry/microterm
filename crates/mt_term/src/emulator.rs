@@ -421,6 +421,21 @@ impl Emulator {
         self.tracker.status_segments()
     }
 
+    /// The `7720` progress bars the program set.
+    pub fn progress_bars(&self) -> Vec<crate::private_osc::Bar> {
+        self.tracker.progress_bars()
+    }
+
+    /// The `7719` color the program declared for its tab.
+    pub fn declared_tab_color(&self) -> Option<String> {
+        self.tracker.declared_tab_color()
+    }
+
+    /// Drops stale and finished bars at `now_ms`.
+    pub fn expire_progress(&mut self, now_ms: u64) -> bool {
+        self.tracker.expire_progress(now_ms)
+    }
+
     /// Private-OSC counters.
     pub fn private_counters(&self) -> crate::private_osc::Counters {
         self.tracker.private_counters()

@@ -63,6 +63,7 @@ impl AppWindow {
     pub(crate) fn after_pane_focus_change(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.entered_tab();
         self.clear_active_attention(cx);
+        self.sync_osc_colors(cx);
         self.refocus_viewport = true;
         cx.notify();
     }

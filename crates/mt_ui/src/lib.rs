@@ -30,6 +30,7 @@ pub mod picker_state;
 pub mod platform;
 pub mod pointer_shape;
 pub mod private_osc;
+pub mod progress;
 pub mod quick_select;
 pub mod recording;
 pub mod right_panel;

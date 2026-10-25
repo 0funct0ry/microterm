@@ -95,6 +95,53 @@ removed when the program exits, on a terminal reset, when the pane closes and wh
 the `status` gate goes off. They survive an SSH reconnect because the `microterm-mux` daemon
 replays them.
 
+## `7720` progress bars
+
+`ESC ] 7720 ; progress ; set ; <id> ; <pct> ; <b64 label> [; <eta_s>] ST` sets or replaces a bar,
+`… ; progress ; done ; <id> ST` finishes it (100 % for 2 seconds, then it goes) and
+`… ; progress ; clear [; <id>] ST` removes one or all. `id` is `[a-z0-9_-]{1,32}`, `pct` is `0`–`100`
+or `-` for an indeterminate bar, `eta_s` is whole seconds (0–359999). A pane holds at most 6 bars,
+labels are up to 48 characters, and 10 `set` per second are applied (when a program sends more, the
+newest value of each bar wins). A bar nobody updates for 10 minutes is dropped.
+
+```sh
+bar() { printf '\e]7720;progress;set;%s;%s;%s;%s\a' "$1" "$2" "$(printf %s "$3" | base64)" "$4"; }
+for p in 0 25 50 75 100; do
+  bar fetch "$p" Fetch $(( (100 - p) / 2 ))
+  bar build "$(( p / 2 ))" Build $(( 100 - p ))
+  bar test - Test
+  sleep 1
+done
+for id in fetch build test; do printf '\e]7720;progress;done;%s\a' "$id"; done
+```
+
+The tab shows **one** line on its bottom edge: the mean of the determinate bars of its panes, or an
+indeterminate bar when none is determinate. A live `ctl pane status` or OSC 9;4 value of the tab
+wins, and the bars are listed under it. The tab tooltip has a row per bar (`Build 42 % · 1 m 20 s
+left`). The bars of the focused pane also show as a thin strip above the status bar, each with its
+label and percent (`…` while indeterminate), and the pulse of an indeterminate bar stops when the
+system asks for reduced motion. Bars never raise a notification or an attention marker.
+
+## `7719` declared tab color
+
+`ESC ] 7719 ; tab ; color ; <value> ST` colors the tab of the pane that sent it. `value` is one of
+the nine tab color names, a name from `[tab_bar.palette]`, or `#rrggbb`; an empty value clears.
+
+```sh
+printf '\e]7719;tab;color;orange\a'     # a prod host's login script
+printf '\e]7719;tab;color;\a'            # back to the usual color
+```
+
+The color is *declared*: it never overrides a color set by hand or by a trigger, and it wins over a
+color from the config or a color rule (see [Tabs](/docs/tabs-and-workspaces/)). One color per pane;
+the tab shows the focused pane's, else the first pane that declared one. The tab tooltip says
+`Color: orange (declared by pane 2)`, and the color is lightness-clamped so the tab stays legible.
+It is removed when the program exits, on a terminal reset, when the pane closes and when the
+switch or the `tab` gate goes off.
+
+Both sequences work in SSH and serial panes, and the `microterm-mux` daemon replays them after a
+reconnect.
+
 ## Checking the state
 
 ```sh

@@ -108,6 +108,13 @@ impl TabView {
         self.pane_view_mut(pane)?.session.as_mut()
     }
 
+    /// The `7720` bars of every pane of the tab, in pane order.
+    pub fn progress_bars(&self) -> Vec<mt_term::private_osc::Bar> {
+        self.sessions()
+            .flat_map(|s| s.term.progress_bars())
+            .collect()
+    }
+
     /// Every pane's terminal.
     pub fn sessions(&self) -> impl Iterator<Item = &TerminalSession> {
         self.panes.iter().filter_map(|p| p.session.as_ref())
@@ -650,9 +657,40 @@ impl AppWindow {
         }
     }
 
+    /// Stores each tab's program-declared color (`OSC 7719`, SPEC §6.4.7): the focused pane's
+    /// declaration, else the first declaring pane. An unknown palette name is ignored. The mux
+    /// emits `TabColorChanged` only when the resolved color changes.
+    pub(crate) fn sync_osc_colors(&mut self, cx: &mut Context<Self>) {
+        let palette = self.cfg.tab_bar.palette.clone();
+        let updates: Vec<(u64, Option<(mt_mux::TabColor, u64)>)> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let order = std::iter::once(tab.pane)
+                    .chain(tab.panes.iter().map(|p| p.pane).filter(|p| *p != tab.pane));
+                let found = order.into_iter().find_map(|id| {
+                    let raw = tab
+                        .pane_view(id)?
+                        .session
+                        .as_ref()?
+                        .term
+                        .declared_tab_color()?;
+                    let c = mt_mux::TabColor::parse_with_palette(&raw, &palette).ok()?;
+                    Some((c, id))
+                });
+                (tab.id, found)
+            })
+            .collect();
+        let host = mux_host::host(cx);
+        for (tab, found) in updates {
+            let _ = host.mux.set_osc_color(tab, found);
+        }
+    }
+
     /// Recomputes every tab's display title and process state from the mux and its terminal.
     pub(crate) fn refresh_titles(&mut self, cx: &mut Context<Self>) {
         mux_host::refresh_color_rules(cx);
+        self.sync_osc_colors(cx);
         let fmt = self.cfg.tab_bar.title_format.clone();
         let show_index = self.cfg.tab_bar.show_index;
         let host = mux_host::host(cx);
@@ -985,6 +1023,9 @@ impl AppWindow {
         }
         for text in notes {
             mux_host::on_osc_notify(cx, pane, &text);
+        }
+        if private_changed.contains(&mt_term::private_osc::Feature::Tab) {
+            self.sync_osc_colors(cx);
         }
         for f in private_changed {
             mux_host::host(cx)

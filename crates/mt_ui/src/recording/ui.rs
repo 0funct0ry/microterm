@@ -317,6 +317,7 @@ impl AppWindow {
     /// One second of recording UI: reap recordings that ended, flip the pulse, repaint.
     pub(crate) fn recording_tick(&mut self, cx: &mut Context<Self>) {
         self.rec_pulse = !self.rec_pulse;
+        self.progress_tick(cx);
         if !RecordingGate::of_config(&self.cfg).enabled {
             return;
         }

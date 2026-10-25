@@ -826,6 +826,26 @@ impl Terminal {
         self.tracker().status_segments()
     }
 
+    /// The `7720` progress bars this pane's program set (id order).
+    pub fn progress_bars(&self) -> Vec<crate::private_osc::Bar> {
+        self.tracker().progress_bars()
+    }
+
+    /// The color this pane's program declared for its tab (`7719`), as sent.
+    pub fn declared_tab_color(&self) -> Option<String> {
+        self.tracker().declared_tab_color()
+    }
+
+    /// Drops stale and finished bars; emits `PrivateOscChanged(progress)` when any went.
+    pub fn expire_progress(&self) -> bool {
+        let changed = self.tracker().expire_progress(crate::commands::now_ms());
+        if changed {
+            self.shared
+                .notify_cleared(vec![crate::private_osc::Feature::Progress]);
+        }
+        changed
+    }
+
     /// Private-OSC counters (`applied`, `malformed`, `dropped`, `swallowed_*`).
     pub fn private_counters(&self) -> crate::private_osc::Counters {
         self.tracker().private_counters()

@@ -11,6 +11,13 @@ status_set() { printf '\e]7725;status;set;%s;%s;%s;%s\a' "$1" "$(b64 "$2")" "${3
 # status_clear [SLOT]
 status_clear() { printf '\e]7725;status;clear%s\a' "${1:+;$1}"; }
 
+# progress_set ID PCT|- LABEL [ETA_S]   (7720)
+progress_set() { printf '\e]7720;progress;set;%s;%s;%s%s\a' "$1" "$2" "$(b64 "$3")" "${4:+;$4}"; }
+progress_done() { printf '\e]7720;progress;done;%s\a' "$1"; }
+progress_clear() { printf '\e]7720;progress;clear%s\a' "${1:+;$1}"; }
+# tab_color VALUE   (7719; empty clears)
+tab_color() { printf '\e]7719;tab;color;%s\a' "$1"; }
+
 require_pane() {
   [ -t 1 ] || { echo "run this in a microterm pane" >&2; exit 1; }
 }

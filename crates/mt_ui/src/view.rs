@@ -87,6 +87,9 @@ impl Render for AppWindow {
         if tab_bar_bottom && !tab_bar_hidden {
             root = root.child(self.tab_bar(cx));
         }
+        if let Some(strip) = self.progress_strip(&t) {
+            root = root.child(strip);
+        }
         if let Some(bar) = self.status_bar(&t, cx) {
             root = root.child(bar);
         }
@@ -605,7 +608,11 @@ impl AppWindow {
         tab: &crate::app::TabView,
         cx: &gpui::App,
     ) -> crate::tab_chrome::TabChrome {
-        let chrome = crate::mux_host::tab_chrome(cx, tab.pane);
+        let mut chrome = crate::mux_host::tab_chrome(cx, tab.pane);
+        if crate::private_osc::PrivateOscGate::of_config(&self.cfg).enabled {
+            let bars = tab.progress_bars();
+            chrome = chrome.with_bars(&bars);
+        }
         if !crate::recording::gate::RecordingGate::of_config(&self.cfg).enabled {
             return chrome;
         }

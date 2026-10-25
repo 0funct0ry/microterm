@@ -1187,12 +1187,17 @@ pub(crate) fn tab_chrome(cx: &App, pane: Id) -> crate::tab_chrome::TabChrome {
                 mt_mux::ColorSource::Trigger => tab.trigger_color.as_ref().map(|(_, n)| n.clone()),
                 _ => None,
             };
+            let declared_by = match (source, tab.osc_color) {
+                (mt_mux::ColorSource::Declared, Some((_, pane))) => Some(pane),
+                _ => None,
+            };
             chrome = chrome.with_color(
                 crate::tab_color::TabColorChrome {
                     name: color.to_string(),
                     rgba: crate::tab_color::resolve_rgba(&theme.tab_ui, &bar.palette, color),
                     source,
                     rule,
+                    declared_by,
                     style: bar.color_style,
                 },
                 &theme.tab_ui,

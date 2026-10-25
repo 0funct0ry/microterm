@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# 7719: a program-declared tab color (below manual and trigger colors).
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Declare orange"
+tab_color orange
+echo "   expected: the tab is tinted orange; tooltip: 'Color: orange (declared by pane N)'"
+pause
+
+step "2. A manual color wins"
+echo "   Right-click the tab and pick pink, then Default: orange comes back."
+pause
+
+step "3. Clear"
+tab_color ""
+echo "   expected: the tab has its usual color again"

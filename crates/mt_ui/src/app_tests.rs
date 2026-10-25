@@ -1887,6 +1887,67 @@ fn an_ssh_domain_colors_its_tabs_and_a_declared_tab_color_wins(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn a_program_declared_color_ranks_below_manual_and_trigger_and_names_its_pane(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = setup(cx);
+    let (tab, pane) = view.read_with(cx, |t, _| {
+        (t.tabs[t.active_tab].id, t.tabs[t.active_tab].pane)
+    });
+    let orange = mt_mux::TabColor::Named(mt_mux::NamedColor::Orange);
+    let chrome = |view: &Entity<AppWindow>, cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| crate::mux_host::tab_chrome(cx, pane))
+    };
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_osc_color(tab, Some((orange, pane)))
+            .unwrap()
+    });
+    assert_eq!(
+        resolved(&view, cx, tab),
+        (Some("orange".into()), "declared")
+    );
+    assert!(chrome(&view, cx)
+        .tooltip
+        .unwrap()
+        .contains(&format!("Color: orange (declared by pane {pane})")));
+    // A trigger color and then a manual color override it; clearing them brings it back.
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_trigger_color(
+                tab,
+                Some((mt_mux::TabColor::Named(mt_mux::NamedColor::Red), "r".into())),
+            )
+            .unwrap()
+    });
+    assert_eq!(resolved(&view, cx, tab).1, "trigger");
+    view.update(cx, |this, cx| this.pick_tab_color(tab, "pink", cx));
+    assert_eq!(resolved(&view, cx, tab).1, "manual");
+    view.update(cx, |this, cx| this.pick_tab_color(tab, "default", cx));
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_trigger_color(tab, None)
+            .unwrap()
+    });
+    assert_eq!(
+        resolved(&view, cx, tab),
+        (Some("orange".into()), "declared")
+    );
+    // No notification or attention marker came with it.
+    assert_eq!(chrome(&view, cx).badge, None);
+    view.update(cx, |_, cx| {
+        crate::mux_host::host(cx)
+            .mux
+            .set_osc_color(tab, None)
+            .unwrap()
+    });
+    assert_eq!(resolved(&view, cx, tab), (None, "none"));
+}
+
+#[gpui::test]
 fn the_palette_sets_and_clears_the_active_tab_color(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
     let tab = view.read_with(cx, |t, _| t.tabs[t.active_tab].id);

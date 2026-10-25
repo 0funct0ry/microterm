@@ -19,12 +19,25 @@ pub struct TabColorChrome {
     pub source: ColorSource,
     /// The `match` expression of the rule that colored the tab (`source == Rule`).
     pub rule: Option<String>,
+    /// The pane whose program declared the color (`OSC 7719`), for the tooltip.
+    pub declared_by: Option<u64>,
     pub style: TabColorStyle,
 }
 
 /// `Color: red`, `Color: red (declared)`, `Color: red (rule: domain:prod-*)`.
-pub fn tooltip(name: &str, source: ColorSource, rule: Option<&str>) -> String {
+pub fn tooltip(
+    name: &str,
+    source: ColorSource,
+    rule: Option<&str>,
+    declared_by: Option<u64>,
+) -> String {
     match (source, rule) {
+        (ColorSource::Declared, _) if declared_by.is_some() => {
+            format!(
+                "Color: {name} (declared by pane {})",
+                declared_by.unwrap_or(0)
+            )
+        }
         (ColorSource::Rule, Some(r)) => format!("Color: {name} (rule: {r})"),
         (ColorSource::Trigger, Some(r)) => format!("Color: {name} (trigger: {r})"),
         (ColorSource::Declared, _) => format!("Color: {name} (declared)"),
@@ -222,17 +235,24 @@ mod tests {
 
     #[test]
     fn tooltips_name_the_color_and_its_source() {
-        assert_eq!(tooltip("red", ColorSource::Manual, None), "Color: red");
         assert_eq!(
-            tooltip("red", ColorSource::Trigger, Some("Build failed")),
+            tooltip("red", ColorSource::Manual, None, None),
+            "Color: red"
+        );
+        assert_eq!(
+            tooltip("red", ColorSource::Trigger, Some("Build failed"), None),
             "Color: red (trigger: Build failed)"
         );
         assert_eq!(
-            tooltip("red", ColorSource::Declared, None),
+            tooltip("red", ColorSource::Declared, None, None),
             "Color: red (declared)"
         );
         assert_eq!(
-            tooltip("red", ColorSource::Rule, Some("domain:prod-*")),
+            tooltip("red", ColorSource::Declared, None, Some(2)),
+            "Color: red (declared by pane 2)"
+        );
+        assert_eq!(
+            tooltip("red", ColorSource::Rule, Some("domain:prod-*"), None),
             "Color: red (rule: domain:prod-*)"
         );
     }

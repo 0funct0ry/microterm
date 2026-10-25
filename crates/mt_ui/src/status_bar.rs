@@ -72,6 +72,91 @@ impl AppWindow {
             .unwrap_or_default()
     }
 
+    /// One second of progress upkeep: stale and finished `7720` bars go, and an indeterminate
+    /// bar repaints so its pulse moves.
+    pub(crate) fn progress_tick(&mut self, cx: &mut Context<Self>) {
+        let mut any = false;
+        let mut changed = false;
+        for s in self.tabs.iter().flat_map(|t| t.sessions()) {
+            changed |= s.term.expire_progress();
+            any |= !s.term.progress_bars().is_empty();
+        }
+        if changed || any {
+            cx.notify();
+        }
+    }
+
+    /// The `7720` bars of the focused pane as a thin strip above the status bar. Every bar
+    /// carries its label and a percent (`…` while indeterminate), so color is never the only
+    /// signal; it raises no notification and no attention marker.
+    pub(crate) fn progress_strip(&self, t: &Theme) -> Option<AnyElement> {
+        let bars = self
+            .tabs
+            .get(self.active_tab)?
+            .session()?
+            .term
+            .progress_bars();
+        if bars.is_empty() {
+            return None;
+        }
+        let pane = self.focused_pane().unwrap_or(0);
+        let pulse = !crate::recording::ui::reduce_motion() && self.rec_pulse;
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .overflow_hidden();
+        for b in bars {
+            let text: SharedString = crate::progress::bar_text(&b).into();
+            let tip: SharedString = format!("Set by a program in pane {pane}\n{text}").into();
+            let fill = div()
+                .h_full()
+                .bg(t.accent)
+                .when(b.pct.is_none(), |el| {
+                    el.w_full().opacity(if pulse { 0.35 } else { 0.7 })
+                })
+                .when_some(b.pct, |el, p| {
+                    el.w(gpui::relative(f32::from(p.min(100)) / 100.))
+                });
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("progress-{}", b.id)))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1p5()
+                    .text_size(px(11.))
+                    .text_color(t.text_muted)
+                    .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tip.clone())).into())
+                    .child(
+                        div()
+                            .w(px(64.))
+                            .h(px(3.))
+                            .rounded_full()
+                            .overflow_hidden()
+                            .bg(t.border)
+                            .child(fill),
+                    )
+                    .child(text),
+            );
+        }
+        Some(
+            div()
+                .id("progress-strip")
+                .flex()
+                .flex_row()
+                .items_center()
+                .px_2()
+                .h(px(18.))
+                .border_t_1()
+                .border_color(t.border_variant)
+                .bg(t.surface)
+                .child(row)
+                .into_any_element(),
+        )
+    }
+
     /// Pushes the current private-OSC gate into every pane of this window.
     pub(crate) fn push_private_gate(&mut self, _cx: &mut Context<Self>) {
         let vt = crate::app::vt_config(&self.cfg);

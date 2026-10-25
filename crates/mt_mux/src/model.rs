@@ -107,6 +107,9 @@ pub struct Tab {
     pub trigger_color: Option<(TabColor, String)>,
     /// Color declared by config (workspace tab, launch profile, SSH domain).
     pub declared_color: Option<TabColor>,
+    /// Color a program declared through `OSC 7719` and the pane that did (SPEC §6.4.7). Takes
+    /// the `declared` slot ahead of the config-declared color.
+    pub osc_color: Option<(TabColor, Id)>,
     /// Result of the first matching `[[tab_bar.color_rules]]`, maintained by the UI layer.
     pub rule_color: Option<TabColor>,
 }
@@ -117,7 +120,7 @@ impl Tab {
         color::resolve(
             self.color,
             self.trigger_color.as_ref().map(|(c, _)| *c),
-            self.declared_color,
+            self.osc_color.map(|(c, _)| c).or(self.declared_color),
             self.rule_color,
         )
     }
@@ -745,6 +748,7 @@ impl Mux {
             zoomed: None,
             color: None,
             declared_color: None,
+            osc_color: None,
             rule_color: None,
             trigger_color: None,
             trigger_title: None,
@@ -892,6 +896,11 @@ impl Mux {
     /// Sets the color declared by config.
     pub fn set_declared_color(&mut self, tab: Id, color: Option<TabColor>) -> Result<(), Error> {
         self.update_tab_color(tab, |t| t.declared_color = color)
+    }
+
+    /// Sets (or with `None` clears) the color a program declared (`OSC 7719`) and its pane.
+    pub fn set_osc_color(&mut self, tab: Id, color: Option<(TabColor, Id)>) -> Result<(), Error> {
+        self.update_tab_color(tab, |t| t.osc_color = color)
     }
 
     /// Sets (or with `None` clears) the title a trigger rule gave the tab. Publishes nothing: a
@@ -1552,6 +1561,34 @@ mod tests {
         // Rule stops matching.
         mux.set_rule_color(t, None).unwrap();
         assert_eq!(color_events(&log), 3);
+    }
+
+    #[test]
+    fn program_declared_color_ranks_manual_trigger_osc_config_rule() {
+        let (mut mux, panes, tabs) = mux_with_tabs(1);
+        let log = recorded(&mut mux);
+        let t = tabs[0];
+        let _ = panes;
+        let src = |m: &Mux| m.tab(t).unwrap().resolved_color();
+        mux.set_rule_color(t, Some(TEAL)).unwrap();
+        mux.set_declared_color(t, Some(BLUE)).unwrap();
+        assert_eq!(src(&mux), (Some(BLUE), ColorSource::Declared));
+        mux.set_osc_color(t, Some((RED, 7))).unwrap();
+        assert_eq!(src(&mux), (Some(RED), ColorSource::Declared));
+        let n = color_events(&log);
+        mux.set_osc_color(t, Some((RED, 7))).unwrap();
+        assert_eq!(color_events(&log), n, "no-op set");
+        mux.set_trigger_color(t, Some((BLUE, "r".into()))).unwrap();
+        assert_eq!(src(&mux), (Some(BLUE), ColorSource::Trigger));
+        mux.set_tab_color(t, Some(TEAL)).unwrap();
+        assert_eq!(src(&mux), (Some(TEAL), ColorSource::Manual));
+        mux.set_tab_color(t, None).unwrap();
+        mux.set_trigger_color(t, None).unwrap();
+        assert_eq!(src(&mux), (Some(RED), ColorSource::Declared));
+        mux.set_osc_color(t, None).unwrap();
+        assert_eq!(src(&mux), (Some(BLUE), ColorSource::Declared));
+        mux.set_declared_color(t, None).unwrap();
+        assert_eq!(src(&mux), (Some(TEAL), ColorSource::Rule));
     }
 
     #[test]

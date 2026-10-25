@@ -490,6 +490,23 @@ impl CommandTracker {
 
     pub(crate) fn private_status_replay(&self, out: &mut String) {
         self.private.status.replay(out);
+        self.private.progress.replay(out);
+        self.private.tab.replay(out);
+    }
+
+    /// The `7720` bars of this pane, in id order.
+    pub fn progress_bars(&self) -> Vec<crate::private_osc::Bar> {
+        self.private.progress.bars()
+    }
+
+    /// The color the program declared for the tab (`7719`), as sent.
+    pub fn declared_tab_color(&self) -> Option<String> {
+        self.private.tab.color().map(str::to_string)
+    }
+
+    /// Drops stale and finished bars; returns whether anything changed.
+    pub fn expire_progress(&mut self, now_ms: u64) -> bool {
+        self.private.progress.expire(now_ms)
     }
 
     /// The `7725` segments of this pane, in slot-name order.
@@ -1377,6 +1394,47 @@ mod tests {
         e.advance(&status("git", "again"));
         e.advance(b"\x1bc");
         assert!(e.status_segments().is_empty());
+    }
+
+    #[test]
+    fn progress_and_tab_color_follow_the_lifecycle_and_replay() {
+        use crate::menu_reg::b64_encode;
+        let bar = format!(
+            "\x1b]7720;progress;set;build;40;{};80\x07\x1b]7719;tab;color;orange\x07",
+            b64_encode(b"Build")
+        );
+        let mut off = gated(40, 5, false);
+        off.advance(bar.as_bytes());
+        assert!(off.progress_bars().is_empty() && off.declared_tab_color().is_none());
+        assert_eq!(row0(&off), "");
+
+        let mut e = gated(40, 5, true);
+        e.advance(bar.as_bytes());
+        assert_eq!(e.progress_bars()[0].pct, Some(40));
+        assert_eq!(e.progress_bars()[0].eta_s, Some(80));
+        assert_eq!(e.declared_tab_color().as_deref(), Some("orange"));
+        assert_eq!(row0(&e), "", "nothing is printed");
+        let evs = e.drain_events();
+        for f in [
+            crate::private_osc::Feature::Progress,
+            crate::private_osc::Feature::Tab,
+        ] {
+            assert!(evs
+                .iter()
+                .any(|ev| matches!(ev, crate::TermEvent::PrivateOscChanged(x) if *x == f)));
+        }
+        // Replay round trip.
+        let mut b = gated(40, 5, true);
+        b.advance(&e.replay_bytes(100));
+        assert_eq!(b.progress_bars(), e.progress_bars());
+        assert_eq!(b.declared_tab_color(), e.declared_tab_color());
+        // Gate off clears for good, RIS clears.
+        e.set_vt_config(crate::VtConfig::default());
+        assert!(e.progress_bars().is_empty() && e.declared_tab_color().is_none());
+        let mut r = gated(40, 5, true);
+        r.advance(bar.as_bytes());
+        r.advance(b"\x1bc");
+        assert!(r.progress_bars().is_empty() && r.declared_tab_color().is_none());
     }
 
     #[test]

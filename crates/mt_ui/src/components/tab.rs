@@ -308,6 +308,18 @@ impl RenderOnce for Tab {
             .when_some(chrome.badge, |el, kind| {
                 el.child(StatusDot::new(kind).ring(ring))
             })
+            .when(chrome.indeterminate, |el| {
+                el.child(
+                    gpui::div()
+                        .absolute()
+                        .left_0()
+                        .bottom_0()
+                        .h(px(2.))
+                        .w_full()
+                        .opacity(0.45)
+                        .bg(progress_color),
+                )
+            })
             .when_some(chrome.progress, |el, pct| {
                 el.child(
                     gpui::div()

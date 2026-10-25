@@ -48,12 +48,20 @@ A tab's color comes from the first of these that is set:
 | Order | Source | Set by |
 |---|---|---|
 | 1 | `manual` | the menu, the palette, `ctl tab color`, `tab new --color` |
-| 2 | `declared` | `color = "…"` on a `[[workspaces]]` tab, a `[[launch]]` profile or an `[[ssh_domains]]` entry |
-| 3 | `rule` | the first matching `[[tab_bar.color_rules]]` entry |
+| 2 | `trigger` | a [trigger](/docs/triggers/) `tab_color` action |
+| 3 | `declared` | a program (`OSC 7719`, see below), else `color = "…"` on a `[[workspaces]]` tab, a `[[launch]]` profile or an `[[ssh_domains]]` entry |
+| 4 | `rule` | the first matching `[[tab_bar.color_rules]]` entry |
 
 The *Default* swatch and `--clear` remove only the manual color, so declared colors and rules apply
 again. There is deliberately no way to force "no color" over a declared one: remove the
 declaration instead.
+
+#### Declared by a program
+
+With `[private_osc] enabled = true`, a program can color its own tab, for example a login script on
+a production host: `printf '\e]7719;tab;color;orange\a'` (an empty value clears). It ranks below
+a manual and a trigger color and above config colors and rules, and the tab tooltip reads
+`Color: orange (declared by pane 2)`. See [Private OSC](/docs/private-osc/).
 
 ```toml
 [tab_bar]
