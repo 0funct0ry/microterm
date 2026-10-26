@@ -221,7 +221,13 @@ fn ensure_workspace_windows(cx: &mut App, workspace: Id, first: Option<SpawnSpec
             ..first
         };
     }
-    for (i, spec) in specs.into_iter().enumerate() {
+    // Launched from Finder/Dock the process cwd is `/`; a shell there is never what the user
+    // wants, so tabs without an explicit cwd start in `$HOME` instead.
+    let launched_at_root = std::env::current_dir().is_ok_and(|d| d == std::path::Path::new("/"));
+    for (i, mut spec) in specs.into_iter().enumerate() {
+        if spec.cwd.is_none() && launched_at_root {
+            spec.cwd = std::env::var_os("HOME").map(PathBuf::from);
+        }
         let Some((_, pane)) = host.spawn_tab(window, spec) else {
             continue;
         };

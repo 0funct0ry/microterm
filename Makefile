@@ -45,7 +45,7 @@ CRATE_FEATURES = $(if $(filter microterm,$(C)),$(FEATURES),$(if $(filter mt_ui x
 	check-facade check-mux-gpui check-snippets-pure check-triggers-pure check-export-pure check-cli-pure licenses licenses-check themes docs docs-check doc \
 	bench icons bundle install release-dry \
 	site-install site-dev site-build site-preview \
-	ci tree clean clean-site distclean
+	ci tree clean clean-dist clean-site distclean
 
 # ------------------------------------------------------------------------------ help
 
@@ -320,7 +320,10 @@ endif
 clean: ## Remove Rust build output
 	$(CARGO) clean
 
+clean-dist: ## Remove what `make bundle` and `make release-dry` generate (dist/, licence check file)
+	rm -rf dist target/THIRD-PARTY-LICENSES.check.html
+
 clean-site: ## Remove the site's build output and dependencies
 	rm -rf $(SITE)/dist $(SITE)/.astro $(SITE)/node_modules
 
-distclean: clean clean-site ## Remove all build output and installed dependencies
+distclean: clean clean-dist clean-site ## Remove all build output and installed dependencies

@@ -747,7 +747,6 @@ impl AppWindow {
             .relative()
             .flex_1()
             .overflow_hidden()
-            .bg(t.background.opacity(self.cfg.window.opacity))
             .track_focus(&self.viewport_focus)
             .on_mouse_down(
                 MouseButton::Left,
