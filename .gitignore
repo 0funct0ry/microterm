@@ -7,3 +7,7 @@ node_modules/
 .tools/
 vt-probe-out/
 bench/results/
+dist/
+site/public/install.sh
+site/public/THIRD-PARTY-LICENSES.html
+site/public/LICENSE.txt

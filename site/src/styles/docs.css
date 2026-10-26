@@ -1,0 +1,150 @@
+/* Starlight themed to match DOCS-MOCKUP.html (SPEC §16). Tokens come from tokens.css; Starlight
+   sets data-theme="light|dark" on <html>, which the token file keys on. */
+
+:root,
+:root[data-theme='dark'] {
+  --sl-font: var(--sans);
+  --sl-font-mono: var(--mono);
+  --sl-color-white: var(--text);
+  --sl-color-gray-1: #c9ced6;
+  --sl-color-gray-2: var(--muted);
+  --sl-color-gray-3: var(--faint);
+  --sl-color-gray-4: #4a505c;
+  --sl-color-gray-5: var(--border-soft);
+  --sl-color-gray-6: var(--surface);
+  --sl-color-gray-7: var(--side);
+  --sl-color-black: var(--bg);
+  --sl-color-bg: var(--bg);
+  --sl-color-bg-nav: var(--bg);
+  --sl-color-bg-sidebar: var(--side);
+  --sl-color-bg-inline-code: var(--code-bg);
+  --sl-color-hairline: var(--border-soft);
+  --sl-color-hairline-light: var(--border-soft);
+  --sl-color-hairline-shade: var(--border-soft);
+  --sl-color-text: var(--text);
+  --sl-color-text-accent: var(--accent);
+  --sl-color-accent: var(--accent);
+  --sl-color-accent-low: var(--accent-soft);
+  --sl-color-accent-high: var(--accent);
+  --sl-color-bg-accent: var(--accent);
+  --sl-color-blue: var(--note);
+  --sl-color-green: var(--tip);
+  --sl-color-orange: var(--caution);
+  --sl-color-red: var(--danger);
+  --sl-nav-height: 3.5rem;
+  --sl-sidebar-width: 17rem;
+  --sl-content-width: 46rem;
+  --sl-text-body: 1rem;
+  --sl-line-height: 1.65;
+}
+
+:root[data-theme='light'] {
+  --sl-color-gray-1: #3a3c42;
+  --sl-color-gray-4: #b9bbc1;
+  --sl-color-gray-7: var(--side);
+}
+
+body {
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* header: brand, search in the middle, theme select on the right */
+.sl-flex.header,
+header.header {
+  border-bottom: 1px solid var(--border-soft);
+}
+.site-title {
+  gap: 0.6rem;
+  font-weight: 600;
+  font-size: 1rem;
+}
+.site-title img {
+  width: 22px;
+  height: 22px;
+}
+.mt-version {
+  font: 500 12px var(--sans);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 6px;
+  height: 20px;
+  line-height: 18px;
+}
+
+/* sidebar */
+.sidebar-content {
+  background: var(--side);
+}
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+.sidebar-content .large {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* content */
+.sl-markdown-content h1 {
+  letter-spacing: -0.015em;
+  font-weight: 600;
+}
+.sl-markdown-content :not(pre) > code {
+  font-size: 0.86em;
+  border: 1px solid var(--border-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.sl-markdown-content table {
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+.sl-markdown-content th {
+  background: var(--surface);
+  font-weight: 600;
+}
+.sl-markdown-content th,
+.sl-markdown-content td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: 8px 12px;
+}
+.starlight-aside {
+  border-radius: 0 6px 6px 0;
+}
+kbd {
+  font: 500 11px/18px var(--sans);
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+/* Starlight pagination cards */
+.pagination-links a {
+  border-radius: 6px;
+  border-color: var(--border);
+}
+.pagination-links a:hover {
+  border-color: var(--accent);
+}
+
+/* footer */
+.mt-footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-soft);
+  font-size: 0.85rem;
+  color: var(--faint);
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.mt-footer a {
+  color: var(--muted);
+}

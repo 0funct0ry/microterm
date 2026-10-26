@@ -1,0 +1,20 @@
+[package]
+name = "mt_launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "macOS launcher: the `microterm` on $PATH (SPEC §15.5)"
+
+# Built as `microterm-launcher`; the bundle script installs it as
+# `microterm.app/Contents/Resources/bin/microterm`.
+[[bin]]
+name = "microterm-launcher"
+path = "src/main.rs"
+
+[dependencies]
+mt_cli = { path = "../mt_cli" }
+mt_proto = { path = "../mt_proto" }
+
+[dev-dependencies]
+assert_cmd.workspace = true

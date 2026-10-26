@@ -4,6 +4,7 @@ pub mod aot;
 pub mod atomic;
 pub mod diagnostics;
 pub mod diff;
+pub mod docs;
 pub mod edit;
 pub mod editor;
 pub mod keys;

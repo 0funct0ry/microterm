@@ -126,6 +126,9 @@ impl Render for AppWindow {
         if self.close_confirm.is_some() {
             root = root.child(self.close_modal(&t, cx));
         }
+        if self.about {
+            root = root.child(self.about_modal(&t, cx));
+        }
         if let Some(m) = self.menu_confirm_modal(&t, cx) {
             root = root.child(m);
         }
@@ -269,7 +272,7 @@ impl Render for AppWindow {
             .on_action(cx.listener(|_, _: &ScrollToPrompt, _, _| {}))
             .on_action(cx.listener(|this, _: &ClearScrollback, _, cx| this.clear_scrollback(cx)))
             .on_action(cx.listener(|this, _: &ResetTerminal, _, cx| this.reset_terminal(cx)))
-            .on_action(cx.listener(|this, _: &ShowAbout, _, cx| this.show_about(cx)))
+            .on_action(cx.listener(|this, _: &ShowAbout, w, cx| this.show_about(w, cx)))
             .on_action(cx.listener(|this, _: &OpenLinkAtMouse, _, cx| this.open_link_at_mouse(cx)))
             .on_action(cx.listener(|this, _: &DetachWorkspace, _, cx| this.detach_workspace(cx)))
             .on_action(cx.listener(|this, a: &AttachWorkspace, _, cx| {
@@ -1265,6 +1268,68 @@ impl AppWindow {
             .when_some(copy_cursor, |el, (row, col)| {
                 el.child(mark(row, col, 1, t.term.fg.opacity(0.7)))
             })
+    }
+
+    /// About microterm: the logo, version, licence and where the third-party notices are.
+    fn about_modal(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let (docs, _, _) = crate::menu_bar::help_urls();
+        let notices = crate::app_icon::notices_url();
+        Modal::new("about-modal")
+            .width(px(420.))
+            .top(px(TITLE_BAR_HEIGHT + PALETTE_TOP_OFFSET))
+            .on_dismiss(cx.listener_for_dismiss())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_3()
+                    .p_4()
+                    .child(
+                        gpui::img(crate::app_icon::logo_image())
+                            .size(px(72.))
+                            .flex_none(),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(16.))
+                            .child("microterm"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(t.text_muted)
+                            .child("Licence: MIT. Built with Rust and GPUI."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("about-docs", "Docs")
+                                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(docs))),
+                            )
+                            .child(
+                                Button::new("about-notices", "Third-party notices").on_click(
+                                    cx.listener(move |_, _, _, cx| cx.open_url(&notices)),
+                                ),
+                            )
+                            .child(
+                                Button::new("about-close", "Close")
+                                    .style(ButtonStyle::Filled)
+                                    .on_click(
+                                        cx.listener(|this, _, w, cx| this.dismiss_top(w, cx)),
+                                    ),
+                            ),
+                    ),
+            )
     }
 
     fn close_modal(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {

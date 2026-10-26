@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>microterm (small sizes)</title>
+  <rect width="1024" height="1024" rx="225" fill="#21252b"/>
+  <rect x="115" y="190" width="794" height="644" rx="90" fill="#282c34" stroke="#3e4451" stroke-width="20"/>
+  <circle cx="228" cy="296" r="34" fill="#e06c75"/>
+  <circle cx="330" cy="296" r="34" fill="#e5c07b"/>
+  <circle cx="432" cy="296" r="34" fill="#98c379"/>
+  <g fill="none" stroke="#c678dd" stroke-width="96" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M342 460 V800"/>
+    <path d="M342 620 Q342 724 450 724 H574 Q682 724 682 620 V460"/>
+  </g>
+</svg>

@@ -293,6 +293,17 @@ fn confirm_close_always_asks_first(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn about_opens_a_dialog_and_escape_closes_it(cx: &mut TestAppContext) {
+    let (view, cx) = setup(cx);
+    cx.dispatch_action(ShowAbout);
+    assert_eq!(top(&view, cx), Some(OverlayKind::About));
+    assert!(view.read_with(cx, |t, _| t.about));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(top(&view, cx), None);
+    assert!(!view.read_with(cx, |t, _| t.about));
+}
+
+#[gpui::test]
 fn confirm_close_never_closes_immediately(cx: &mut TestAppContext) {
     let (view, cx) = setup(cx);
     cx.dispatch_action(SpawnTab);

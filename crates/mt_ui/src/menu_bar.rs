@@ -4,12 +4,13 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use gpui::{Action, App, Global, Menu, MenuItem, SystemMenuType};
+use gpui::{Action, App, Global, Menu, MenuItem, SystemMenuType, Window};
 use mt_config::{ActionArg, Config};
 use serde::Serialize;
 
 use crate::actions::{self, MenuDisabled, ACTIONS};
 use crate::keychips::format_keystroke;
+use crate::overlay_stack::OverlayKind;
 use crate::platform::Platform;
 use crate::{app::AppWindow, mux_host, settings::Settings};
 
@@ -528,16 +529,9 @@ impl AppWindow {
         }
     }
 
-    pub(crate) fn show_about(&mut self, cx: &mut Context<Self>) {
-        self.toast(
-            ToastKind::Info,
-            format!(
-                "microterm {} · MIT licence · {}",
-                env!("CARGO_PKG_VERSION"),
-                DOCS_URL
-            ),
-            cx,
-        );
+    pub(crate) fn show_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.about = true;
+        self.open_overlay(OverlayKind::About, window, cx);
     }
 
     pub(crate) fn open_help(&mut self, url: &'static str, cx: &mut Context<Self>) {

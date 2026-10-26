@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=microterm
+GenericName=Terminal Emulator
+Comment=A minimal GPU-accelerated terminal emulator
+Exec=microterm
+Icon=microterm
+Terminal=false
+Categories=System;TerminalEmulator;Utility;
+Keywords=terminal;shell;prompt;command;console;ssh;
+StartupNotify=true
+# Matches the Wayland app_id / X11 WM_CLASS the window sets, so the shell shows this icon.
+StartupWMClass=microterm
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=microterm

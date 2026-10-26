@@ -1,0 +1,15 @@
+[package]
+name = "mt_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["sh"]
+# `microterm sh` subcommand definition (SPEC §12.7).
+sh = []
+
+[dependencies]
+clap.workspace = true
+mt_proto = { path = "../mt_proto" }

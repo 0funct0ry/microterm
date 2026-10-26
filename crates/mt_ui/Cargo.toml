@@ -39,3 +39,9 @@ notify-rust = "4"
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+
+# Dev-build Dock icon (SPEC §15.5): the versions gpui already pulls in.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData"] }

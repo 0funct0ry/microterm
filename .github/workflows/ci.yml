@@ -37,7 +37,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-about
 
       # fmt check, clippy -D warnings, cargo-deny and the alacritty_terminal facade grep.
       - run: make lint
@@ -75,3 +75,42 @@ jobs:
       - run: make test-ssh
         env:
           MICROTERM_MUX_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/microterm-mux
+
+  # Release artefacts for this machine, then install.sh against them (SPEC §15.3). The same
+  # steps release.yml runs, minus signing and publishing.
+  package:
+    name: package ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake pkg-config libssl-dev libfontconfig-dev libasound2-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+            libx11-xcb-dev libvulkan-dev libzstd-dev libudev-dev musl-tools \
+            librsvg2-bin imagemagick shellcheck
+      - name: Install macOS tools
+        if: runner.os == 'macOS'
+        run: brew install librsvg imagemagick shellcheck
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: shellcheck scripts/install.sh scripts/bundle-macos.sh scripts/bundle-linux.sh scripts/package-mux.sh scripts/checksums.sh scripts/release-notes.sh scripts/gen-icons.sh
+      - run: make release-dry
+      - name: install.sh against the local artefacts
+        run: |
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' Cargo.toml | head -1)
+          MICROTERM_RELEASE_BASE="file://$PWD/dist" sh scripts/install.sh \
+            --version "v$ver" --prefix "$RUNNER_TEMP/p" --no-modify-path
+          "$RUNNER_TEMP/p/bin/microterm" --version --verbose | grep -q 'License: MIT'

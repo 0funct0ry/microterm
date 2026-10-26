@@ -4158,13 +4158,14 @@ dependencies = [
 
 [[package]]
 name = "microterm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "assert_cmd",
  "async-channel 2.5.0",
  "clap",
  "clap_complete",
  "libc",
+ "mt_cli",
  "mt_config",
  "mt_export",
  "mt_mux",
@@ -4286,8 +4287,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt_cli"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "mt_proto",
+]
+
+[[package]]
 name = "mt_config"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel 2.5.0",
  "mt_patterns",
@@ -4303,7 +4312,7 @@ dependencies = [
 
 [[package]]
 name = "mt_export"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fontdue",
  "gif",
@@ -4319,8 +4328,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt_launcher"
+version = "1.0.0"
+dependencies = [
+ "assert_cmd",
+ "mt_cli",
+ "mt_proto",
+]
+
+[[package]]
 name = "mt_mux"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "mt_proto",
  "regex",
@@ -4329,7 +4347,7 @@ dependencies = [
 
 [[package]]
 name = "mt_mux_server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "libc",
@@ -4339,14 +4357,14 @@ dependencies = [
 
 [[package]]
 name = "mt_patterns"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mt_proto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "postcard",
  "proptest",
@@ -4358,7 +4376,7 @@ dependencies = [
 
 [[package]]
 name = "mt_record"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "mt_config",
  "mt_term",
@@ -4369,7 +4387,7 @@ dependencies = [
 
 [[package]]
 name = "mt_serial"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel 2.5.0",
  "mt_ssh",
@@ -4378,7 +4396,7 @@ dependencies = [
 
 [[package]]
 name = "mt_snippets"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4401,7 +4419,7 @@ dependencies = [
 
 [[package]]
 name = "mt_ssh"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel 2.5.0",
  "mt_mux_server",
@@ -4418,7 +4436,7 @@ dependencies = [
 
 [[package]]
 name = "mt_term"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "alacritty_terminal",
  "libc",
@@ -4431,7 +4449,7 @@ dependencies = [
 
 [[package]]
 name = "mt_theme"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "toml 0.8.23",
@@ -4439,7 +4457,7 @@ dependencies = [
 
 [[package]]
 name = "mt_triggers"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "libc",
  "mt_config",
@@ -4456,7 +4474,7 @@ dependencies = [
 
 [[package]]
 name = "mt_ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -4476,6 +4494,9 @@ dependencies = [
  "mt_triggers",
  "notify-rust",
  "nucleo-matcher",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "regex",
  "serde",
  "serde_json",
@@ -9194,9 +9215,10 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "microterm",
+ "mt_config",
  "mt_export",
  "mt_snippets",
  "mt_term",

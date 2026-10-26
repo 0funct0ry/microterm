@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>microterm</title>
+  <rect width="1024" height="1024" rx="225" fill="#21252b"/>
+  <rect x="133" y="205" width="758" height="624" rx="77" fill="#282c34" stroke="#3e4451" stroke-width="15"/>
+  <circle cx="236" cy="297" r="28" fill="#e06c75"/>
+  <circle cx="328" cy="297" r="28" fill="#e5c07b"/>
+  <circle cx="420" cy="297" r="28" fill="#98c379"/>
+  <line x1="133" y1="379" x2="891" y2="379" stroke="#3e4451" stroke-width="10"/>
+  <g fill="none" stroke="#c678dd" stroke-width="56" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M362 480 V790"/>
+    <path d="M362 620 Q362 706 450 706 H552 Q640 706 640 620 V480"/>
+  </g>
+  <rect x="716" y="668" width="50" height="76" rx="8" fill="#61afef"/>
+</svg>

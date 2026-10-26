@@ -1,0 +1,31 @@
+/* Shared design tokens for the marketing page and the docs (SPEC §16): One Light / One Dark.
+   Starlight sets data-theme on <html>; the marketing page does the same, so both follow
+   prefers-color-scheme and the manual toggle. */
+:root{
+  color-scheme: light;
+  --bg:#fafafa; --side:#f2f2f3; --surface:#ececee; --raised:#ffffff; --border:#d4d5d9; --border-soft:#e4e5e8;
+  --text:#242529; --muted:#5d5f66; --faint:#83858c; --accent:#3f5bc4; --accent-soft:#3f5bc414; --code-bg:#f2f2f4;
+  --note:#3f5bc4; --tip:#4f8a43; --caution:#9a7a12; --danger:#b8473c;
+  --str:#4f8a43; --kw:#9a4fb8; --num:#a8692b; --cm:#868892;
+  --ok:#4f8a43; --warn:#9a7a12; --mk-bg:#f7f7f8;
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --bg:#22262d; --side:#1f2329; --surface:#2b3038; --raised:#282c33; --border:#3c424d; --border-soft:#31363f;
+    --text:#dce0e5; --muted:#a2a8b4; --faint:#7e8491; --accent:#74ade8; --accent-soft:#74ade81a; --code-bg:#1d2026;
+    --note:#74ade8; --tip:#a1c181; --caution:#dec184; --danger:#d07277;
+    --str:#a1c181; --kw:#b477cf; --num:#d29c64; --cm:#7e8491;
+    --ok:#a1c181; --warn:#dec184; --mk-bg:#1f2329;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#22262d; --side:#1f2329; --surface:#2b3038; --raised:#282c33; --border:#3c424d; --border-soft:#31363f;
+  --text:#dce0e5; --muted:#a2a8b4; --faint:#7e8491; --accent:#74ade8; --accent-soft:#74ade81a; --code-bg:#1d2026;
+  --note:#74ade8; --tip:#a1c181; --caution:#dec184; --danger:#d07277;
+  --str:#a1c181; --kw:#b477cf; --num:#d29c64; --cm:#7e8491;
+  --ok:#a1c181; --warn:#dec184; --mk-bg:#1f2329;
+}

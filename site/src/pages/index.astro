@@ -1,19 +1,272 @@
 ---
-// Empty marketing index. M13 implements it from MARKETING-MOCKUP.html.
+// Marketing page (SPEC §16), implemented from MARKETING-MOCKUP.html.
+import '../styles/fonts.css';
+import '../styles/tokens.css';
+import '../styles/marketing.css';
+import logo from '../assets/logo.svg';
+import { VERSION } from '../version';
+
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const site = 'https://0funct0ry.github.io/microterm';
+const version = VERSION;
+const title = 'microterm: a fast, quiet terminal for macOS and Linux';
+const description =
+  'GPU-rendered terminal with workspaces, quick select, vi-style copy mode and SSH sessions that survive a dropped connection. Configured in one TOML file.';
 ---
 <!doctype html>
-<html lang="en">
+<html lang="en" data-version={version}>
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>microterm</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+    <link rel="icon" href={`${base}/favicon.ico`} sizes="48x48" />
+    <link rel="apple-touch-icon" href={`${base}/apple-touch-icon.png`} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={`${site}/`} />
+    <meta property="og:image" content={`${site}/og.png`} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline>
+      try {
+        var t = localStorage.getItem('starlight-theme');
+        if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
-  <body>
-    <main>
-      <h1>microterm</h1>
-      <p>Marketing page coming soon.</p>
-      <p><a href={`${base}/docs/installation/`}>Read the docs</a></p>
-    </main>
+  <body class="mk">
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href={`${base}/`}><img class="brand-mark" src={logo.src} width="24" height="24" alt="" />microterm</a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#features" class="hide-sm">Features</a>
+      <a href="#ssh" class="hide-sm">SSH</a>
+      <a href="#compare" class="hide-sm">Compare</a>
+      <a href={`${base}/docs/installation/`}>Docs</a>
+      <a href="https://github.com/0funct0ry/microterm">GitHub</a>
+    </nav>
+    <button class="icon-btn" id="pageTheme" aria-label="Toggle light and dark page theme" title="Toggle page theme">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+<div class="wrap">
+  <section class="hero" style="padding-top:72px">
+    <h1>A fast, quiet terminal for macOS and Linux.</h1>
+    <p class="lede">GPU-rendered, configured in one TOML file that reloads as you save. Workspaces, quick select, a vi-style copy mode and SSH sessions that survive a dropped connection are built in.</p>
+    <div class="cta">
+      <div class="oneliner" role="group" aria-label="Install with Homebrew">
+        <code><span class="p">$ </span>brew install --cask 0funct0ry/tap/microterm</code>
+        <button class="copy" data-copy="brew install --cask 0funct0ry/tap/microterm">Copy</button>
+      </div>
+      <a class="btn" href={`${base}/docs/installation/`}>Read the docs</a>
+    </div>
+    <p class="meta-line">v{version} for macOS 12+ and Linux (Wayland or X11). MIT licensed.</p>
+
+    <!-- interactive demo -->
+    <div class="demo">
+      <div class="term" id="term" tabindex="0" aria-label="Interactive microterm demo. Focus it and use the shortcuts listed below.">
+        <div class="tb">
+          <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+          <button class="ws-chip" id="wsChip" title="Switch workspace"><span id="wsName">payments</span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="tb-title" id="tbTitle">~/src/payments-api — zsh</div>
+          <div class="domain"><span class="dot ok" id="domDot"></span><span id="domName">local</span></div>
+        </div>
+        <div class="tabs" role="tablist" id="tabs"></div>
+        <div class="viewport" id="vp">
+          <div class="grid" id="grid" aria-live="off"></div>
+          <div class="layer" id="layer"></div>
+          <div class="pill" id="pill">Copy mode</div>
+          <div class="palette" id="palette" role="dialog" aria-label="Command palette">
+            <input id="palIn" placeholder="Run an action, switch workspace or pick a theme" autocomplete="off" spellcheck="false" aria-controls="palList">
+            <ul id="palList" role="listbox"></ul>
+          </div>
+          <div class="recon" id="recon">
+            <div class="recon-card" role="status">
+              <h4><span class="dot warn"></span>Connection to prod lost</h4>
+              <p id="reconMsg">Reconnecting in 2 s (attempt 1). The remote session keeps running.</p>
+              <div class="row"><button class="fill" id="reconNow">Reconnect now</button><button id="reconClose">Close tab</button></div>
+            </div>
+          </div>
+          <div class="toasts" id="toasts" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <span>Click the terminal, then try</span>
+        <div class="try">
+          <button class="chipbtn" data-act="qs"><kbd data-k="qs"></kbd>Quick select</button>
+          <button class="chipbtn" data-act="cm"><kbd data-k="cm"></kbd>Copy mode</button>
+          <button class="chipbtn" data-act="pal"><kbd data-k="pal"></kbd>Command palette</button>
+          <button class="chipbtn" data-act="drop">Drop the SSH connection</button>
+        </div>
+      </div>
+      <div class="swatches" id="swatches" role="group" aria-label="Terminal theme"></div>
+    </div>
+  </section>
+
+  <!-- features -->
+  <section id="features">
+    <div class="sec-head">
+      <h2>Everything you used to bolt on</h2>
+      <p>tmux for sessions, a hint plugin for hashes, a script for recording. microterm does these itself, with the same keys on both platforms.</p>
+    </div>
+    <div class="groups">
+      <div class="group">
+        <div><h3>Grab text without the mouse</h3><p>Copy what you see in two keystrokes.</p></div>
+        <div class="feat">
+          <div><h4>Quick select <kbd data-k="qs"></kbd></h4><p>Labels every git hash, IP, path, UUID and URL on screen. Type a label to copy it, or the capital letter to paste it too.</p></div>
+          <div><h4>Copy mode <kbd data-k="cm"></kbd></h4><p>vi motions over the scrollback: <code>w b e</code>, <code>gg G</code>, search with <code>/</code>, block selection with <code>Ctrl-v</code>.</p></div>
+          <div><h4>Hyperlinks</h4><p>OSC 8 links plus your own regex rules. Turn <code>PAY-12</code> into a link to your tracker in one line of config.</p></div>
+          <div><h4>Mouse that behaves</h4><p>Full SGR reporting for vim and htop. Hold Shift to select anyway. Word, line and block selection.</p></div>
+        </div>
+      </div>
+      <div class="group">
+        <div><h3>Keep sessions organised</h3><p>Group work the way tmux does, with native tabs.</p></div>
+        <div class="feat">
+          <div><h4>Workspaces</h4><p>Named groups of windows and tabs. Switch between "payments" and "infra" and only that work is on screen.</p></div>
+          <div><h4>Command palette <kbd data-k="pal"></kbd></h4><p>Every action, tab, workspace and theme, fuzzy-searchable, with its shortcut shown next to it.</p></div>
+          <div><h4>Launcher</h4><p>One list for launch profiles, SSH hosts and workspaces. Declare startup workspaces in config.</p></div>
+          <div><h4>Splits</h4><p>Split any tab into panes, locally or over SSH, with focus following the mouse if you want it.</p></div>
+        </div>
+      </div>
+      <div class="group">
+        <div><h3>Make it yours</h3><p>One file, no restarts.</p></div>
+        <div class="feat">
+          <div><h4>Live config</h4><p>Save <code>microterm.toml</code> and colours, fonts and keys change in every window. A typo shows the line and column and keeps the last good config.</p></div>
+          <div><h4>53 themes</h4><p>One Dark and One Light plus Catppuccin, Tokyo Night, Rosé Pine, Kanagawa and more. Follows the system appearance if you want it to.</p></div>
+          <div><h4>Real typography</h4><p>Ligatures that break apart under the cursor, colour emoji, CJK, and a fallback chain you control.</p></div>
+          <div><h4>Every underline</h4><p>Bold, italic, <span style="text-decoration:underline double">double</span>, <span style="text-decoration:underline wavy;text-decoration-color:#d07277">curly</span>, dotted and coloured underlines, strikethrough, true colour.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- config + cli -->
+  <section>
+    <div class="sec-head">
+      <h2>Configure in TOML, script from the shell</h2>
+      <p>The config is a single readable file. Everything the UI can do, <code>microterm ctl</code> can do too, with JSON output for scripts.</p>
+    </div>
+    <div class="split2">
+      <div class="panel">
+        <div class="panel-h">~/.config/microterm/microterm.toml</div>
+<pre class="code"><span class="k">theme</span> = &#123; dark = <span class="str">"Tokyo Night"</span>, light = <span class="str">"One Light"</span> &#125;
+
+<span class="sec">[font]</span>
+<span class="k">family</span>    = <span class="str">"JetBrains Mono"</span>
+<span class="k">size</span>      = <span class="num">13.5</span>
+<span class="k">ligatures</span> = <span class="k">true</span>
+
+<span class="sec">[[hyperlink_rules]]</span>
+<span class="k">regex</span>  = <span class="str">'\b(PAY-\d+)\b'</span>
+<span class="k">format</span> = <span class="str">"https://tracker.example.com/$1"</span>
+
+<span class="sec">[[workspaces]]</span>
+<span class="k">name</span> = <span class="str">"payments"</span>
+<span class="k">tabs</span> = [
+  &#123; title = <span class="str">"api"</span>, cwd = <span class="str">"~/src/payments-api"</span> &#125;,
+  &#123; title = <span class="str">"watch"</span>, command = [<span class="str">"cargo"</span>, <span class="str">"watch"</span>] &#125;,
+]</pre>
+      </div>
+      <div class="panel">
+        <div class="panel-h">zsh</div>
+<pre class="code"><span class="cm"># open a tab in the current window and run tests</span>
+$ microterm ctl tab new --title tests -- cargo test
+<span class="num">14</span>
+
+<span class="cm"># read what it printed</span>
+$ microterm ctl pane get-text --pane 14 | tail -3
+
+<span class="cm"># record a session as asciicast v2</span>
+$ microterm record -o demo.cast -- ./scripts/demo.sh
+
+<span class="cm"># jump to a workspace from anywhere</span>
+$ microterm ctl workspace switch infra</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ssh -->
+  <section id="ssh">
+    <div class="sec-head">
+      <h2>SSH sessions that outlive your Wi-Fi</h2>
+      <p>microterm runs a small daemon on the remote host. Your shells live there, so a dropped connection pauses the view instead of killing the work.</p>
+    </div>
+    <ol class="steps">
+      <li><span class="n">1</span><h4>Connect</h4><p>Pick a host from the launcher or run <code>microterm ssh prod</code>. Reads your <code>~/.ssh/config</code>, agent and known hosts.</p></li>
+      <li><span class="n">2</span><h4>Lose the network</h4><p>The tab dims and shows the retry count. Processes on the host keep running.</p></li>
+      <li><span class="n">3</span><h4>Pick up where you were</h4><p>On reconnect the screen and scrollback come back exactly as the remote shell left them.</p></li>
+    </ol>
+    <div class="ssh-cta"><button class="chipbtn" data-act="drop">Try it in the demo above</button><span>The daemon is uploaded and version-matched automatically.</span></div>
+  </section>
+
+  <!-- compare -->
+  <section id="compare">
+    <div class="sec-head">
+      <h2>How it compares</h2>
+      <p>microterm is new. Here is where it stands next to terminals you might already use, including the rows where it falls short.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col"></th><th scope="col">microterm</th><th scope="col">WezTerm</th><th scope="col">Kitty</th><th scope="col">Alacritty</th><th scope="col">Ghostty</th></tr></thead>
+        <tbody>
+          <tr><td>macOS and Linux</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+          <tr><td>Windows</td><td class="no">No</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td><td class="no">No</td></tr>
+          <tr><td>Built-in tabs</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><td>Splits</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><td>SSH sessions survive disconnects</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td>Inline images</td><td class="soon">v1.2</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><td>Config format</td><td>TOML (Lua in v1.3)</td><td>Lua</td><td>kitty.conf</td><td>TOML</td><td>Own format</td></tr>
+          <tr><td>Track record</td><td class="no">New</td><td>Years</td><td>Years</td><td>Years</td><td>Since 2024</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">As of October 2026. Check each project's documentation before deciding, and open an issue if a row is wrong.</p>
+  </section>
+
+  <!-- roadmap -->
+  <section id="roadmap">
+    <div class="sec-head"><h2>What's next</h2><p>Each release is small and ships when it works end to end.</p></div>
+    <ol class="roadmap">
+      <li class="now"><span class="v">v1.0</span><h4>Today</h4><p>Tabs, splits, workspaces, SSH, serial ports, quick select, copy mode, CLI.</p></li>
+      <li><span class="v">v1.2</span><h4>Images</h4><p>Kitty and iTerm2 graphics.</p></li>
+      <li><span class="v">v1.3</span><h4>Lua config</h4><p>Logic, variables and callbacks, same schema as TOML.</p></li>
+      <li><span class="v">v1.4</span><h4>Plugins</h4><p>One-line GitHub plugins, pinned to a commit.</p></li>
+    </ol>
+  </section>
+
+  <!-- install -->
+  <section id="install">
+    <div class="sec-head"><h2>Install</h2><p>Every method installs the same signed build and the <code>microterm</code> command.</p></div>
+    <div class="panel">
+      <div class="install-tabs" role="tablist" id="instTabs">
+        <button role="tab" aria-selected="true" data-i="0">Homebrew (macOS)</button>
+        <button role="tab" aria-selected="false" data-i="1">Homebrew (Linux)</button>
+        <button role="tab" aria-selected="false" data-i="2">Install script</button>
+        <button role="tab" aria-selected="false" data-i="3">Manual download</button>
+      </div>
+      <div class="install-body">
+        <pre class="code" id="instCode"></pre>
+        <button class="copy" id="instCopy">Copy</button>
+      </div>
+    </div>
+  </section>
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>microterm is MIT licensed. Built with Rust and GPUI. <a href="https://github.com/0funct0ry/microterm/blob/main/LICENSE">LICENSE</a> · <a href={`${base}/THIRD-PARTY-LICENSES.html`}>Third-party notices</a></span>
+    <nav aria-label="Footer"><a href={`${base}/docs/installation/`}>Docs</a><a href="https://github.com/0funct0ry/microterm">GitHub</a><a href="https://github.com/0funct0ry/microterm/releases">Releases</a><a href={`${base}/docs/roadmap/`}>Roadmap</a><a href={`${base}/docs/changelog/`}>Changelog</a><a href="https://github.com/0funct0ry/microterm/blob/main/LICENSE">LICENSE</a><a href={`${base}/THIRD-PARTY-LICENSES.html`}>Third-party notices</a></nav>
+  </div>
+</footer>
+  <script>
+    import '../scripts/demo.js';
+  </script>
   </body>
 </html>

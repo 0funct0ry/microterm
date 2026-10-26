@@ -1,0 +1,13 @@
+---
+// Default Starlight footer plus the licence links required by SPEC §15.6.
+import Default from '@astrojs/starlight/components/Footer.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Default {...Astro.props}><slot /></Default>
+<div class="mt-footer">
+  <span>microterm is MIT licensed.</span>
+  <a href="https://github.com/0funct0ry/microterm/blob/main/LICENSE">LICENSE</a>
+  <a href={`${base}/THIRD-PARTY-LICENSES.html`}>Third-party notices</a>
+  <a href={`${base}/`}>Home</a>
+</div>

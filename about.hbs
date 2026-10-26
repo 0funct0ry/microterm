@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>microterm third-party licences</title>
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#222;background:#fff}
+@media(prefers-color-scheme:dark){body{color:#abb2bf;background:#21252b}a{color:#61afef}}
+pre{white-space:pre-wrap;font-size:12px;overflow-x:auto}
+li{margin:.1rem 0}
+</style>
+</head>
+<body>
+<h1>Third-party licences</h1>
+<p>microterm is MIT licensed (see <code>LICENSE</code>). It includes the following third-party software.</p>
+<h2>Overview of Rust crate licences</h2>
+<ul>
+{{#each overview}}<li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}</ul>
+{{#each licenses}}
+<h3 id="{{id}}">{{name}}</h3>
+<h4>Used by</h4>
+<ul>
+{{#each used_by}}<li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}</ul>
+<pre>{{text}}</pre>
+{{/each}}
+<!--ASSETS-->
+</body>
+</html>

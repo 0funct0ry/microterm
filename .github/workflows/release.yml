@@ -1,0 +1,169 @@
+name: release
+
+# Manual only: Actions -> release -> Run workflow, with the version (for example 1.0.0).
+# Builds every artefact (SPEC §15.2) from the selected branch and drafts a release with notes from
+# CHANGELOG.md. The tag vX.Y.Z is created when you publish the draft; homebrew.yml then updates the
+# tap and pages.yml the site. Pushing commits or tags never starts this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (must match Cargo.toml), e.g. 1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin, kind: macos }
+          - { os: macos-13, target: x86_64-apple-darwin, kind: macos }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, kind: linux }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, kind: linux }
+    env:
+      TAG: v${{ inputs.version }}
+      TARGET: ${{ matrix.target }}
+      # Signing and notarization run only when these secrets exist (otherwise ad-hoc signed).
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version must match Cargo.toml
+        run: |
+          echo "VERSION=${{ inputs.version }}" >> "$GITHUB_ENV"
+          cargo_ver=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' Cargo.toml | head -1)
+          [ "$cargo_ver" = "${{ inputs.version }}" ] || { echo "Cargo.toml is $cargo_ver, not ${{ inputs.version }}"; exit 1; }
+
+      - name: Install Linux build dependencies
+        if: matrix.kind == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake pkg-config libssl-dev libfontconfig-dev libasound2-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+            libx11-xcb-dev libvulkan-dev mesa-vulkan-drivers libzstd-dev libudev-dev \
+            musl-tools librsvg2-bin imagemagick
+
+      - name: Install macOS tools
+        if: matrix.kind == 'macos'
+        run: brew install librsvg imagemagick
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Licence files are current
+        run: make licenses-check
+
+      - name: Import the Developer ID certificate
+        if: matrix.kind == 'macos' && env.APPLE_CERTIFICATE != ''
+        run: |
+          kc="$RUNNER_TEMP/build.keychain-db"; pw=$(uuidgen)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc"
+          security list-keychains -d user -s "$kc" login.keychain
+          id=$(security find-identity -v -p codesigning "$kc" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)
+          echo "APPLE_SIGNING_IDENTITY=$id" >> "$GITHUB_ENV"
+
+      - name: Bundle (macOS)
+        if: matrix.kind == 'macos'
+        run: scripts/bundle-macos.sh
+
+      - name: Notarize
+        if: matrix.kind == 'macos' && env.APPLE_CERTIFICATE != '' && env.APPLE_ID != ''
+        run: |
+          dmg=$(ls dist/*.dmg)
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$dmg"
+
+      - name: Bundle (Linux)
+        if: matrix.kind == 'linux'
+        run: scripts/bundle-linux.sh
+
+      - name: Static microterm-mux
+        run: scripts/package-mux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/microterm-*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    env:
+      TAG: v${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: Checksums (fails if any artefact lacks LICENSE or THIRD-PARTY-LICENSES.html)
+        run: scripts/checksums.sh dist
+      - name: Release notes from CHANGELOG.md
+        run: scripts/release-notes.sh "$TAG" > notes.md
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" \
+            --title "microterm $TAG" --notes-file notes.md dist/*
+
+  # install.sh against the draft release's artefacts (SPEC §15.3).
+  install-test:
+    needs: release
+    env:
+      TAG: v${{ inputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the draft's artefacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" --dir dl --pattern 'microterm-*' --pattern SHA256SUMS
+      - name: Install
+        run: |
+          MICROTERM_RELEASE_BASE="file://$PWD/dl" sh scripts/install.sh \
+            --version "$TAG" --prefix "$RUNNER_TEMP/p" --no-modify-path
+      - name: Smoke test
+        run: |
+          "$RUNNER_TEMP/p/bin/microterm" --version --verbose | tee out.txt
+          grep -q 'License: MIT' out.txt
+          if [ "$(uname -s)" = Darwin ]; then
+            file "$(readlink "$RUNNER_TEMP/p/bin/microterm")" | grep -q Mach-O
+            test -f "$RUNNER_TEMP/p/Applications/microterm.app/Contents/Resources/LICENSE"
+          else
+            test -f "$RUNNER_TEMP/p/share/doc/microterm/THIRD-PARTY-LICENSES.html"
+          fi

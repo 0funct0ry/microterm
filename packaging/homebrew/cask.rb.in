@@ -1,0 +1,38 @@
+cask "microterm" do
+  arch arm: "aarch64", intel: "x86_64"
+
+  version "@VERSION@"
+  sha256 arm:   "@SHA_ARM@",
+         intel: "@SHA_INTEL@"
+
+  url "https://github.com/0funct0ry/microterm/releases/download/v#{version}/microterm-#{version}-#{arch}-apple-darwin.dmg"
+  name "microterm"
+  desc "Minimal GPU-accelerated terminal emulator"
+  homepage "https://0funct0ry.github.io/microterm/"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  depends_on macos: ">= :monterey"
+
+  app "microterm.app"
+  # The launcher, never microterm-app: it gives the Dock icon and forwards the CLI.
+  # LICENSE and THIRD-PARTY-LICENSES.html are inside the app (Contents/Resources).
+  binary "#{appdir}/microterm.app/Contents/Resources/bin/microterm"
+
+  # The app is ad-hoc signed, not notarized (no Apple Developer membership), so Gatekeeper would
+  # block a quarantined download. Clear the flag Homebrew sets so `brew install` just works.
+  # Remove this block once releases are notarized.
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/microterm.app"],
+                   sudo: false
+  end
+
+  zap trash: [
+    "~/Library/Application Support/microterm",
+    "~/.config/microterm",
+  ]
+end

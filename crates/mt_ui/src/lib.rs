@@ -3,6 +3,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod app_icon;
 pub mod assets;
 mod builtin_glyphs;
 pub mod components;
@@ -90,6 +91,7 @@ pub fn run(opts: RunOptions) {
     Application::new()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
+            app_icon::set_dock_icon_if_unbundled();
             assets::load_fonts(cx).expect("bundled fonts must load");
             let families = cx.text_system().all_font_names();
             let settings = settings::Settings::load(path.clone());

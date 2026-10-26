@@ -314,6 +314,8 @@ pub struct AppWindow {
     /// Inline tab rename in progress: `(tab id, text)`.
     pub(crate) renaming: Option<(u64, String)>,
     pub(crate) close_confirm: Option<CloseTarget>,
+    /// The About dialog is open.
+    pub(crate) about: bool,
     pub(crate) prompt: Option<NamePrompt>,
     pub(crate) designer: Option<crate::designer::Designer>,
     /// The snippets panel, fill dialog and editor (SPEC §10.8).
@@ -464,6 +466,7 @@ impl AppWindow {
             active_tab: 0,
             renaming: None,
             close_confirm: None,
+            about: false,
             prompt: None,
             designer: None,
             snippets,
@@ -1458,6 +1461,7 @@ impl AppWindow {
             | OverlayKind::WorkspaceDesigner
             | OverlayKind::SnippetFill
             | OverlayKind::ExportDialog
+            | OverlayKind::About
             | OverlayKind::SshPrompt => {}
         }
     }
@@ -1539,6 +1543,7 @@ impl AppWindow {
             OverlayKind::SnippetFill => self.snippets.fill = None,
             OverlayKind::ExportDialog => self.recordings.dialog = None,
             OverlayKind::CloseConfirm => self.close_confirm = None,
+            OverlayKind::About => self.about = false,
             OverlayKind::MenuConfirm => self.menu_confirm = None,
             OverlayKind::NamePrompt => self.prompt = None,
             OverlayKind::WorkspaceDesigner => self.designer = None,
@@ -2985,6 +2990,11 @@ impl AppWindow {
             Some(OverlayKind::WorkspaceDesigner) => self.designer_key(ev, window, cx),
             Some(OverlayKind::SnippetFill) => self.fill_key(ev, window, cx),
             Some(OverlayKind::ExportDialog) => self.export_key(ev, window, cx),
+            Some(OverlayKind::About) => {
+                if ev.keystroke.key == "enter" {
+                    self.dismiss_top(window, cx);
+                }
+            }
             None => {}
         }
     }

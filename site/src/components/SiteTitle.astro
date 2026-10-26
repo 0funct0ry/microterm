@@ -1,0 +1,24 @@
+---
+// Header brand: the approved logo, the name and the version badge (DOCS-MOCKUP.html).
+import logo from '../assets/logo.svg';
+import { VERSION } from '../version';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const [major, minor] = VERSION.split('.');
+---
+<a href={`${base}/`} class="site-title sl-flex">
+  <img src={logo.src} alt="" width="22" height="22" />
+  <span>microterm</span>
+  <small class="mt-version">v{major}.{minor}</small>
+</a>
+<style>
+  .site-title {
+    align-items: center;
+    color: var(--sl-color-text-accent);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  small {
+    margin-left: 0.5rem;
+  }
+</style>

@@ -25,6 +25,8 @@ pub enum OverlayKind {
     SnippetFill,
     /// The recordings export dialog (SPEC §10.10.5).
     ExportDialog,
+    /// About microterm: version, licence, the logo.
+    About,
 }
 
 /// Overlays in the same class replace each other instead of stacking.
@@ -55,7 +57,8 @@ impl OverlayKind {
             | Self::WorkspaceDesigner
             | Self::MenuConfirm
             | Self::SnippetFill
-            | Self::ExportDialog => Class::Dialog,
+            | Self::ExportDialog
+            | Self::About => Class::Dialog,
         }
     }
 }

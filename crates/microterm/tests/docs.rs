@@ -35,6 +35,8 @@ fn no_doc_mentions_microterm_cli() {
     assert!(!files.is_empty(), "found no docs to check");
     let bad: Vec<String> = files
         .iter()
+        // The generated changelog is history: it legitimately says what `microterm cli` became.
+        .filter(|f| f.file_name().is_none_or(|n| n != "changelog.md"))
         .filter(|f| {
             std::fs::read_to_string(f).is_ok_and(|s| {
                 s.contains("microterm cli") || s.contains("`cli ") || s.contains("microterm-cli")

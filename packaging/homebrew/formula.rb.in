@@ -1,0 +1,30 @@
+class Microterm < Formula
+  desc "Minimal GPU-accelerated terminal emulator"
+  homepage "https://0funct0ry.github.io/microterm/"
+  version "@VERSION@"
+  license "MIT"
+
+  on_linux do
+    on_intel do
+      url "https://github.com/0funct0ry/microterm/releases/download/v@VERSION@/microterm-@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_LINUX_X86_64@"
+    end
+    on_arm do
+      url "https://github.com/0funct0ry/microterm/releases/download/v@VERSION@/microterm-@VERSION@-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA_LINUX_AARCH64@"
+    end
+  end
+
+  depends_on :linux
+
+  def install
+    bin.install "bin/microterm"
+    (share/"applications").install "share/applications/microterm.desktop"
+    share.install "share/icons"
+    doc.install "LICENSE", "THIRD-PARTY-LICENSES.html"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/microterm --version")
+  end
+end

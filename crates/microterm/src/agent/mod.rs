@@ -1,8 +1,6 @@
 //! Agent integration (SPEC §12.5): the skill text, and the installer that places it where each
 //! coding agent reads instructions. See docs/adr/0001-agent-integration.md for the locations.
 
-use clap::ValueEnum;
-
 pub mod install;
 pub mod render;
 
@@ -11,20 +9,7 @@ pub const END: &str = "<!-- microterm:end -->";
 /// Directory (and skill name) used for Claude Code.
 pub const SKILL_NAME: &str = "microterm-ctl";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Agent {
-    Claude,
-    Codex,
-    Antigravity,
-    Generic,
-    All,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Scope {
-    User,
-    Project,
-}
+pub use mt_cli::agent::{Agent, Scope};
 
 use std::io::Write;
 

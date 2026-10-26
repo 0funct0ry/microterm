@@ -17,10 +17,11 @@ path = "src/main.rs"
 default = ["sh"]
 runtime-shaders = ["mt_ui/runtime-shaders"]
 # `microterm sh`, the interactive control shell (SPEC §12.7).
-sh = ["dep:rustyline"]
+sh = ["dep:rustyline", "mt_cli/sh"]
 
 [dependencies]
 clap.workspace = true
+mt_cli = { path = "../mt_cli", default-features = false }
 mt_ui = { path = "../mt_ui" }
 mt_config = { path = "../mt_config" }
 mt_theme = { path = "../mt_theme" }

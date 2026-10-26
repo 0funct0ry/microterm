@@ -14,7 +14,6 @@ mod shell_integration;
 
 use std::sync::Arc;
 
-use clap::Parser;
 use mt_proto::SpawnParams;
 
 use microterm::ctl;
@@ -23,11 +22,11 @@ use crate::cli::{Cli, Command};
 
 fn main() {
     menu_hooks::install();
-    // Usage errors exit 1 (SPEC §12.1); `--help` / `--version` still exit 0.
-    let mut cli = Cli::try_parse().unwrap_or_else(|err| {
-        let _ = err.print();
-        std::process::exit(if err.use_stderr() { 1 } else { 0 });
-    });
+    let mut cli = Cli::parse_or_exit();
+    if cli.version {
+        print!("{}", Cli::version_text(cli.verbose));
+        return;
+    }
     if cli.headless {
         std::process::exit(headless::run(cli.config));
     }
@@ -61,7 +60,7 @@ fn main() {
                 cli::print_serial_ports();
                 return;
             }
-            match args.domain_ref() {
+            match cli::serial_domain_ref(&args) {
                 Ok(domain) => launch_gui(cli, Some(domain)),
                 Err(e) => {
                     eprintln!("microterm serial: {e}");

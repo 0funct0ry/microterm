@@ -1788,7 +1788,12 @@ mod tests {
         let (t, rx) = spawn_sh("sleep 0.3; stty size");
         t.resize(50, 7, 8, 16);
         let rows = wait_for(&t, &rx, "7 50");
-        assert!(rows.iter().any(|l| l.trim() == "7 50"), "{rows:?}");
+        // A prompt printed before the output can share its row (`$ 7 50` on Linux CI).
+        assert!(
+            rows.iter()
+                .any(|l| l.trim() == "7 50" || l.trim().ends_with("$ 7 50")),
+            "{rows:?}"
+        );
         assert_eq!(t.size(), (50, 7));
     }
 

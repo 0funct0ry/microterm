@@ -1,0 +1,52 @@
+name: homebrew
+
+# After the maintainer publishes the draft: commit the cask (macOS) and formula (Linux) to the tap.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.0.0"
+        required: true
+
+jobs:
+  tap:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the tag
+        run: echo "TAG=${{ github.event.inputs.tag || github.event.release.tag_name }}" >> "$GITHUB_ENV"
+      - name: Render the cask and formula from SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=${TAG#v}
+          gh release download "$TAG" --pattern SHA256SUMS --dir .
+          sha() { awk -v f="microterm-$ver-$1" '$2 == f { print $1 }' SHA256SUMS; }
+          mkdir -p out/Casks out/Formula
+          sed -e "s/@VERSION@/$ver/g" \
+              -e "s/@SHA_ARM@/$(sha aarch64-apple-darwin.dmg)/" \
+              -e "s/@SHA_INTEL@/$(sha x86_64-apple-darwin.dmg)/" \
+              packaging/homebrew/cask.rb.in > out/Casks/microterm.rb
+          sed -e "s/@VERSION@/$ver/g" \
+              -e "s/@SHA_LINUX_X86_64@/$(sha x86_64-unknown-linux-gnu.tar.gz)/" \
+              -e "s/@SHA_LINUX_AARCH64@/$(sha aarch64-unknown-linux-gnu.tar.gz)/" \
+              packaging/homebrew/formula.rb.in > out/Formula/microterm.rb
+          ! grep -q '@SHA_\|@VERSION@' out/Casks/microterm.rb out/Formula/microterm.rb
+      - name: Commit to 0funct0ry/homebrew-tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || { echo "TAP_TOKEN secret is not set"; exit 1; }
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/0funct0ry/homebrew-tap.git" tap
+          mkdir -p tap/Casks tap/Formula
+          cp out/Casks/microterm.rb tap/Casks/microterm.rb
+          cp out/Formula/microterm.rb tap/Formula/microterm.rb
+          cd tap
+          git config user.name "microterm release bot"
+          git config user.email "noreply@github.com"
+          git add -A
+          git diff --cached --quiet && { echo "tap already up to date"; exit 0; }
+          git commit -m "microterm ${TAG#v}"
+          git push

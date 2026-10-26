@@ -15,12 +15,12 @@ SITE  := site
 #   ARGS        extra arguments for `make run`          make run ARGS="ssh prod"
 #   T           test name filter                        make test T=replay
 #   C           one crate                               make test-crate C=mt_term
-#   PREFIX      reserved for `make install` (M13)
+#   PREFIX      `make install` prefix (default ~/.local)
 #   MUX_TARGETS targets built by `make mux-musl`
 ARGS ?=
 T ?=
 C ?=
-PREFIX ?= /usr/local
+PREFIX ?= $(HOME)/.local
 MUX_TARGETS ?= x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
 # Minimum Node for the Starlight site (site/package.json "engines").
@@ -39,11 +39,11 @@ endif
 # Per-crate runs (`-p CRATE`) can only enable features the crate itself declares.
 CRATE_FEATURES = $(if $(filter microterm,$(C)),$(FEATURES),$(if $(filter mt_ui xtask,$(C)),$(XTASK_FEATURES),))
 
-.PHONY: help setup doctor tools tool-cargo-deny \
+.PHONY: site-assets help setup doctor tools tool-cargo-deny tool-cargo-about \
 	run run-release run-headless build release mux mux-release mux-musl \
 	test test-crate test-ssh test-ssh-local test-serial ssh-demo ssh-demo-drop check clippy fmt fmt-check lint deny audit \
-	check-facade check-mux-gpui check-snippets-pure check-triggers-pure themes docs docs-check doc \
-	bench bundle install release-dry \
+	check-facade check-mux-gpui check-snippets-pure check-triggers-pure check-export-pure check-cli-pure licenses licenses-check themes docs docs-check doc \
+	bench icons bundle install release-dry \
 	site-install site-dev site-build site-preview \
 	ci tree clean clean-site distclean
 
@@ -60,9 +60,12 @@ setup: tools site-install ## Install everything the build needs (toolchain, carg
 	@echo "setup done. Try: make doctor"
 
 # `rustup show` installs the toolchain pinned in rust-toolchain.toml (with rustfmt + clippy).
-tools: tool-cargo-deny
+tools: tool-cargo-deny tool-cargo-about
 	@command -v rustup >/dev/null 2>&1 || { echo "error: rustup is required: https://rustup.rs"; exit 1; }
 	@rustup show active-toolchain >/dev/null 2>&1 || rustup show >/dev/null
+
+tool-cargo-about:
+	@command -v cargo-about >/dev/null 2>&1 || { echo "installing cargo-about…"; $(CARGO) install cargo-about --locked --features cli; }
 
 tool-cargo-deny:
 	@command -v cargo-deny >/dev/null 2>&1 || { echo "installing cargo-deny…"; $(CARGO) install cargo-deny --locked; }
@@ -73,6 +76,8 @@ doctor: ## Report tool versions and anything missing
 	@printf "cargo:      "; $(CARGO) --version 2>/dev/null || echo "MISSING"
 	@printf "toolchain:  "; (rustc --version 2>/dev/null) || echo "MISSING (run: make tools)"
 	@printf "cargo-deny: "; (cargo-deny --version 2>/dev/null) || echo "missing (make tools)"
+	@printf "cargo-about:"; (cargo-about --version 2>/dev/null) || echo " missing (make tools)"
+	@printf "rsvg/magick:"; (command -v rsvg-convert >/dev/null 2>&1 && command -v magick >/dev/null 2>&1 && echo " ok") || echo " missing (only for make icons)"
 	@printf "node:       "; (node --version 2>/dev/null) || echo "missing (needed for the site, >= $(NODE_MIN_MAJOR))"
 	@printf "npm:        "; ($(NPM) --version 2>/dev/null) || echo "missing"
 	@printf "docker:     "; (docker --version 2>/dev/null) || echo "missing (only for make test-ssh)"
@@ -179,7 +184,7 @@ deny: tool-cargo-deny ## Licence, advisory and source checks (cargo-deny)
 
 audit: deny ## Alias of deny
 
-lint: check-facade check-mux-gpui check-snippets-pure check-triggers-pure check-export-pure fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
+lint: check-facade check-mux-gpui check-snippets-pure check-triggers-pure check-export-pure check-cli-pure licenses-check fmt-check clippy deny ## fmt check + clippy -D warnings + cargo-deny + architecture checks
 
 # Facade rule (SPEC §3.3): only mt_term may mention alacritty_terminal.
 check-facade:
@@ -202,6 +207,21 @@ check-triggers-pure: # mt_triggers stays free of GPUI and the terminal engine (S
 check-export-pure: # mt_export stays free of GPUI; gif replays via mt_term, never alacritty directly (SPEC §10.10.6, D13)
 	@if $(CARGO) tree -p mt_export 2>/dev/null | grep -Ei 'gpui'; then \
 		echo 'error: mt_export must not depend on gpui'; exit 1; fi
+
+check-cli-pure: # mt_cli is shared with the macOS launcher: no GPUI, no alacritty_terminal (SPEC §15.5)
+	@if [ -d crates/mt_cli ] && $(CARGO) tree -p mt_cli 2>/dev/null | grep -Ei 'gpui|alacritty'; then \
+		echo 'error: mt_cli must not depend on gpui or alacritty_terminal'; exit 1; fi
+
+# THIRD-PARTY-LICENSES.html (SPEC §15.6): crates via cargo-about, plus bundled assets and themes.
+licenses: tool-cargo-about ## Regenerate THIRD-PARTY-LICENSES.html from Cargo.lock and the asset licence tables
+	$(CARGO) about generate --workspace --locked about.hbs -o THIRD-PARTY-LICENSES.html
+	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- licenses-assets THIRD-PARTY-LICENSES.html
+
+licenses-check: tool-cargo-about ## Fail if THIRD-PARTY-LICENSES.html is stale or an asset lacks a licence entry
+	@$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-assets
+	@$(CARGO) about generate --workspace --locked about.hbs -o target/THIRD-PARTY-LICENSES.check.html
+	@$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- licenses-assets target/THIRD-PARTY-LICENSES.check.html
+	@diff -q THIRD-PARTY-LICENSES.html target/THIRD-PARTY-LICENSES.check.html >/dev/null || { echo 'error: THIRD-PARTY-LICENSES.html is stale: run make licenses'; exit 1; }
 
 themes: ## Validate the bundled themes (licence, 16 colours, contrast)
 	$(CARGO) run -q -p xtask $(XTASK_FEATURES) -- check-themes
@@ -229,10 +249,16 @@ site-install: ## Install the documentation site's dependencies
 	@[ "$$(node -p 'process.versions.node.split(".")[0]')" -ge $(NODE_MIN_MAJOR) ] || { echo "error: node >= $(NODE_MIN_MAJOR) is required (found $$(node --version))"; exit 1; }
 	@$(MAKE) --no-print-directory $(SITE)/node_modules
 
-site-dev: site-install ## Run the site with live reload
+# Files the site serves from the repository: the installer (SPEC §15.3) and the licence notices.
+site-assets:
+	cp scripts/install.sh $(SITE)/public/install.sh
+	cp THIRD-PARTY-LICENSES.html $(SITE)/public/THIRD-PARTY-LICENSES.html
+	cp LICENSE $(SITE)/public/LICENSE.txt
+
+site-dev: site-install site-assets ## Run the site with live reload
 	cd $(SITE) && $(NPM) run dev
 
-site-build: site-install ## Build the static site into site/dist
+site-build: site-install site-assets ## Build the static site into site/dist
 	cd $(SITE) && $(NPM) run build
 
 site-preview: site-build ## Serve the built site locally
@@ -244,14 +270,50 @@ ci: check-facade check-mux-gpui check-snippets-pure fmt-check clippy deny test t
 
 # ------------------------------------------------------------------------------ packaging (M13)
 
-bundle: ## (M13) macOS .app/.dmg and Linux tarball
-	@echo "bundle: not implemented yet (M13)"
+icons: ## Regenerate the app icon set from packaging/icon/microterm*.svg (needs rsvg-convert, magick)
+	scripts/gen-icons.sh
 
-install: ## (M13) install microterm and microterm-mux under PREFIX
-	@echo "install: not implemented yet (M13)"
+bundle: licenses-check ## macOS .app + .dmg + .tar.gz, or the Linux tarball, into dist/
+ifeq ($(UNAME_S),Darwin)
+	CARGO_FEATURES="$(FEATURES)" scripts/bundle-macos.sh
+else
+	CARGO_FEATURES="$(FEATURES)" scripts/bundle-linux.sh
+endif
 
-release-dry: ## (M13) dry-run of the release pipeline
-	@echo "release-dry: not implemented yet (M13)"
+# macOS: ~/Applications/microterm.app plus a symlink to the *launcher* on PATH. Linux: PREFIX
+# (default ~/.local) gets bin/, the .desktop file, icons and the licence files.
+install: bundle ## Install microterm and microterm-mux (PREFIX, default ~/.local; macOS also ~/Applications)
+	$(CARGO) build --release -p mt_mux_server
+	@mkdir -p "$(PREFIX)/bin"
+ifeq ($(UNAME_S),Darwin)
+	@host=$$(rustc -vV | sed -n 's/^host: //p'); \
+	rm -rf "$$HOME/Applications/microterm.app"; mkdir -p "$$HOME/Applications"; \
+	cp -R "dist/stage-$$host/microterm.app" "$$HOME/Applications/microterm.app"; \
+	ln -sf "$$HOME/Applications/microterm.app/Contents/Resources/bin/microterm" "$(PREFIX)/bin/microterm"; \
+	echo "installed ~/Applications/microterm.app, $(PREFIX)/bin/microterm -> launcher"
+else
+	@host=$$(rustc -vV | sed -n 's/^host: //p'); s="dist/stage-$$host"/microterm-*; \
+	install -m755 $$s/bin/microterm "$(PREFIX)/bin/microterm"; \
+	mkdir -p "$(PREFIX)/share/applications" "$(PREFIX)/share/icons" "$(PREFIX)/share/doc/microterm"; \
+	install -m644 $$s/share/applications/microterm.desktop "$(PREFIX)/share/applications/"; \
+	cp -R $$s/share/icons/hicolor "$(PREFIX)/share/icons/"; \
+	install -m644 LICENSE THIRD-PARTY-LICENSES.html "$(PREFIX)/share/doc/microterm/"; \
+	echo "installed under $(PREFIX)"
+endif
+	install -m755 target/release/microterm-mux "$(PREFIX)/bin/microterm-mux"
+
+# Everything release.yml builds for this machine, without publishing: app artefacts, the static
+# daemon, SHA256SUMS with the licence-presence check.
+release-dry: licenses-check ## Build this machine's release artefacts into dist/ and verify them (no publish)
+	rm -rf dist && mkdir -p dist
+ifeq ($(UNAME_S),Darwin)
+	CARGO_FEATURES="$(FEATURES)" scripts/bundle-macos.sh
+else
+	CARGO_FEATURES="$(FEATURES)" scripts/bundle-linux.sh
+endif
+	scripts/package-mux.sh
+	scripts/checksums.sh dist
+	@ls -lh dist | grep -v ' stage-'
 
 # ------------------------------------------------------------------------------ clean
 
