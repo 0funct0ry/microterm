@@ -160,4 +160,33 @@ if status is-interactive; and not set -q __mt_integrated
     function mt-palette
         __mt_pane_reg palette 7724 $argv
     end
+    function mt-fold
+        switch "$argv[1]"
+            case begin
+                test (count $argv) -eq 3; or begin; echo "usage: mt-fold begin ID TITLE | mt-fold end ID" >&2; return 2; end
+                printf '\e]7721;fold;begin;%s;%s\a' $argv[2] (__mt_b64 $argv[3])
+            case end
+                test (count $argv) -eq 2; or begin; echo "usage: mt-fold begin ID TITLE | mt-fold end ID" >&2; return 2; end
+                printf '\e]7721;fold;end;%s\a' $argv[2]
+            case '*'
+                echo "usage: mt-fold begin ID TITLE | mt-fold end ID" >&2
+                return 2
+        end
+    end
+    function mt-link
+        switch "$argv[1]"
+            case add
+                test (count $argv) -eq 4; or begin; echo "usage: mt-link add ID REGEX TEMPLATE | mt-link clear [ID]" >&2; return 2; end
+                printf '\e]7726;link;add;%s;%s;%s\a' $argv[2] (__mt_b64 $argv[3]) (__mt_b64 $argv[4])
+            case clear
+                if test (count $argv) -ge 2
+                    printf '\e]7726;link;clear;%s\a' $argv[2]
+                else
+                    printf '\e]7726;link;clear\a'
+                end
+            case '*'
+                echo "usage: mt-link add ID REGEX TEMPLATE | mt-link clear [ID]" >&2
+                return 2
+        end
+    end
 end

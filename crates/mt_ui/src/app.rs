@@ -39,6 +39,8 @@ pub struct PaneView {
     pub pane: u64,
     /// `None` until a shell is attached (and always in unit tests that do not opt in).
     pub session: Option<TerminalSession>,
+    /// The terminal lives in an SSH or serial domain (program-registered items need the opt-in).
+    pub remote: bool,
     wake: Option<async_channel::Receiver<()>>,
     pump: Option<gpui::Task<()>>,
 }
@@ -48,6 +50,7 @@ impl PaneView {
         PaneView {
             pane,
             session: None,
+            remote: false,
             wake: None,
             pump: None,
         }
@@ -880,6 +883,7 @@ impl AppWindow {
         let tab_id = tab.id;
         let view = tab.pane_view_mut(pane).ok_or("no such pane")?;
         view.session = Some(TerminalSession::from_terminal(term, title));
+        view.remote = true;
         view.wake = Some(rx);
         self.start_pump(tab_id, pane, window, cx);
         Ok(())

@@ -57,6 +57,10 @@ shown as plain text only.
 | 7719 | `tab` | the color of the sender's tab |
 | 7718 | `badge` | a small pill badge in the pane |
 | 7722 | `mark` | notes pinned to output rows (gutter and scrollbar) |
+| 7723 | `key` | key bindings that act only on the sender's pane |
+| 7724 | `palette` | command-palette entries for the sender's pane |
+| 7721 | `fold` | collapsible output regions (display only) |
+| 7726 | `link` | link rules for the program's own text conventions |
 
 Everything else in 7700–7799 is reserved and ignored.
 
@@ -228,6 +232,58 @@ entries 10, in one window shared with `7717` menu items.
 They are removed when the program exits, on a terminal reset, with `mt-key clear`, when the pane closes
 and when the switch or the `key` / `palette` gate goes off. `microterm-mux` replays them after a
 reconnect. Agents (MCP) have no tool for them.
+
+## `7721` collapsible output
+
+A program can mark a region of output that you can fold into one summary row.
+
+```sh
+mt-fold begin build "Build"      # ESC ] 7721 ; fold ; begin ; <id> ; <b64 title> ST
+make
+mt-fold end build                # ESC ] 7721 ; fold ; end ; <id> ST
+```
+
+A CI wrapper folds each step by calling these around the step's command. Click a `▸ title · N lines`
+row to expand it again. **Toggle fold at cursor** collapses or expands the region under the pointer (or around the cursor when the pointer is elsewhere); with `fold_commands = true` the right-click menu also has **Fold/unfold output** for the clicked row. The palette also has **Fold all output regions** and
+**Unfold all output regions** from the palette or context menu (no default keys).
+
+- **Display only.** Folding changes what is drawn and nothing else: the grid, scrollback, selection
+  text, `get-text`, search, recordings and exports keep every line. Select across a folded region
+  and copy: the hidden text is copied. Search expands the region it finds a match in.
+- **Limits per pane.** 200 regions (oldest dropped), nesting depth 4, one open region per id,
+  titles up to 80 characters, 20 `begin`/`end` per second. Primary screen only. A region still open
+  is drawn up to the last row and never hides the row the program is writing to.
+- **Malformed** (counted, ignored): `end` without `begin`, closing an outer region before the inner
+  one, a reused open id, regions whose rows scrolled out of the history.
+- Folds follow the stable line ids, so they survive resizing and scrollback trimming; `ED 3`
+  (clear scrollback) and a terminal reset clear them. Collapsed state belongs to the view: after a
+  reconnect every region arrives expanded. Folds work in SSH panes (they are display only).
+- `[private_osc] fold_commands = true` also makes the output of each finished shell command
+  (needs [shell integration](/docs/shell-integration/)) a fold unit named after the command.
+
+## `7726` semantic links
+
+A program can register link rules for text that follows its own conventions.
+
+```sh
+mt-link add issue '#(\d+)' 'https://example.com/issues/$1'
+echo "fixed in #4821"            # #4821 is now a link
+mt-link clear [issue]
+```
+
+`ESC ] 7726 ; link ; add ; <id> ; <b64 regex> ; <b64 template> ST` and
+`ESC ] 7726 ; link ; clear ; [<id>] ST`. Up to 8 rules per pane, regex up to 256 bytes, template up
+to 512 bytes, 5 commands per second. Rules use the same linear-time regex engine and complexity cap
+as [`[[hyperlink_rules]]`](/docs/hyperlinks/): lookaround, backreferences and expensive patterns are
+refused as malformed.
+
+- Program rules rank **below** your own rules and OSC 8 links, apply to the visible rows only and never
+  rewrite the text.
+- The resolved URL must use a scheme in `hyperlinks.schemes`, and the tooltip always shows the real
+  target before you open it. A rule can never open a scheme you did not allow.
+- In SSH and serial panes the rules are ignored unless `[menu_security] allow_remote_items = true`.
+- They are removed on exit, terminal reset, `mt-link clear` and when the switch or the `link` gate
+  goes off.
 
 ## Checking the state
 

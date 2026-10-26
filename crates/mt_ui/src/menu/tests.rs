@@ -757,3 +757,20 @@ mod shell_items {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn fold_entry_needs_private_osc_fold_and_fold_commands() {
+    let (m, p) = mux(1);
+    let has = |toml: &str| {
+        let c = cfg(toml);
+        let f = facts(&c, &m, p[0]);
+        labels(&resolve(&c, "viewport", &f))
+            .iter()
+            .any(|l| l.contains("Fold/unfold output"))
+    };
+    assert!(!has(""));
+    assert!(!has("[private_osc]\nenabled = true\n"));
+    assert!(!has("[private_osc]\nenabled = true\nfold_commands = true\n[private_osc.features]\nfold = false\n"));
+    assert!(!has("[private_osc]\nfold_commands = true\n"));
+    assert!(has("[private_osc]\nenabled = true\nfold_commands = true\n"));
+}

@@ -495,6 +495,40 @@ impl CommandTracker {
         self.private.badge.replay(out);
         self.private.keys.replay(out);
         self.private.palette.replay(out);
+        self.private.links.replay(out);
+    }
+
+    /// Finished command output as `(start id, end id, title)` (the `fold_commands` unit).
+    pub(crate) fn output_regions(&self) -> Vec<(u64, u64, String)> {
+        self.cmds
+            .iter()
+            .filter_map(|r| {
+                let (o, e) = (r.output?.id, r.end?.id);
+                let title = r.command.trim();
+                let title: String = if title.is_empty() {
+                    "command output".into()
+                } else {
+                    title
+                        .chars()
+                        .take(crate::private_osc::FOLD_TITLE_MAX)
+                        .collect()
+                };
+                (e > o).then_some((o, e, title))
+            })
+            .collect()
+    }
+
+    /// The `7721` regions of this pane, oldest first.
+    pub fn fold_regions(&self) -> Vec<crate::private_osc::FoldRegion> {
+        self.private.folds.regions()
+    }
+
+    /// The `7726` rules of this pane and their revision.
+    pub fn link_rules(&self) -> (u64, Vec<crate::private_osc::LinkRule>) {
+        (
+            self.private.links.rev(),
+            self.private.links.rules().to_vec(),
+        )
     }
 
     /// The `7723` bindings of this pane.
@@ -691,6 +725,7 @@ impl CommandTracker {
         }
         self.observed = h;
         self.private.marks.prune(self.trimmed);
+        self.private.folds.prune(self.trimmed);
         self.evict();
     }
 
@@ -936,6 +971,49 @@ impl CommandTracker {
                 }
             }
         }
+        // Folds: ends of non-empty regions (inner first), then begins (outer first), then ends of
+        // empty regions, so a stable sort keeps them well nested within one row.
+        let folds = self.private.folds.regions();
+        let at = |line: u64| {
+            line.checked_sub(self.trimmed)
+                .map(|l| l as usize)
+                .filter(|l| *l >= first_line)
+        };
+        let fold = |cmd| ReplayMark {
+            mark: Mark::Private {
+                cmd: crate::private_osc::PrivCmd::Fold(cmd),
+                st_bel: true,
+            },
+            line: 0,
+            col: 0,
+        };
+        let end_of = |r: &crate::private_osc::FoldRegion| {
+            r.end.and_then(at).map(|line| ReplayMark {
+                line,
+                ..fold(crate::private_osc::FoldCmd::End {
+                    id: r.id.clone(),
+                    replay: true,
+                })
+            })
+        };
+        for r in folds.iter().rev().filter(|r| r.end != Some(r.start)) {
+            v.extend(end_of(r));
+        }
+        for r in &folds {
+            if let Some(line) = at(r.start) {
+                v.push(ReplayMark {
+                    line,
+                    ..fold(crate::private_osc::FoldCmd::Begin {
+                        id: r.id.clone(),
+                        title: r.title.clone(),
+                        replay: true,
+                    })
+                });
+            }
+        }
+        for r in folds.iter().filter(|r| r.end == Some(r.start)) {
+            v.extend(end_of(r));
+        }
         // Stable: marks at the same cell (a `D` and the next `A`) keep their order.
         v.sort_by_key(|m| (m.line, m.col));
         v
@@ -1006,6 +1084,9 @@ pub(crate) fn drive<T: alacritty_terminal::event::EventListener>(
                 Mark::ClearHistory => {
                     if tracker.private.marks.clear_all() {
                         shared.notify_cleared(vec![crate::private_osc::Feature::Mark]);
+                    }
+                    if tracker.private.folds.clear_all() {
+                        shared.notify_cleared(vec![crate::private_osc::Feature::Fold]);
                     }
                     if tracker.menus.reset() {
                         shared.notify(crate::TermEvent::MenuItemsChanged);
@@ -1456,6 +1537,85 @@ mod tests {
         e.advance(&status("git", "again"));
         e.advance(b"\x1bc");
         assert!(e.status_segments().is_empty());
+    }
+
+    #[test]
+    fn collapsed_region_is_one_summary_row_and_grid_is_untouched() {
+        use crate::menu_reg::b64_encode;
+        let mut e = gated(30, 6, true);
+        e.advance(b"head\r\n");
+        e.advance(format!("\x1b]7721;fold;begin;s;{}\x07", b64_encode(b"Step")).as_bytes());
+        e.advance(b"a1\r\na2\r\na3\r\n");
+        e.advance(b"\x1b]7721;fold;end;s\x07");
+        e.advance(b"tail\r\nprompt");
+        let before = e.snapshot();
+        let r = e.fold_regions();
+        let (snap, st) = e.folded_snapshot(&[r[0].start]);
+        let text: Vec<String> = (0..snap.rows).map(|i| snap.row_text(i)).collect();
+        assert!(text.iter().any(|t| t == "▸ Step · 3 lines"), "{text:?}");
+        assert!(!text.iter().any(|t| t == "a2"));
+        assert!(text.contains(&"head".to_string()) && text.contains(&"tail".to_string()));
+        assert_eq!(snap.cursor.row, 3, "cursor row follows the remap");
+        assert!(st.rows.iter().any(|m| m.summary.is_some()));
+        // The grid itself still holds every line.
+        let all: Vec<String> = (0..e.total_lines())
+            .map(|l| e.line_cells(l).unwrap().text())
+            .collect();
+        assert!(all.iter().any(|t| t.trim_end() == "a2"));
+        assert_eq!(before.rows, snap.rows);
+    }
+
+    #[test]
+    fn folds_and_link_rules_follow_the_lifecycle_and_replay() {
+        use crate::menu_reg::b64_encode;
+        let begin = |id: &str, t: &str| {
+            format!("\x1b]7721;fold;begin;{id};{}\x07", b64_encode(t.as_bytes()))
+        };
+        let end = |id: &str| format!("\x1b]7721;fold;end;{id}\x07");
+        let rule = format!(
+            "\x1b]7726;link;add;issue;{};{}\x07",
+            b64_encode(b"#(\\d+)"),
+            b64_encode(b"https://example.com/issues/$1")
+        );
+        let mut off = gated(40, 4, false);
+        off.advance(begin("a", "x").as_bytes());
+        off.advance(rule.as_bytes());
+        assert!(off.fold_regions().is_empty() && off.link_rules().1.is_empty());
+
+        let mut e = gated(40, 4, true);
+        e.advance(b"head\r\n");
+        e.advance(begin("build", "Build").as_bytes());
+        e.advance(b"one\r\ntwo\r\n");
+        e.advance(begin("test", "Tests").as_bytes());
+        e.advance(b"three\r\n");
+        e.advance(end("test").as_bytes());
+        e.advance(b"four\r\n"); // scrolls into history
+        e.advance(end("build").as_bytes());
+        e.advance(rule.as_bytes());
+        let r = e.fold_regions();
+        assert_eq!(r.len(), 2);
+        assert!(r.iter().all(|r| r.end.is_some()));
+        assert_eq!(e.link_rules().1.len(), 1);
+        assert!(e.drain_events().iter().any(|ev| matches!(
+            ev,
+            crate::TermEvent::PrivateOscChanged(crate::private_osc::Feature::Fold)
+        )));
+
+        // Replay puts every region back on its rows; link rules ride along.
+        let mut b = gated(40, 4, true);
+        b.advance(&e.replay_bytes(100));
+        assert_eq!(b.fold_regions(), e.fold_regions());
+        assert_eq!(b.link_rules().1, e.link_rules().1);
+
+        // The alternate screen takes no folds; ED 3 clears folds only; RIS clears rules too.
+        e.advance(b"\x1b[?1049h");
+        e.advance(begin("alt", "t").as_bytes());
+        e.advance(b"\x1b[?1049l");
+        assert_eq!(e.fold_regions().len(), 2);
+        e.advance(b"\x1b[3J");
+        assert!(e.fold_regions().is_empty() && !e.link_rules().1.is_empty());
+        e.advance(b"\x1bc");
+        assert!(e.link_rules().1.is_empty());
     }
 
     #[test]

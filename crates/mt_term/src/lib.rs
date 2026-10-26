@@ -12,6 +12,7 @@ mod color_names;
 mod commands;
 mod emulator;
 mod events;
+mod fold_view;
 mod headless;
 mod input;
 mod lines;

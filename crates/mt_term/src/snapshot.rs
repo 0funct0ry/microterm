@@ -210,6 +210,9 @@ pub struct RenderSnapshot {
     pub modes: Modes,
     pub damage: Damage,
     pub selection: Option<crate::selection::SelectionSpan>,
+    /// Set when collapsed `7721` regions reshaped this view: per viewport row, the stable id of
+    /// the region whose summary it is.
+    pub fold_summaries: Vec<Option<u64>>,
     /// Overrides set by OSC 5/17/19/21/22 and XTSHIFTESCAPE.
     pub vt: crate::vt::VtView,
 }
@@ -336,44 +339,16 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
     let rows = grid.screen_lines();
     let cols = grid.columns();
     let offset = grid.display_offset();
-    let colors = term.colors();
 
     let mut cells = Vec::with_capacity(rows * cols);
     let mut row_hashes = Vec::with_capacity(rows);
     let mut wrapped = Vec::with_capacity(rows);
-    let mut last_link: Option<std::sync::Arc<Hyperlink>> = None;
     for r in 0..rows {
         let line = Line(r as i32 - offset as i32);
-        let start = cells.len();
-        for c in 0..cols {
-            let ec = &grid[Point::new(line, Column(c))];
-            let mut cell = convert_cell(ec, colors);
-            if let Some(h) = ec.hyperlink() {
-                let reuse = last_link
-                    .as_ref()
-                    .is_some_and(|l| l.id == h.id() && l.uri == h.uri());
-                if !reuse {
-                    last_link = Some(std::sync::Arc::new(Hyperlink {
-                        id: h.id().to_owned(),
-                        uri: h.uri().to_owned(),
-                    }));
-                }
-                cell.link = last_link.clone();
-            }
-            cells.push(cell);
-        }
-        wrapped.push(
-            cols > 0
-                && grid[Point::new(line, Column(cols - 1))]
-                    .flags
-                    .contains(alacritty_terminal::term::cell::Flags::WRAPLINE),
-        );
-        if widen_ri {
-            widen_regional_indicators(&mut cells[start..]);
-        }
-        let mut h = DefaultHasher::new();
-        cells[start..].hash(&mut h);
-        row_hashes.push(h.finish());
+        let (row, wrap, hash) = grid_row(term, line, widen_ri);
+        cells.extend(row);
+        wrapped.push(wrap);
+        row_hashes.push(hash);
     }
 
     let style = term.cursor_style();
@@ -408,6 +383,43 @@ pub(crate) fn build<T>(term: &Term<T>, damage: Damage, widen_ri: bool) -> Render
         modes: Modes::from_engine(mode),
         damage,
         selection: crate::selection::span(term),
+        fold_summaries: Vec::new(),
         vt: Default::default(),
     }
+}
+
+/// One grid row as snapshot cells, whether it soft-wraps, and its content hash.
+pub(crate) fn grid_row<T>(term: &Term<T>, line: Line, widen_ri: bool) -> (Vec<Cell>, bool, u64) {
+    let grid = term.grid();
+    let cols = grid.columns();
+    let colors = term.colors();
+    let mut row = Vec::with_capacity(cols);
+    let mut last_link: Option<std::sync::Arc<Hyperlink>> = None;
+    for c in 0..cols {
+        let ec = &grid[Point::new(line, Column(c))];
+        let mut cell = convert_cell(ec, colors);
+        if let Some(h) = ec.hyperlink() {
+            let reuse = last_link
+                .as_ref()
+                .is_some_and(|l| l.id == h.id() && l.uri == h.uri());
+            if !reuse {
+                last_link = Some(std::sync::Arc::new(Hyperlink {
+                    id: h.id().to_owned(),
+                    uri: h.uri().to_owned(),
+                }));
+            }
+            cell.link = last_link.clone();
+        }
+        row.push(cell);
+    }
+    let wrap = cols > 0
+        && grid[Point::new(line, Column(cols - 1))]
+            .flags
+            .contains(Flags::WRAPLINE);
+    if widen_ri {
+        widen_regional_indicators(&mut row);
+    }
+    let mut h = DefaultHasher::new();
+    row.hash(&mut h);
+    (row, wrap, h.finish())
 }

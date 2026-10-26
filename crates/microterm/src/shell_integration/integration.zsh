@@ -140,4 +140,27 @@ if [[ -o interactive && -z "${__mt_integrated-}" ]]; then
   }
   mt-key() { __mt_pane_reg key 7723 "$@"; }
   mt-palette() { __mt_pane_reg palette 7724 "$@"; }
+
+  # Collapsible output and semantic links (OSC 7721 and 7726, SPEC sections 6.4.12-13):
+  #   mt-fold begin ID TITLE     mt-fold end ID
+  #   mt-link add ID REGEX TEMPLATE   mt-link clear [ID]
+  # Folding is display only (copy, search and get-text still see every line). A link rule turns
+  # text matching REGEX into a link to TEMPLATE ($1..$9); the real target shows in the tooltip.
+  mt-fold() {
+    case ${1-} in
+      begin) [[ $# -eq 3 ]] || { echo "usage: mt-fold begin ID TITLE | mt-fold end ID" >&2; return 2; }
+        printf '\e]7721;fold;begin;%s;%s\a' "$2" "$(__mt_b64 "$3")" ;;
+      end) [[ $# -eq 2 ]] || { echo "usage: mt-fold begin ID TITLE | mt-fold end ID" >&2; return 2; }
+        printf '\e]7721;fold;end;%s\a' "$2" ;;
+      *) echo "usage: mt-fold begin ID TITLE | mt-fold end ID" >&2; return 2 ;;
+    esac
+  }
+  mt-link() {
+    case ${1-} in
+      add) [[ $# -eq 4 ]] || { echo "usage: mt-link add ID REGEX TEMPLATE | mt-link clear [ID]" >&2; return 2; }
+        printf '\e]7726;link;add;%s;%s;%s\a' "$2" "$(__mt_b64 "$3")" "$(__mt_b64 "$4")" ;;
+      clear) printf '\e]7726;link;clear%s\a' "${2:+;$2}" ;;
+      *) echo "usage: mt-link add ID REGEX TEMPLATE | mt-link clear [ID]" >&2; return 2 ;;
+    esac
+  }
 fi

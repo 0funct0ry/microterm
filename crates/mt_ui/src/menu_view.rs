@@ -143,6 +143,7 @@ impl AppWindow {
             line: Some((snap.row_text(hit.row), col)),
             on_prompt,
             in_output,
+            row: Some(hit.row),
         }
     }
 
@@ -458,6 +459,17 @@ impl AppWindow {
             Builtin::CreateTrigger => {
                 self.focus_pane(pane, window, cx);
                 self.create_trigger_from_selection(window, cx);
+            }
+            Builtin::ToggleFold => {
+                self.focus_pane(pane, window, cx);
+                let row = facts.values.get("fold_row").and_then(|r| r.parse().ok());
+                if let (Some(t), Some(row)) = (term, row) {
+                    t.toggle_fold_at_view_row(row);
+                }
+                if let Some(s) = self.live_mut() {
+                    s.refresh();
+                }
+                cx.notify();
             }
             Builtin::ToggleRecording => {
                 self.focus_pane(pane, window, cx);

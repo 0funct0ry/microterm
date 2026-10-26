@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+- **M12.75 — Collapsible output (`7721`) and semantic links (`7726`).** A program can mark regions
+  of output that fold into one `▸ title · N lines` summary row (click it, or use the new
+  *Toggle fold at cursor*, *Fold all output regions* and *Unfold all output regions* actions).
+  Folding is view-only: copy, search, `get-text`, recordings and exports still see every line, and
+  Search expands the region it hits. `[private_osc] fold_commands = true` folds finished OSC 133
+  command output too. Programs can also register up to 8 link rules (`mt-link add`), checked
+  against `hyperlinks.schemes`, ranked below your own rules and OSC 8, always showing the real
+  target in the tooltip. New `mt-fold` and `mt-link` shell helpers; both are replayed by
+  `microterm-mux` (folds arrive expanded).
+
 ### Fixed
 - **GIF font size had no visible effect.** The whole recorded window (for example 238×56) was
   always drawn, so a bigger font just made a bigger picture with the same tiny text in a mostly

@@ -32,6 +32,13 @@ key_clear() { printf '\e]7723;key;clear%s\a' "${1:+;$1}"; }
 palette_add() { printf '\e]7724;palette;add;%s;%s;%s;%s\a' "$1" "$(b64 "$2")" "$3" "$(b64 "$4")"; }
 palette_clear() { printf '\e]7724;palette;clear%s\a' "${1:+;$1}"; }
 
+# fold_begin ID TITLE / fold_end ID   (7721)
+fold_begin() { printf '\e]7721;fold;begin;%s;%s\a' "$1" "$(b64 "$2")"; }
+fold_end() { printf '\e]7721;fold;end;%s\a' "$1"; }
+# link_add ID REGEX TEMPLATE / link_clear [ID]   (7726)
+link_add() { printf '\e]7726;link;add;%s;%s;%s\a' "$1" "$(b64 "$2")" "$(b64 "$3")"; }
+link_clear() { printf '\e]7726;link;clear%s\a' "${1:+;$1}"; }
+
 require_pane() {
   [ -t 1 ] || { echo "run this in a microterm pane" >&2; exit 1; }
 }

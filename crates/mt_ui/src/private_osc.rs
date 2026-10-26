@@ -90,6 +90,7 @@ pub fn gate_of_config(config: &Config) -> PrivateGate {
         features,
         rate: c.rate_per_second.clamp(2, 100),
         replies: true,
+        fold_commands: c.fold_commands,
     }
 }
 

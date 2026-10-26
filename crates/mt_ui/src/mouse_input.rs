@@ -46,6 +46,8 @@ pub struct MouseState {
     pub pointer_hidden: bool,
     pub mods: Modifiers,
     pub link_cache: LinkCache,
+    /// Compiled program rules per pane, keyed by the pane's rule revision.
+    program_sets: std::collections::HashMap<u64, (u64, std::sync::Arc<LinkSet>)>,
     /// Last cell (and pixel, for 1016) reported, to drop duplicate motion reports.
     last_report: Option<(usize, usize, usize, usize)>,
     /// Last cell the drag selection was extended to.
@@ -53,6 +55,28 @@ pub struct MouseState {
     /// Lines per tick while dragging past the top (+) or bottom (-) edge.
     autoscroll: i32,
     autoscroll_task: Option<Task<()>>,
+}
+
+impl MouseState {
+    fn program_set(
+        &mut self,
+        pane: u64,
+        rev: u64,
+        rules: &[mt_term::private_osc::LinkRule],
+    ) -> std::sync::Arc<LinkSet> {
+        if let Some((r, set)) = self.program_sets.get(&pane) {
+            if *r == rev {
+                return set.clone();
+            }
+        }
+        let pairs: Vec<(String, String)> = rules
+            .iter()
+            .map(|r| (r.regex.clone(), r.template.clone()))
+            .collect();
+        let set = std::sync::Arc::new(LinkSet::program(&pairs));
+        self.program_sets.insert(pane, (rev, set.clone()));
+        set
+    }
 }
 
 /// A pointer position resolved against the grid.
@@ -134,7 +158,7 @@ fn button_of(b: MouseButton) -> Option<TButton> {
 }
 
 impl AppWindow {
-    fn grid_hit(&self, pos: Point<Pixels>) -> Option<Hit> {
+    pub(crate) fn grid_hit(&self, pos: Point<Pixels>) -> Option<Hit> {
         let s = self.live()?;
         Some(hit_test(
             (f32::from(pos.x), f32::from(pos.y)),
@@ -264,7 +288,15 @@ impl AppWindow {
             .mouse
             .link_cache
             .get_or_scan(snap.row_hashes[row], &text, &links);
-        let m = matches.iter().find(|m| m.range.contains(&idx))?;
+        let mut program = false;
+        let mut found = matches.iter().find(|m| m.range.contains(&idx)).cloned();
+        if found.is_none() {
+            // Program rules (OSC 7726) rank below the user's rules and OSC 8, never rewrite
+            // text, and are ignored in remote panes unless `allow_remote_items`.
+            found = self.program_link(pane, &text, idx);
+            program = found.is_some();
+        }
+        let m = found?;
         let start = col_of[m.range.start];
         let last = col_of[m.range.end - 1];
         let end = last
@@ -282,9 +314,28 @@ impl AppWindow {
             row,
             start,
             end,
-            show_target: visible != m.target,
-            target: m.target.clone(),
+            show_target: program || visible != m.target,
+            target: m.target,
         })
+    }
+
+    /// The match of the pane's program-registered rules at char index `idx` of `text`.
+    fn program_link(
+        &mut self,
+        pane: u64,
+        text: &str,
+        idx: usize,
+    ) -> Option<mt_patterns::LinkMatch> {
+        let view = self.tabs.get(self.active_tab)?.pane_view(pane)?;
+        if view.remote && !self.cfg.menu_security.allow_remote_items {
+            return None;
+        }
+        let (rev, rules) = view.session.as_ref()?.term.link_rules();
+        if rules.is_empty() {
+            return None;
+        }
+        let set = self.mouse.program_set(pane, rev, &rules);
+        set.find(text).into_iter().find(|m| m.range.contains(&idx))
     }
 
     pub(crate) fn clear_hover(&mut self) -> bool {
@@ -311,6 +362,16 @@ impl AppWindow {
         let Some(button) = button_of(ev.button) else {
             return;
         };
+        // A click on a fold summary row (`7721`) expands or collapses its region.
+        if button == TButton::Left
+            && ev.click_count <= 1
+            && !self.reporting(&ev.modifiers)
+            && self.live().is_some_and(|s| s.term.toggle_fold_row(hit.row))
+        {
+            self.refresh_session();
+            cx.notify();
+            return;
+        }
         if self.reporting(&ev.modifiers) {
             if let Some(s) = self.live() {
                 s.term.send_mouse(&self.report_event(

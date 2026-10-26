@@ -108,6 +108,7 @@ fn builtins_are_on_by_default_with_the_panes_group_inlined() {
             "search",
             "save_as_snippet",
             "create_trigger",
+            "toggle_fold",
             "toggle_recording",
             "recordings",
             "clear_scrollback",
@@ -295,7 +296,7 @@ fn golden_ids_limits_and_settings() {
     let e = errors(&src);
     assert_eq!(e.len(), 1);
     assert!(
-        e[0].ends_with("context_menu.viewport: 84 items after include; the limit is 64"),
+        e[0].ends_with("context_menu.viewport: 85 items after include; the limit is 64"),
         "{}",
         e[0]
     );
@@ -305,7 +306,7 @@ fn golden_ids_limits_and_settings() {
     );
     assert_eq!(
         errors("[context_menu.viewport]\nbuiltin = [\"cpoy\"]\n"),
-        ["microterm.toml:2:11 — context_menu.viewport.builtin: unknown built-in \"cpoy\" (did you mean \"copy\"?); built-ins: copy, paste, select_all, open_link, copy_link, search, save_as_snippet, create_trigger, toggle_recording, recordings, clear_scrollback, panes"]
+        ["microterm.toml:2:11 — context_menu.viewport.builtin: unknown built-in \"cpoy\" (did you mean \"copy\"?); built-ins: copy, paste, select_all, open_link, copy_link, search, save_as_snippet, create_trigger, toggle_fold, toggle_recording, recordings, clear_scrollback, panes"]
     );
     assert_eq!(
         errors("[context_menu.viewport]\nmax_rows = 2\n"),

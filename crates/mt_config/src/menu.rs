@@ -469,6 +469,12 @@ const VIEWPORT_BUILTINS: &[BuiltinDef] = &[
         "selection",
         WhenFalse::Hide,
     ),
+    // Hidden unless `[private_osc]` is on with the `fold` feature and `fold_commands = true`.
+    b(
+        "toggle_fold",
+        "Fold/unfold output",
+        Some("ToggleFoldAtCursor"),
+    ),
     // Hidden while `recording.enabled = false` (SPEC §10.10.1).
     b(
         "toggle_recording",

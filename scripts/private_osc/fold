@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# 7721: collapsible output regions, like a CI wrapper folding each step.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Three folded steps"
+for name in checkout build test; do
+  fold_begin "$name" "Step: $name"
+  for i in $(seq 1 12); do echo "$name: line $i"; done
+  fold_end "$name"
+done
+echo "   expected: click a line or run FoldAll from the palette: each step becomes one"
+echo "   '▸ Step: <name> · 12 lines' row; clicking a summary row expands it again."
+echo "   Select across a collapsed step and copy: the hidden lines are copied too."
+echo "   Search for 'build: line 7': the build step expands."
+pause
+
+step "2. Nesting"
+fold_begin outer "Outer"; echo outer-1
+fold_begin inner "Inner"; echo inner-1; echo inner-2; fold_end inner
+echo outer-2; fold_end outer
+echo "   expected: Outer collapses to one row containing Inner."
+pause

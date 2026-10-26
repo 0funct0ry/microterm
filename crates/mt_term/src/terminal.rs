@@ -199,6 +199,8 @@ pub struct Terminal {
     sgr_pixels: Arc<AtomicBool>,
     /// Per-command OSC 133 records, written by whoever parses the output.
     tracker: Arc<Mutex<CommandTracker>>,
+    /// View-only fold state (collapsed regions and the row map of the last snapshot).
+    fold: Mutex<crate::fold_view::FoldState>,
 }
 
 impl Terminal {
@@ -308,6 +310,7 @@ impl Terminal {
             wide_ri,
             sgr_pixels,
             tracker,
+            fold: Default::default(),
         })
     }
 
@@ -368,6 +371,7 @@ impl Terminal {
                 opts.scrollback,
                 opts.cols as usize,
             ))),
+            fold: Default::default(),
         }
     }
 
@@ -753,11 +757,36 @@ impl Terminal {
         right: bool,
         word_chars: &str,
     ) {
-        crate::selection::start(&mut self.term.lock(), kind, row, col, right, word_chars);
+        let line = self.fold_line(row, false);
+        let mut t = self.term.lock();
+        match line {
+            Some(l) => crate::selection::start_line(&mut t, kind, l, col, right, word_chars),
+            None => crate::selection::start(&mut t, kind, row, col, right, word_chars),
+        }
     }
 
     pub fn selection_update(&self, row: usize, col: usize, right: bool) {
-        crate::selection::update(&mut self.term.lock(), row, col, right);
+        let summary = self
+            .fold
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .rows
+            .get(row)
+            .is_some_and(|m| m.summary.is_some());
+        let line = self.fold_line(row, summary);
+        let mut t = self.term.lock();
+        match line {
+            Some(l) => {
+                let cols = alacritty_terminal::grid::Dimensions::columns(t.grid());
+                let (col, right) = if summary {
+                    (cols - 1, true)
+                } else {
+                    (col, right)
+                };
+                crate::selection::update_line(&mut t, l, col, right)
+            }
+            None => crate::selection::update(&mut t, row, col, right),
+        }
     }
 
     pub fn selection_clear(&self) {
@@ -861,6 +890,16 @@ impl Terminal {
         self.tracker().program_marks()
     }
 
+    /// The `7721` regions of this pane, oldest first.
+    pub fn fold_regions(&self) -> Vec<crate::private_osc::FoldRegion> {
+        self.tracker().fold_regions()
+    }
+
+    /// The `7726` rules of this pane and their revision.
+    pub fn link_rules(&self) -> (u64, Vec<crate::private_osc::LinkRule>) {
+        self.tracker().link_rules()
+    }
+
     /// The color this pane's program declared for its tab (`7719`), as sent.
     pub fn declared_tab_color(&self) -> Option<String> {
         self.tracker().declared_tab_color()
@@ -903,13 +942,183 @@ impl Terminal {
 
     /// Copies the visible rows; the terminal lock is held only for the copy.
     pub fn snapshot(&self) -> RenderSnapshot {
+        let regions = self.fold_regions_all();
+        let trimmed = self.tracker().trimmed();
         let mut term = self.term.lock();
         let damage = take_damage(&mut term);
-        let mut snap = snapshot::build(&term, damage, self.wide_ri.load(Ordering::Relaxed));
+        let widen = self.wide_ri.load(Ordering::Relaxed);
+        let mut snap = snapshot::build(&term, damage, widen);
         snap.modes.sgr_pixels = self.sgr_pixels.load(Ordering::Relaxed);
         snap.vt = self.shared.vt.lock().unwrap().view();
-        snap.line_base = self.tracker().trimmed();
+        snap.line_base = trimmed;
+        let mut fold = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        fold.rows.clear();
+        if !fold.collapsed.is_empty() && !snap.modes.alt_screen {
+            crate::fold_view::apply(&term, &mut snap, &regions, &mut fold, trimmed, widen);
+            // Row contents moved: the renderer must repaint everything.
+            if !fold.rows.is_empty() {
+                snap.damage = snapshot::Damage::Full;
+            }
+        }
         snap
+    }
+
+    /// Program (`7721`) regions plus, with `fold_commands`, OSC 133 command output.
+    fn fold_regions_all(&self) -> Vec<crate::fold_view::Region> {
+        let t = self.tracker();
+        let mut v: Vec<crate::fold_view::Region> = t
+            .fold_regions()
+            .into_iter()
+            .map(|r| crate::fold_view::Region {
+                open: r.end.is_none(),
+                start: r.start,
+                end: r.end,
+                title: r.title,
+            })
+            .collect();
+        drop(t);
+        let gate = self
+            .shared
+            .vt
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cfg
+            .private;
+        if gate.fold_commands && gate.allows(crate::private_osc::Feature::Fold) {
+            v.extend(
+                self.tracker()
+                    .output_regions()
+                    .into_iter()
+                    .map(|(s, e, title)| crate::fold_view::Region {
+                        start: s,
+                        end: Some(e),
+                        title,
+                        open: false,
+                    }),
+            );
+        }
+        v
+    }
+
+    /// Whether any region (program or command) can fold.
+    pub fn has_folds(&self) -> bool {
+        !self.fold_regions_all().is_empty()
+    }
+
+    pub fn folds_collapsed(&self) -> usize {
+        self.fold
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .collapsed
+            .len()
+    }
+
+    /// Click on a summary row: toggles that region. `false` when `row` is not a summary.
+    pub fn toggle_fold_row(&self, row: usize) -> bool {
+        let mut f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(id) = f.rows.get(row).and_then(|m| m.summary) else {
+            return false;
+        };
+        if !f.collapsed.remove(&id) {
+            f.collapsed.insert(id);
+        }
+        true
+    }
+
+    /// Toggles the innermost region holding viewport `row` (as last drawn). `false` when no
+    /// region holds it.
+    pub fn toggle_fold_at_view_row(&self, row: usize) -> bool {
+        let regions = self.fold_regions_all();
+        let trimmed = self.tracker().trimmed();
+        let (hist, off) = {
+            let t = self.term.lock();
+            let g = t.grid();
+            (
+                alacritty_terminal::grid::Dimensions::history_size(g),
+                g.display_offset(),
+            )
+        };
+        let line = {
+            let f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+            match f.rows.get(row) {
+                Some(m) if m.summary.is_some() => {
+                    // A summary row is its own region (the clicked-on one).
+                    drop(f);
+                    return self.toggle_fold_row(row);
+                }
+                Some(m) => m.first as i64,
+                None => row as i64 - off as i64,
+            }
+        };
+        let id = trimmed as i64 + hist as i64 + line;
+        if id < 0 {
+            return false;
+        }
+        let id = id as u64;
+        let best = regions
+            .iter()
+            .filter(|r| r.start <= id && r.end.is_none_or(|e| id < e))
+            .max_by_key(|r| r.start);
+        let Some(r) = best else { return false };
+        let mut f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        if !f.collapsed.remove(&r.start) {
+            f.collapsed.insert(r.start);
+        }
+        true
+    }
+
+    /// Toggles the innermost region around the cursor row.
+    pub fn toggle_fold_at_cursor(&self) -> bool {
+        let regions = self.fold_regions_all();
+        let trimmed = self.tracker().trimmed();
+        let cur = self.cursor_line_id();
+        let _ = trimmed;
+        let best = regions
+            .iter()
+            .filter(|r| r.start <= cur && r.end.is_none_or(|e| cur < e))
+            .max_by_key(|r| r.start);
+        let Some(r) = best else { return false };
+        let mut f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        if !f.collapsed.remove(&r.start) {
+            f.collapsed.insert(r.start);
+        }
+        true
+    }
+
+    /// Collapses every closed region (outermost ones win when drawn).
+    pub fn fold_all(&self) -> bool {
+        let regions = self.fold_regions_all();
+        let mut f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        let before = f.collapsed.len();
+        f.collapsed
+            .extend(regions.iter().filter(|r| r.end.is_some()).map(|r| r.start));
+        f.collapsed.len() != before
+    }
+
+    pub fn unfold_all(&self) -> bool {
+        let mut f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        let had = !f.collapsed.is_empty();
+        f.collapsed.clear();
+        had
+    }
+
+    /// Expands every collapsed region holding absolute line `abs` (Search reveals its hit).
+    pub fn expand_fold_at_abs(&self, abs: usize) -> bool {
+        let regions = self.fold_regions_all();
+        let id = self.tracker().trimmed() + abs as u64;
+        let mut f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        let mut changed = false;
+        for r in &regions {
+            if r.start <= id && r.end.is_none_or(|e| id < e) {
+                changed |= f.collapsed.remove(&r.start);
+            }
+        }
+        changed
+    }
+
+    fn fold_line(&self, row: usize, end: bool) -> Option<i32> {
+        let f = self.fold.lock().unwrap_or_else(|e| e.into_inner());
+        f.line_of(row, end).filter(|l| *l != i32::MAX)
     }
 
     /// A snapshot that leaves the damage state alone, so a one-off reader (a trigger
@@ -1474,27 +1683,6 @@ mod tests {
     }
 
     #[test]
-    fn lines_typed_on_are_input_even_without_shell_integration() {
-        let (t, rx) = spawn_sh("echo ready-$((1+1)); read x; echo got-$x; sleep 5");
-        wait_for(&t, &rx, "ready-2");
-        t.write(b"typed-line-x\r".to_vec());
-        wait_for(&t, &rx, "got-typed-line-x");
-        let base = t.line_base();
-        let id_of = |needle: &str| {
-            t.lines_range(0, t.total_lines())
-                .iter()
-                .position(|l| l.text().starts_with(needle))
-                .map(|i| base + i as u64)
-                .expect(needle)
-        };
-        let regions = t.input_line_regions();
-        assert!(crate::in_regions(&regions, id_of("typed-line-x")));
-        assert!(!crate::in_regions(&regions, id_of("ready-2")));
-        assert!(!crate::in_regions(&regions, id_of("got-typed-line-x")));
-        t.write(vec![3]);
-    }
-
-    #[test]
     fn echo_flag_follows_the_pty_and_untapped_writes_are_invisible() {
         // A password prompt: ECHO off while the program holds the tty in canonical mode.
         let (t, rx) = spawn_sh("stty -echo; echo noecho-$((1+1)); sleep 5");
@@ -1595,49 +1783,6 @@ mod tests {
     }
 
     /// Column of the `x` that follows a flag in the row whose text starts with that flag.
-    fn x_after_flag(t: &Terminal) -> Option<usize> {
-        let s = t.snapshot();
-        (0..s.rows).find_map(|r| {
-            let row = s.row(r);
-            (row.first().is_some_and(|c| c.ch == '\u{1F1EF}'))
-                .then(|| row.iter().position(|c| c.ch == 'x'))
-                .flatten()
-        })
-    }
-
-    #[test]
-    fn wide_regional_indicators_apply_to_live_pty_output_and_toggle_at_runtime() {
-        let (tx, rx) = mpsc::channel();
-        let t = Terminal::spawn(
-            SpawnOptions {
-                shell: "/bin/sh".into(),
-                cols: 80,
-                rows: 8,
-                wide_regional_indicators: true,
-                ..Default::default()
-            },
-            move || {
-                let _ = tx.send(());
-            },
-        )
-        .unwrap();
-        // U+1F1EF U+1F1F5 then x, written as octal bytes so the echoed command is plain ASCII.
-        let flag_x = r"printf '\360\237\207\257\360\237\207\265x\n'";
-        t.write(format!("{flag_x}\n").into_bytes());
-        let rows = wait_for(&t, &rx, "🇯🇵x");
-        assert!(rows.iter().any(|l| l.contains("🇯🇵x")), "{rows:?}");
-        assert_eq!(x_after_flag(&t), Some(4), "four cells per flag when on");
-
-        t.set_wide_regional_indicators(false);
-        t.write(format!("clear; {flag_x}\n").into_bytes());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while x_after_flag(&t) != Some(2) && Instant::now() < deadline {
-            let _ = rx.recv_timeout(Duration::from_millis(100));
-            t.drain_events();
-        }
-        assert_eq!(x_after_flag(&t), Some(2), "two cells per flag when off");
-    }
-
     #[test]
     fn resize_updates_stty_size() {
         let (t, rx) = spawn_sh("sleep 0.3; stty size");

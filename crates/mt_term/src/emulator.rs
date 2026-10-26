@@ -282,6 +282,33 @@ impl Emulator {
         self.term.scroll_display(cmd.engine());
     }
 
+    /// Test hook: the snapshot with the given regions collapsed (view-only folding).
+    #[cfg(test)]
+    pub(crate) fn folded_snapshot(
+        &mut self,
+        collapsed: &[u64],
+    ) -> (RenderSnapshot, crate::fold_view::FoldState) {
+        let regions: Vec<_> = self
+            .tracker
+            .fold_regions()
+            .into_iter()
+            .map(|r| crate::fold_view::Region {
+                open: r.end.is_none(),
+                start: r.start,
+                end: r.end,
+                title: r.title,
+            })
+            .collect();
+        let mut snap = self.snapshot();
+        let mut st = crate::fold_view::FoldState {
+            collapsed: collapsed.iter().copied().collect(),
+            ..Default::default()
+        };
+        let trimmed = self.tracker.trimmed();
+        crate::fold_view::apply(&self.term, &mut snap, &regions, &mut st, trimmed, false);
+        (snap, st)
+    }
+
     pub fn snapshot(&mut self) -> RenderSnapshot {
         let damage = take_damage(&mut self.term);
         let mut snap = snapshot::build(&self.term, damage, self.wide_ri);
@@ -444,6 +471,16 @@ impl Emulator {
     /// The `7722` marks the program set, oldest first.
     pub fn program_marks(&self) -> Vec<crate::private_osc::ProgramMark> {
         self.tracker.program_marks()
+    }
+
+    /// The `7721` regions, oldest first.
+    pub fn fold_regions(&self) -> Vec<crate::private_osc::FoldRegion> {
+        self.tracker.fold_regions()
+    }
+
+    /// The `7726` rules and their revision.
+    pub fn link_rules(&self) -> (u64, Vec<crate::private_osc::LinkRule>) {
+        self.tracker.link_rules()
     }
 
     /// Stable id of the oldest line still in the grid (see `cursor_line_id`).

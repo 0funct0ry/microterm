@@ -113,6 +113,23 @@ pub(crate) fn start<T>(
     word_chars: &str,
 ) {
     let p = point(term, row, col);
+    start_at(term, kind, p, right, word_chars);
+}
+
+/// [`start`] at a grid line (a folded view's rows no longer equal viewport rows).
+pub(crate) fn start_line<T>(
+    term: &mut Term<T>,
+    kind: SelectionKind,
+    line: i32,
+    col: usize,
+    right: bool,
+    word_chars: &str,
+) {
+    let p = Point::new(Line(line), Column(col.min(term.grid().columns() - 1)));
+    start_at(term, kind, p, right, word_chars);
+}
+
+fn start_at<T>(term: &mut Term<T>, kind: SelectionKind, p: Point, right: bool, word_chars: &str) {
     let sel = match kind {
         SelectionKind::Simple => Selection::new(SelectionType::Simple, p, side(right)),
         SelectionKind::Block => Selection::new(SelectionType::Block, p, side(right)),
@@ -129,6 +146,15 @@ pub(crate) fn start<T>(
 
 pub(crate) fn update<T>(term: &mut Term<T>, row: usize, col: usize, right: bool) {
     let p = point(term, row, col);
+    update_at(term, p, right);
+}
+
+pub(crate) fn update_line<T>(term: &mut Term<T>, line: i32, col: usize, right: bool) {
+    let p = Point::new(Line(line), Column(col.min(term.grid().columns() - 1)));
+    update_at(term, p, right);
+}
+
+fn update_at<T>(term: &mut Term<T>, p: Point, right: bool) {
     if let Some(sel) = term.selection.as_mut() {
         sel.update(p, side(right));
     }

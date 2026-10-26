@@ -60,6 +60,8 @@ pub struct Click {
     /// The clicked row is an OSC 133 prompt row / lies in a command's output.
     pub on_prompt: bool,
     pub in_output: bool,
+    /// The clicked viewport row, for the fold entry.
+    pub row: Option<usize>,
 }
 
 /// Everything a menu needs to know about the pane (and click) it was opened for.
@@ -81,6 +83,8 @@ pub struct Facts {
     /// `recording.enabled`: the "Start/Stop recording" row exists only while it is on.
     pub recording_enabled: bool,
     pub triggers_enabled: bool,
+    /// `[private_osc]` on with the `fold` feature and `fold_commands = true`.
+    pub folds_enabled: bool,
     /// The text of the pane's `7718` badge: the menu names it as program-set.
     pub program_badge: Option<String>,
 }
@@ -186,6 +190,10 @@ impl Facts {
             snippets_enabled: crate::snippets::gate::SnippetsGate::of_config(cfg).enabled,
             recording_enabled: crate::recording::gate::RecordingGate::of_config(cfg).enabled,
             triggers_enabled: crate::triggers::TriggerGate::of_config(cfg).enabled,
+            folds_enabled: {
+                let g = crate::private_osc::gate_of_config(cfg);
+                g.fold_commands && g.allows(mt_term::private_osc::Feature::Fold)
+            },
             program_badge: term.and_then(|t| t.badge()).map(|b| b.text),
         })
     }
@@ -212,6 +220,9 @@ impl Facts {
                 );
                 self.values.set("path", path);
             }
+        }
+        if let Some(row) = click.row {
+            self.values.set("fold_row", row.to_string());
         }
         self.facts
             .insert(WhenKey::OnPrompt, FactValue::Bool(click.on_prompt));
@@ -253,6 +264,7 @@ pub enum Builtin {
     RenameTab,
     SaveAsSnippet,
     CreateTrigger,
+    ToggleFold,
     ToggleRecording,
     Recordings,
 }
@@ -269,6 +281,7 @@ impl Builtin {
             ("viewport", "clear_scrollback") => Builtin::ClearScrollback,
             ("viewport", "save_as_snippet") => Builtin::SaveAsSnippet,
             ("viewport", "create_trigger") => Builtin::CreateTrigger,
+            ("viewport", "toggle_fold") => Builtin::ToggleFold,
             ("viewport", "toggle_recording") => Builtin::ToggleRecording,
             ("viewport", "recordings") => Builtin::Recordings,
             ("viewport", "zoom") => Builtin::Zoom,
@@ -333,6 +346,7 @@ impl Builtin {
             | Builtin::Search
             | Builtin::SaveAsSnippet
             | Builtin::CreateTrigger
+            | Builtin::ToggleFold
             | Builtin::ToggleRecording
             | Builtin::Recordings
             | Builtin::CloseOtherTabs
@@ -391,6 +405,9 @@ fn builtin_row(b: &'static BuiltinDef, f: &Facts) -> Option<MenuRow> {
         return None;
     }
     if b.id == "create_trigger" && !f.triggers_enabled {
+        return None;
+    }
+    if b.id == "toggle_fold" && !f.folds_enabled {
         return None;
     }
     if matches!(b.id, "toggle_recording" | "recordings") && !f.recording_enabled {

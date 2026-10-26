@@ -192,6 +192,14 @@ action = "Disable"   # unbind a default
 |---|---|---|---|
 | `TogglePrivateOsc` | **Toggle private OSC** — Turn the private OSC range 7700-7799 off or on for this session, overriding `[private_osc] enabled`; turning it off clears all private-OSC state and it is not restored | — | — |
 
+## Folding
+
+| Action | Description | macOS | Linux |
+|---|---|---|---|
+| `ToggleFoldAtCursor` | **Toggle fold at cursor** — Collapse or expand the output region under the pointer (or around the cursor row when the pointer is elsewhere) (regions a program marked with OSC 7721, or command output with `fold_commands`); display only, copy and search still see every line | — | — |
+| `FoldAll` | **Fold all output regions** — Collapse every finished output region of the focused pane into one summary row each | — | — |
+| `UnfoldAll` | **Unfold all output regions** — Expand every collapsed output region of the focused pane | — | — |
+
 ## Serial
 
 | Action | Description | macOS | Linux |

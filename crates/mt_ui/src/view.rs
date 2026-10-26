@@ -364,6 +364,15 @@ impl Render for AppWindow {
                 }),
             )
             .on_action(cx.listener(|this, _: &TogglePrivateOsc, _, cx| this.toggle_private_osc(cx)))
+            .on_action(cx.listener(|this, _: &ToggleFoldAtCursor, _, cx| {
+                this.fold_action(crate::status_bar::FoldOp::ToggleAtCursor, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FoldAll, _, cx| {
+                this.fold_action(crate::status_bar::FoldOp::All, cx)
+            }))
+            .on_action(cx.listener(|this, _: &UnfoldAll, _, cx| {
+                this.fold_action(crate::status_bar::FoldOp::UnfoldAll, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextMarker, _, cx| this.step_marker(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousMarker, _, cx| this.step_marker(false, cx)))
             .on_action(cx.listener(|this, _: &ClearMarkers, _, cx| this.clear_trigger_markers(cx)))

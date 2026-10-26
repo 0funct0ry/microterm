@@ -233,6 +233,12 @@ impl AppWindow {
             return;
         };
         let line = m.start().0;
+        // A hit inside a collapsed `7721` region expands it.
+        if self.live().is_some_and(|s| s.term.expand_fold_at_abs(line)) {
+            if let Some(s) = self.live_mut() {
+                s.refresh();
+            }
+        }
         let (top, rows) = self.view_geometry();
         if line < top || line >= top + rows {
             if let Some(s) = self.live() {

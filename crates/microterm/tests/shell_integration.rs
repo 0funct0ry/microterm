@@ -34,6 +34,10 @@ fn every_snippet_emits_all_four_marks_and_the_working_directory() {
             "mt-menu",
             "mt-key",
             "mt-palette",
+            "mt-fold",
+            "mt-link",
+            "]7721;fold;begin",
+            "]7726;link;add",
         ] {
             assert!(text.contains(needle), "{shell} snippet lacks {needle}");
         }

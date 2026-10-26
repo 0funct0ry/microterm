@@ -165,6 +165,49 @@ impl AppWindow {
         }
     }
 
+    /// `ToggleFoldAtCursor`, `FoldAll`, `UnfoldAll` (SPEC §6.4.12): view-only, so a no-op with a
+    /// toast while the feature is off or the pane has no regions.
+    pub(crate) fn fold_action(&mut self, op: FoldOp, cx: &mut Context<Self>) {
+        use mt_term::private_osc::Feature;
+        if !crate::private_osc::gate_of_config(&self.cfg).allows(Feature::Fold) {
+            self.toast(
+                crate::components::ToastKind::Warning,
+                "Output folding is off (private OSC or its fold gate is disabled)",
+                cx,
+            );
+            return;
+        }
+        let Some(term) = self.live().map(|s| s.term.clone()) else {
+            return;
+        };
+        if !term.has_folds() {
+            self.toast(
+                crate::components::ToastKind::Info,
+                "No foldable output in this pane",
+                cx,
+            );
+            return;
+        }
+        // The row under the pointer when it is over the pane, else the cursor row.
+        let pointer_row = self
+            .mouse
+            .pointer
+            .and_then(|p| self.grid_hit(p))
+            .map(|h| h.row);
+        match op {
+            FoldOp::ToggleAtCursor => match pointer_row {
+                Some(row) => term.toggle_fold_at_view_row(row),
+                None => term.toggle_fold_at_cursor(),
+            },
+            FoldOp::All => term.fold_all(),
+            FoldOp::UnfoldAll => term.unfold_all(),
+        };
+        if let Some(s) = self.live_mut() {
+            s.refresh();
+        }
+        cx.notify();
+    }
+
     /// `TogglePrivateOsc`: flips the session override in every window.
     pub(crate) fn toggle_private_osc(&mut self, cx: &mut Context<Self>) {
         let on = crate::private_osc::toggle(&cx.global::<crate::settings::Settings>().config);
@@ -267,4 +310,12 @@ mod tests {
         assert!((contrast(white, black) - 21.0).abs() < 0.1);
         assert!((contrast(white, white) - 1.0).abs() < 0.01);
     }
+}
+
+/// What a fold action does to the focused pane.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FoldOp {
+    ToggleAtCursor,
+    All,
+    UnfoldAll,
 }

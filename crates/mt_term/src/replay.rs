@@ -42,6 +42,21 @@ fn push_mark(out: &mut String, m: &Mark) {
                 crate::menu_reg::b64_encode(note.as_bytes())
             );
         }
+        Mark::Private {
+            cmd: crate::private_osc::PrivCmd::Fold(cmd),
+            ..
+        } => {
+            let _ = match cmd {
+                crate::private_osc::FoldCmd::Begin { id, title, .. } => write!(
+                    out,
+                    "\x1b]7721;fold;begin;{id};{};replay\x07",
+                    crate::menu_reg::b64_encode(title.as_bytes())
+                ),
+                crate::private_osc::FoldCmd::End { id, .. } => {
+                    write!(out, "\x1b]7721;fold;end;{id};replay\x07")
+                }
+            };
+        }
         Mark::Reset
         | Mark::Restored(_)
         | Mark::Vt(_)

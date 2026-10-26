@@ -95,6 +95,10 @@ actions!(
         ClearMarkers,
         // Private OSC (M12.71, SPEC §6.4.2): no default key.
         TogglePrivateOsc,
+        // Collapsible output (M12.75, SPEC §6.4.12): no default keys.
+        ToggleFoldAtCursor,
+        FoldAll,
+        UnfoldAll,
         // Serial ports (M12).
         ConnectSerial,
         SerialSendBreak,
@@ -1134,6 +1138,30 @@ pub static ACTIONS: &[ActionDef] = &[
         TogglePrivateOsc
     ),
     def!(
+        "ToggleFoldAtCursor",
+        "Toggle fold at cursor",
+        "Collapse or expand the output region under the pointer (or around the cursor row when the pointer is elsewhere) (regions a program marked with OSC 7721, or command output with `fold_commands`); display only, copy and search still see every line",
+        &[],
+        &[],
+        ToggleFoldAtCursor
+    ),
+    def!(
+        "FoldAll",
+        "Fold all output regions",
+        "Collapse every finished output region of the focused pane into one summary row each",
+        &[],
+        &[],
+        FoldAll
+    ),
+    def!(
+        "UnfoldAll",
+        "Unfold all output regions",
+        "Expand every collapsed output region of the focused pane",
+        &[],
+        &[],
+        UnfoldAll
+    ),
+    def!(
         "NextMarker",
         "Next marker",
         "Scroll the focused pane to the next marker left by a trigger",
@@ -1222,6 +1250,7 @@ pub const CATEGORIES: &[&str] = &[
     "Recording",
     "Triggers",
     "Private OSC",
+    "Folding",
     "Serial",
     "Misc",
     "Debug",
@@ -1306,6 +1335,7 @@ impl ActionDef {
             | "PreviousMarker"
             | "ClearMarkers" => "Triggers",
             "TogglePrivateOsc" => "Private OSC",
+            "ToggleFoldAtCursor" | "FoldAll" | "UnfoldAll" => "Folding",
             "ConnectSerial" | "SerialSendBreak" | "SerialToggleDtr" | "SerialToggleRts" => "Serial",
             _ => "Misc",
         }

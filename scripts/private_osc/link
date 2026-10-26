@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# 7726: link rules a program registers for its own conventions.
+dir=$(cd "$(dirname "$0")" && pwd); . "$dir/lib.sh"; require_pane
+
+step "1. Issue numbers"
+link_add issue '#(\d+)' 'https://example.com/issues/$1'
+echo "See #4821 and #17 for details."
+echo "   expected: hold the link modifier over #4821: it is underlined and the tooltip shows"
+echo "   https://example.com/issues/4821 (the real target, always)."
+pause
+
+step "2. A scheme you did not allow"
+link_add bad 'run-(\w+)' 'ssh://host/$1'
+echo "try run-deploy"
+echo "   expected: clicking shows 'Blocked link scheme ssh' and nothing opens."
+pause
+
+step "3. Clear"
+link_clear
+echo "   expected: #4821 and run-deploy above are no longer links"

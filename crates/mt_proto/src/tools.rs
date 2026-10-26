@@ -977,7 +977,9 @@ mod tests {
                     && !hay.contains("7727")
                     && !hay.contains("7725")
                     && !hay.contains("7723")
-                    && !hay.contains("7724"),
+                    && !hay.contains("7724")
+                    && !hay.contains("7721")
+                    && !hay.contains("7726"),
                 "{} mentions private OSC",
                 t.name
             );

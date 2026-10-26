@@ -54,6 +54,22 @@ pub const PALETTE_ENTRIES_MAX: usize = 16;
 pub const KEY_RATE_PER_SEC: u32 = 5;
 /// `7724` commands per pane and second, shared with `7723` and `7717`.
 pub const PALETTE_RATE_PER_SEC: u32 = 10;
+/// `7721` regions kept per pane (oldest dropped).
+pub const FOLD_REGIONS_MAX: usize = 200;
+/// `7721` nesting depth.
+pub const FOLD_DEPTH_MAX: usize = 4;
+/// `7721` title length in characters, after sanitising.
+pub const FOLD_TITLE_MAX: usize = 80;
+/// `7721` `begin`/`end` commands per pane and second.
+pub const FOLD_RATE_PER_SEC: u32 = 20;
+/// `7726` rules per pane.
+pub const LINK_RULES_MAX: usize = 8;
+/// `7726` regex length in bytes.
+pub const LINK_REGEX_MAX: usize = 256;
+/// `7726` template length in bytes.
+pub const LINK_TEMPLATE_MAX: usize = 512;
+/// `7726` `add`/`clear` commands per pane and second.
+pub const LINK_RATE_PER_SEC: u32 = 5;
 const WINDOW_MS: u64 = 1000;
 
 /// One member of the range, named as in the §6.4 table.
@@ -138,8 +154,9 @@ impl Feature {
             | Feature::Badge
             | Feature::Mark
             | Feature::Key
-            | Feature::Palette => 1,
-            _ => 0,
+            | Feature::Palette
+            | Feature::Fold
+            | Feature::Link => 1,
         }
     }
 
@@ -179,6 +196,8 @@ pub struct PrivateGate {
     pub rate: u32,
     /// Whether `7727` may be answered. Off in the daemon, which has no program to talk to.
     pub replies: bool,
+    /// `fold_commands`: OSC 133 command output is the default fold unit (SPEC §6.4.12).
+    pub fold_commands: bool,
 }
 
 impl Default for PrivateGate {
@@ -189,6 +208,7 @@ impl Default for PrivateGate {
             features: Features::default(),
             rate: DEFAULT_RATE,
             replies: true,
+            fold_commands: false,
         }
     }
 }
@@ -389,6 +409,8 @@ pub enum PrivCmd {
     Mark(MarkCmd),
     Key(KeyCmd),
     Palette(PaletteCmd),
+    Fold(FoldCmd),
+    Link(LinkCmd),
     /// Allocated but not built yet, or an unallocated number: nothing to do once it is allowed.
     Reserved(Option<Feature>),
     /// Namespace mismatch, bad fields or an oversized string; `None` when the number is unknown.
@@ -407,6 +429,8 @@ impl PrivCmd {
             PrivCmd::Mark(_) => Some(Feature::Mark),
             PrivCmd::Key(_) => Some(Feature::Key),
             PrivCmd::Palette(_) => Some(Feature::Palette),
+            PrivCmd::Fold(_) => Some(Feature::Fold),
+            PrivCmd::Link(_) => Some(Feature::Link),
             PrivCmd::Reserved(f) | PrivCmd::Malformed(f) => *f,
         }
     }
@@ -494,7 +518,14 @@ pub fn parse(p: &[u8]) -> Option<PrivCmd> {
             Some(c) => PrivCmd::Palette(c),
             None => return bad(),
         },
-        _ => PrivCmd::Reserved(Some(f)),
+        Feature::Fold => match parse_fold(verbs) {
+            Some(c) => PrivCmd::Fold(c),
+            None => return bad(),
+        },
+        Feature::Link => match parse_link(verbs) {
+            Some(c) => PrivCmd::Link(c),
+            None => return bad(),
+        },
     })
 }
 
@@ -735,6 +766,286 @@ fn parse_mark(verbs: &[u8]) -> Option<MarkCmd> {
             Some(MarkCmd::Add { kind, note, replay })
         }
         _ => None,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FoldCmd {
+    Begin {
+        id: String,
+        title: String,
+        replay: bool,
+    },
+    End {
+        id: String,
+        replay: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkCmd {
+    Add {
+        id: String,
+        regex: String,
+        template: String,
+        replay: bool,
+    },
+    Clear(Option<String>),
+}
+
+fn replay_flag(rest: &[&str]) -> Option<bool> {
+    match rest {
+        [] => Some(false),
+        ["replay"] => Some(true),
+        _ => None,
+    }
+}
+
+fn parse_fold(verbs: &[u8]) -> Option<FoldCmd> {
+    let s = std::str::from_utf8(verbs).ok()?;
+    let fields: Vec<&str> = s.split(';').collect();
+    match fields.as_slice() {
+        ["begin", id, title, rest @ ..] => {
+            let replay = replay_flag(rest)?;
+            if !valid_slot(id) {
+                return None;
+            }
+            let title = sanitize(&decode_text(title)?);
+            if title.is_empty() || title.chars().count() > FOLD_TITLE_MAX {
+                return None;
+            }
+            Some(FoldCmd::Begin {
+                id: (*id).to_string(),
+                title,
+                replay,
+            })
+        }
+        ["end", id, rest @ ..] => {
+            let replay = replay_flag(rest)?;
+            valid_slot(id).then(|| FoldCmd::End {
+                id: (*id).to_string(),
+                replay,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_link(verbs: &[u8]) -> Option<LinkCmd> {
+    let s = std::str::from_utf8(verbs).ok()?;
+    let fields: Vec<&str> = s.split(';').collect();
+    match fields.as_slice() {
+        ["clear", rest @ ..] => parse_clear(rest).map(LinkCmd::Clear),
+        ["add", id, regex, template, rest @ ..] => {
+            let replay = replay_flag(rest)?;
+            if !valid_slot(id) {
+                return None;
+            }
+            let regex = decode_text(regex)?;
+            let template = decode_text(template)?;
+            if regex.is_empty()
+                || regex.len() > LINK_REGEX_MAX
+                || template.is_empty()
+                || template.len() > LINK_TEMPLATE_MAX
+                || template.chars().any(|c| c.is_control() || is_bidi(c))
+            {
+                return None;
+            }
+            // Same non-backtracking engine and complexity cap as `[[hyperlink_rules]]`:
+            // lookaround, backreferences and expensive patterns do not compile.
+            mt_patterns::compile_capped(&regex).ok()?;
+            Some(LinkCmd::Add {
+                id: (*id).to_string(),
+                regex,
+                template,
+                replay,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// One `7721` region. Lines are stable ids (`MarkStore` semantics); `end` is exclusive and
+/// `None` while the region is open (an open region runs to the last row).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoldRegion {
+    pub id: String,
+    pub title: String,
+    pub start: u64,
+    pub end: Option<u64>,
+    pub depth: u8,
+}
+
+/// The `7721` regions of one pane, oldest first.
+#[derive(Clone, Debug, Default)]
+pub struct FoldStore {
+    regions: std::collections::VecDeque<FoldRegion>,
+    rate: RateWindow,
+}
+
+impl FoldStore {
+    pub fn regions(&self) -> Vec<FoldRegion> {
+        self.regions.iter().cloned().collect()
+    }
+
+    /// Drops regions that left the history (`line < base`).
+    pub fn prune(&mut self, base: u64) -> bool {
+        let n = self.regions.len();
+        self.regions
+            .retain(|r| r.end.map_or(r.start >= base, |e| e > base));
+        n != self.regions.len()
+    }
+
+    /// `Err(())` rate-dropped; `Ok(None)` malformed (alternate screen, unmatched `end`,
+    /// overlap, depth, duplicate open id).
+    fn apply(&mut self, cmd: FoldCmd, line: Option<u64>, now_ms: u64) -> Result<Option<bool>, ()> {
+        let replay = matches!(
+            cmd,
+            FoldCmd::Begin { replay: true, .. } | FoldCmd::End { replay: true, .. }
+        );
+        if !replay && !self.rate.admit(now_ms, FOLD_RATE_PER_SEC) {
+            return Err(());
+        }
+        let Some(line) = line else {
+            return Ok(None);
+        };
+        Ok(match cmd {
+            FoldCmd::Begin { id, title, .. } => {
+                let open = self.regions.iter().filter(|r| r.end.is_none());
+                if open.clone().any(|r| r.id == id) || open.count() >= FOLD_DEPTH_MAX {
+                    return Ok(None);
+                }
+                let depth = self.regions.iter().filter(|r| r.end.is_none()).count() as u8;
+                if self.regions.len() >= FOLD_REGIONS_MAX {
+                    self.regions.pop_front();
+                }
+                self.regions.push_back(FoldRegion {
+                    id,
+                    title,
+                    start: line,
+                    end: None,
+                    depth,
+                });
+                Some(true)
+            }
+            FoldCmd::End { id, .. } => {
+                // Only the innermost open region may close (non-nested ids overlap).
+                let Some(innermost) = self.regions.iter_mut().rev().find(|r| r.end.is_none())
+                else {
+                    return Ok(None);
+                };
+                if innermost.id != id || line < innermost.start {
+                    return Ok(None);
+                }
+                innermost.end = Some(line);
+                Some(true)
+            }
+        })
+    }
+
+    /// `StateOwner::clear` for callers that do not import the trait.
+    pub fn clear_all(&mut self) -> bool {
+        StateOwner::clear(self)
+    }
+}
+
+impl StateOwner for FoldStore {
+    fn clear(&mut self) -> bool {
+        let changed = !self.regions.is_empty();
+        self.regions.clear();
+        changed
+    }
+}
+
+/// One `7726` rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkRule {
+    pub id: String,
+    pub regex: String,
+    pub template: String,
+}
+
+/// The `7726` rules of one pane, in registration order.
+#[derive(Clone, Debug, Default)]
+pub struct LinkRules {
+    rules: Vec<LinkRule>,
+    rev: u64,
+    rate: RateWindow,
+}
+
+impl LinkRules {
+    pub fn rules(&self) -> &[LinkRule] {
+        &self.rules
+    }
+
+    /// Bumped on every change, so a matcher cache can key on it.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
+    /// `Err(())` rate-dropped, `Ok(None)` malformed (cap reached).
+    fn apply(&mut self, cmd: LinkCmd, now_ms: u64) -> Result<Option<bool>, ()> {
+        let replay = matches!(cmd, LinkCmd::Add { replay: true, .. });
+        if !replay && !self.rate.admit(now_ms, LINK_RATE_PER_SEC) {
+            return Err(());
+        }
+        let changed = match cmd {
+            LinkCmd::Clear(None) => StateOwner::clear(self),
+            LinkCmd::Clear(Some(id)) => {
+                let n = self.rules.len();
+                self.rules.retain(|r| r.id != id);
+                n != self.rules.len()
+            }
+            LinkCmd::Add {
+                id,
+                regex,
+                template,
+                ..
+            } => {
+                let new = LinkRule {
+                    id,
+                    regex,
+                    template,
+                };
+                if let Some(cur) = self.rules.iter_mut().find(|r| r.id == new.id) {
+                    let c = *cur != new;
+                    *cur = new;
+                    c
+                } else if self.rules.len() >= LINK_RULES_MAX {
+                    return Ok(None);
+                } else {
+                    self.rules.push(new);
+                    true
+                }
+            }
+        };
+        if changed {
+            self.rev += 1;
+        }
+        Ok(Some(changed))
+    }
+
+    pub(crate) fn replay(&self, out: &mut String) {
+        for r in &self.rules {
+            let _ = write!(
+                out,
+                "\x1b]7726;link;add;{};{};{};replay\x07",
+                r.id,
+                b64_encode(r.regex.as_bytes()),
+                b64_encode(r.template.as_bytes())
+            );
+        }
+    }
+}
+
+impl StateOwner for LinkRules {
+    fn clear(&mut self) -> bool {
+        let changed = !self.rules.is_empty();
+        self.rules.clear();
+        if changed {
+            self.rev += 1;
+        }
+        changed
     }
 }
 
@@ -1543,6 +1854,8 @@ pub struct PrivateState {
     pub marks: MarkStore,
     pub keys: KeyStore,
     pub palette: PaletteStore,
+    pub folds: FoldStore,
+    pub links: LinkRules,
     /// Window shared by `7723`, `7724` and `7717`.
     pane_rate: RateWindow,
     /// Stable id of the cursor row, set by the caller before each `handle`; `None` on the
@@ -1589,6 +1902,9 @@ impl PrivateState {
                 | PrivCmd::Mark(MarkCmd::Add { replay: true, .. })
                 | PrivCmd::Key(KeyCmd::Add { replay: true, .. })
                 | PrivCmd::Palette(PaletteCmd::Add { replay: true, .. })
+                | PrivCmd::Fold(FoldCmd::Begin { replay: true, .. })
+                | PrivCmd::Fold(FoldCmd::End { replay: true, .. })
+                | PrivCmd::Link(LinkCmd::Add { replay: true, .. })
         );
         if !replay {
             if now_ms.saturating_sub(self.window_start) >= WINDOW_MS || self.window_count == 0 {
@@ -1720,6 +2036,42 @@ impl PrivateState {
                     }
                 }
             }
+            PrivCmd::Fold(c) => match self.folds.apply(c, self.cursor_line, now_ms) {
+                Err(()) => {
+                    self.counters.dropped += 1;
+                    Outcome::Nothing
+                }
+                Ok(None) => {
+                    self.counters.malformed += 1;
+                    Outcome::Nothing
+                }
+                Ok(Some(changed)) => {
+                    self.counters.applied += 1;
+                    if changed {
+                        Outcome::Changed(Feature::Fold)
+                    } else {
+                        Outcome::Nothing
+                    }
+                }
+            },
+            PrivCmd::Link(c) => match self.links.apply(c, now_ms) {
+                Err(()) => {
+                    self.counters.dropped += 1;
+                    Outcome::Nothing
+                }
+                Ok(None) => {
+                    self.counters.malformed += 1;
+                    Outcome::Nothing
+                }
+                Ok(Some(changed)) => {
+                    self.counters.applied += 1;
+                    if changed {
+                        Outcome::Changed(Feature::Link)
+                    } else {
+                        Outcome::Nothing
+                    }
+                }
+            },
             _ => Outcome::Nothing,
         }
     }
@@ -1768,7 +2120,9 @@ impl PrivateState {
             Feature::Mark => self.marks.clear(),
             Feature::Key => self.keys.clear(),
             Feature::Palette => self.palette.clear(),
-            _ => false,
+            Feature::Fold => self.folds.clear(),
+            Feature::Link => self.links.clear(),
+            Feature::Caps => false,
         }
     }
 
@@ -1794,7 +2148,7 @@ pub fn caps_reply(gate: &PrivateGate, st_bel: bool) -> Vec<u8> {
         let _ = write!(features, "\"{}\":{v}", f.name());
     }
     let json = format!(
-        "{{\"v\":1,\"microterm\":\"{}\",\"features\":{{{features}}},\"limits\":{{\"status_slots\":{STATUS_SLOTS},\"status_text\":{STATUS_TEXT_MAX},\"status_tooltip\":{STATUS_TOOLTIP_MAX},\"progress_bars\":{PROGRESS_BARS},\"progress_label\":{PROGRESS_LABEL_MAX},\"badge_text\":{BADGE_TEXT_MAX},\"marks\":{MARKS_MAX},\"mark_note\":{MARK_NOTE_MAX},\"pane_keys\":{KEY_BINDINGS_MAX},\"pane_palette\":{PALETTE_ENTRIES_MAX},\"max_osc\":{MAX_OSC}}},\"remote\":true}}",
+        "{{\"v\":1,\"microterm\":\"{}\",\"features\":{{{features}}},\"limits\":{{\"status_slots\":{STATUS_SLOTS},\"status_text\":{STATUS_TEXT_MAX},\"status_tooltip\":{STATUS_TOOLTIP_MAX},\"progress_bars\":{PROGRESS_BARS},\"progress_label\":{PROGRESS_LABEL_MAX},\"badge_text\":{BADGE_TEXT_MAX},\"marks\":{MARKS_MAX},\"mark_note\":{MARK_NOTE_MAX},\"pane_keys\":{KEY_BINDINGS_MAX},\"pane_palette\":{PALETTE_ENTRIES_MAX},\"fold_regions\":{FOLD_REGIONS_MAX},\"fold_depth\":{FOLD_DEPTH_MAX},\"link_rules\":{LINK_RULES_MAX},\"max_osc\":{MAX_OSC}}},\"remote\":true}}",
         env!("CARGO_PKG_VERSION")
     );
     let mut out = format!("\x1b]7727;caps;{}", b64_encode(json.as_bytes())).into_bytes();
@@ -2258,7 +2612,7 @@ mod tests {
         assert_eq!(parse(b"7799;x;y"), Some(PrivCmd::Reserved(None)));
         assert_eq!(
             parse(b"7721;fold;x"),
-            Some(PrivCmd::Reserved(Some(Feature::Fold)))
+            Some(PrivCmd::Malformed(Some(Feature::Fold)))
         );
         assert_eq!(
             parse(b"7718;mark;clear"),
@@ -2560,7 +2914,7 @@ mod tests {
             "{json}"
         );
         assert!(
-            json.contains("\"fold\":0")
+            json.contains("\"fold\":1")
                 && json.contains("\"badge\":1")
                 && json.contains("\"progress\":1")
         );
@@ -2738,5 +3092,138 @@ mod tests {
         }
         assert!(!gate.enabled);
         assert_eq!(st.counters.applied, 0);
+    }
+
+    fn b(s: &str) -> String {
+        b64_encode(s.as_bytes())
+    }
+
+    fn fold_begin(id: &str, title: &str) -> Vec<u8> {
+        format!("7721;fold;begin;{id};{}", b(title)).into_bytes()
+    }
+
+    fn at(st: &mut PrivateState, line: u64, p: &[u8], now: u64) -> Outcome {
+        st.cursor_line = Some(line);
+        feed(st, p, now)
+    }
+
+    #[test]
+    fn fold_nesting_end_and_malformed() {
+        let mut st = PrivateState::default();
+        assert_eq!(
+            at(&mut st, 3, &fold_begin("a", "Build"), 0),
+            Outcome::Changed(Feature::Fold)
+        );
+        at(&mut st, 4, &fold_begin("b", "Inner"), 0);
+        // Duplicate open id, and ending the outer one first (overlap) are malformed.
+        at(&mut st, 4, &fold_begin("b", "Again"), 0);
+        at(&mut st, 5, b"7721;fold;end;a", 0);
+        assert_eq!(st.counters.malformed, 2);
+        at(&mut st, 6, b"7721;fold;end;b", 0);
+        at(&mut st, 7, b"7721;fold;end;a", 0);
+        let r = st.folds.regions();
+        assert_eq!((r[0].start, r[0].end, r[0].depth), (3, Some(7), 0));
+        assert_eq!((r[1].start, r[1].end, r[1].depth), (4, Some(6), 1));
+        // Unmatched end.
+        at(&mut st, 8, b"7721;fold;end;zz", 0);
+        assert_eq!(st.counters.malformed, 3);
+    }
+
+    #[test]
+    fn fold_depth_cap_title_and_alt_screen() {
+        let mut st = PrivateState::default();
+        for i in 0..5u64 {
+            at(&mut st, i, &fold_begin(&format!("d{i}"), "t"), 0);
+        }
+        assert_eq!(st.folds.regions().len(), FOLD_DEPTH_MAX);
+        assert_eq!(st.counters.malformed, 1);
+        assert!(parse(&fold_begin("x", &"é".repeat(81)))
+            .is_some_and(|c| matches!(c, PrivCmd::Malformed(_))));
+        // Alternate screen: no cursor line.
+        st.cursor_line = None;
+        feed(&mut st, &fold_begin("alt", "t"), 5000);
+        assert_eq!(st.counters.malformed, 2);
+    }
+
+    #[test]
+    fn fold_cap_rate_prune_and_clear() {
+        let mut st = PrivateState::default();
+        for i in 0..205u64 {
+            let now = i / FOLD_RATE_PER_SEC as u64 * 1000;
+            at(&mut st, i, &fold_begin("a", "t"), now);
+            at(&mut st, i + 1, b"7721;fold;end;a", now);
+        }
+        assert!(st.folds.regions().len() <= FOLD_REGIONS_MAX);
+        assert!(st.counters.dropped > 0 || st.folds.regions().len() < 205);
+        assert!(st.folds.prune(10_000));
+        assert!(st.folds.regions().is_empty());
+        at(&mut st, 1, &fold_begin("a", "t"), 1_000_000);
+        assert!(st.folds.clear());
+    }
+
+    fn link_add(id: &str, re: &str, tpl: &str) -> Vec<u8> {
+        format!("7726;link;add;{id};{};{}", b(re), b(tpl)).into_bytes()
+    }
+
+    #[test]
+    fn link_parsing_cap_and_rejected_regexes() {
+        let ok = link_add("issue", r"#(\d+)", "https://example.com/issues/$1");
+        assert!(matches!(
+            parse(&ok),
+            Some(PrivCmd::Link(LinkCmd::Add { .. }))
+        ));
+        for bad in [r"(?=a)b", r"(a)\1", "(", &"a".repeat(257)] {
+            assert!(
+                matches!(
+                    parse(&link_add("x", bad, "https://e/$1")),
+                    Some(PrivCmd::Malformed(_))
+                ),
+                "{bad}"
+            );
+        }
+        assert!(matches!(
+            parse(&link_add("x", "a", &"h".repeat(513))),
+            Some(PrivCmd::Malformed(_))
+        ));
+        // A pattern whose compiled size exceeds the cap.
+        assert!(matches!(
+            parse(&link_add("x", r"(\w{500}){500}", "https://e/")),
+            Some(PrivCmd::Malformed(_))
+        ));
+        let mut st = PrivateState::default();
+        for i in 0..9u64 {
+            feed(
+                &mut st,
+                &link_add(&format!("r{i}"), "a", "https://e/"),
+                i * 1000,
+            );
+        }
+        assert_eq!(st.links.rules().len(), LINK_RULES_MAX);
+        assert_eq!(st.counters.malformed, 1);
+        let rev = st.links.rev();
+        feed(&mut st, b"7726;link;clear;r0", 20_000);
+        assert_eq!(st.links.rules().len(), LINK_RULES_MAX - 1);
+        assert!(st.links.rev() > rev);
+        feed(&mut st, b"7726;link;clear", 30_000);
+        assert!(st.links.rules().is_empty());
+    }
+
+    #[test]
+    fn link_rate_limit_and_gate() {
+        let mut st = PrivateState::default();
+        for i in 0..7 {
+            feed(&mut st, &link_add(&format!("r{i}"), "a", "https://e/"), 1);
+        }
+        assert_eq!(st.links.rules().len(), LINK_RATE_PER_SEC as usize);
+        assert_eq!(st.counters.dropped, 2);
+        let mut m = MenuRegistry::default();
+        let mut gate = on();
+        gate.features.set(Feature::Link, false);
+        let c = parse(&link_add("z", "a", "https://e/")).unwrap();
+        st.handle(&gate, &mut m, c, false, 9000);
+        assert_eq!(st.counters.swallowed_disabled, 1);
+        let changed = st.gate_changed(&on(), &gate, &mut m);
+        assert_eq!(changed, vec![Feature::Link]);
+        assert!(st.links.rules().is_empty());
     }
 }

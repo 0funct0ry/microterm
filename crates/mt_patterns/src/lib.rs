@@ -76,6 +76,21 @@ impl LinkSet {
         Ok(Self { rules })
     }
 
+    /// Only program-registered rules (OSC 7726): no built-ins, capped compile. Rules that fail to
+    /// compile are skipped (the sequence parser already rejected them).
+    pub fn program(rules: &[(String, String)]) -> Self {
+        let rules = rules
+            .iter()
+            .filter_map(|(re, format)| {
+                compile_capped(re).ok().map(|re| Rule {
+                    re,
+                    format: format.clone(),
+                })
+            })
+            .collect();
+        Self { rules }
+    }
+
     /// Validate a single user regex (used by config diagnostics).
     pub fn check_regex(re: &str) -> Result<(), String> {
         Regex::new(re).map(|_| ()).map_err(|e| e.to_string())
@@ -109,6 +124,19 @@ impl LinkSet {
         found.sort_by_key(|f| f.range.start);
         found
     }
+}
+
+/// Compiled-size cap shared with trigger rules (SPEC §6.4.13, §10.11.2).
+const REGEX_SIZE_LIMIT: usize = 1 << 20;
+
+/// Compiles a program-supplied regex with the same non-backtracking engine and a complexity cap.
+/// The engine has no lookaround or backreferences, so those fail to compile.
+pub fn compile_capped(re: &str) -> Result<Regex, String> {
+    regex::RegexBuilder::new(re)
+        .size_limit(REGEX_SIZE_LIMIT)
+        .dfa_size_limit(2 * REGEX_SIZE_LIMIT)
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// Expand `$0`–`$9` in `format` using `caps` (unmatched groups become empty).

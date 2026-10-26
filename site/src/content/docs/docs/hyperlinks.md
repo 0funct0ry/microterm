@@ -22,6 +22,13 @@ format = "https://linear.app/acme/issue/$1"
 reported as a config error and the previous config stays active. Built-in rules win where
 matches overlap.
 
+## Rules a program registers
+
+With [private OSC](/docs/private-osc/) enabled, a program can register link rules for its own
+conventions (`#4821`, `JIRA-123`) with `mt-link add`. They rank below your `[[hyperlink_rules]]` and
+OSC 8 links, only apply to the visible rows, and the tooltip always shows the real target. The
+`hyperlinks.schemes` allowlist applies to them like any other link.
+
 ## Opening a link
 
 Hold the activation modifier and click: **Cmd** on macOS, **Ctrl** on Linux. Hovering with the
