@@ -60,6 +60,16 @@ fn env(name: &str, config: &str, snippets: &str) -> PathBuf {
 }
 
 fn boot(cx: &mut TestAppContext, config: PathBuf) -> (Entity<AppWindow>, &mut VisualTestContext) {
+    boot_shell(cx, config, "/bin/sh", vec![("PS1".into(), "$ ".into())])
+}
+
+fn boot_shell(
+    cx: &mut TestAppContext,
+    config: PathBuf,
+    shell: impl Into<String>,
+    env: Vec<(String, String)>,
+) -> (Entity<AppWindow>, &mut VisualTestContext) {
+    let shell = shell.into();
     cx.update(|cx| {
         cx.set_global(Settings::load(config));
         settings::apply_theme(cx);
@@ -71,14 +81,14 @@ fn boot(cx: &mut TestAppContext, config: PathBuf) -> (Entity<AppWindow>, &mut Vi
         this.attach_terminal(
             0,
             SpawnOptions {
-                shell: "/bin/sh".into(),
-                env: vec![("PS1".into(), "$ ".into())],
+                shell,
+                env,
                 ..Default::default()
             },
             window,
             cx,
         )
-        .expect("spawn /bin/sh");
+        .expect("spawn shell");
     });
     cx.run_until_parked();
     (view, cx)
@@ -241,7 +251,18 @@ fn run_sends_enter_and_the_gesture_overrides_it(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_cursor_marker_leaves_the_shell_cursor_in_place(cx: &mut TestAppContext) {
-    let (view, cx) = boot(cx, env("cursor", ON_TEMPLATES, SNIPPETS));
+    // Moving the cursor needs line editing, which Linux's dash lacks; bash has readline.
+    // An empty HOME keeps the runner's ~/.bashrc from replacing the prompt.
+    let home = dir("cursor-home");
+    let (view, cx) = boot_shell(
+        cx,
+        env("cursor", ON_TEMPLATES, SNIPPETS),
+        "/bin/bash",
+        vec![
+            ("PS1".into(), "$ ".into()),
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+        ],
+    );
     insert(&view, cx, "cursor", Gesture::default());
     wait_for(&view, cx, |r| r.contains("echo tail"));
     // Typing now lands at the marker.

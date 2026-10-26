@@ -143,9 +143,12 @@ fn multiline_paste_confirmed_with_enter_runs_every_line(cx: &mut TestAppContext)
     cx.dispatch_action(Paste);
     cx.simulate_keystrokes("enter");
     assert_eq!(view.read_with(cx, |t, _| t.overlays.top()), None);
-    let rows = wait_for(&view, cx, |r| r == "two");
+    // Without line editing (dash) the tty echoes the second line ahead of the prompt,
+    // so its output lands after "$ ".
+    let is_two = |r: &str| r == "two" || r == "$ two";
+    let rows = wait_for(&view, cx, is_two);
     assert!(
-        rows.iter().any(|r| r == "one") && rows.iter().any(|r| r == "two"),
+        rows.iter().any(|r| r == "one") && rows.iter().any(|r| is_two(r)),
         "{rows:?}"
     );
 }

@@ -366,23 +366,23 @@ mod tests {
 
     #[test]
     fn processes_start_in_home_by_default() {
-        let (_p, rx) = spawn(&["/bin/pwd"]);
-        let evs = collect_until(&rx, |e| matches!(e, PaneEvent::Exited(_)));
-        let out: String = evs
-            .iter()
-            .filter_map(|e| match e {
-                PaneEvent::Output { bytes, .. } => {
-                    Some(String::from_utf8_lossy(bytes).into_owned())
-                }
-                _ => None,
-            })
-            .collect();
+        let (p, rx) = spawn(&["/bin/pwd"]);
+        collect_until(&rx, |e| matches!(e, PaneEvent::Exited(_)));
         let home = std::env::var("HOME").unwrap();
         let real = std::fs::canonicalize(&home).unwrap();
-        assert!(
-            out.contains(&home) || out.contains(real.to_str().unwrap()),
-            "pwd printed {out:?}, HOME is {home}"
-        );
+        // Output can still be in flight when the exit event arrives, so poll the screen.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = p.screen_text().join("\n");
+            if out.contains(&home) || out.contains(real.to_str().unwrap()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pwd printed {out:?}, HOME is {home}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]
