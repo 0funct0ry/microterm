@@ -74,6 +74,21 @@ through LaunchServices (so the Dock shows the microterm icon) or hands a new win
 instance, and forwards every other command (`ctl`, `sh`, `config`, …) to the app binary. `--help`,
 `--version` and exit codes are identical either way.
 
+### First run
+
+When you drag `microterm.app` out of the DMG there is nothing else to install. On first launch the
+app:
+
+- links `microterm` and `mt` (a shorter name for the same command) into `~/.local/bin`, following
+  the app if you move it later. Existing files and links that are not microterm's are never
+  replaced;
+- adds `~/.local/bin` to your login shell's profile once, with a `# microterm` comment, unless it
+  is already mentioned there. Open a new terminal window for it to take effect.
+
+Panes inside microterm need neither: they export `MICROTERM_EXECUTABLE` and
+`MICROTERM_EXECUTABLE_DIR` and have the launcher directory on `PATH` from the first launch. Set
+`MICROTERM_NO_CLI_SETUP=1` in the app's environment to skip the links and the profile edit.
+
 ## Build from source
 
 ```sh

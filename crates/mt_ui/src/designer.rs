@@ -291,6 +291,9 @@ impl Designer {
 
     /// TOML path of the selection, e.g. `workspaces[0].tabs[0].panes[1]`.
     pub fn path_label(&self) -> String {
+        if self.root().is_none() {
+            return String::new();
+        }
         let mut s = format!("workspaces[{}].tabs[{}]", self.ws, self.tab);
         for i in &self.sel {
             s.push_str(&format!(".panes[{i}]"));

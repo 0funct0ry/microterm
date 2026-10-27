@@ -18,6 +18,7 @@ APP=$STAGE/microterm.app
 rm -rf "$STAGE"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
 cp "$BIN_DIR/microterm" "$APP/Contents/MacOS/microterm-app"
 cp "$BIN_DIR/microterm-launcher" "$APP/Contents/Resources/bin/microterm"
+ln -s microterm "$APP/Contents/Resources/bin/mt"
 sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist.in > "$APP/Contents/Info.plist"
 cp packaging/icon/generated/microterm.icns "$APP/Contents/Resources/microterm.icns"
 cp LICENSE THIRD-PARTY-LICENSES.html "$APP/Contents/Resources/"
@@ -47,9 +48,14 @@ cp LICENSE THIRD-PARTY-LICENSES.html "$DMG/"
 ln -s /Applications "$DMG/Applications"
 cp packaging/icon/generated/microterm.icns "$DMG/.VolumeIcon.icns"
 if command -v SetFile >/dev/null 2>&1; then SetFile -a C "$DMG"; fi
-hdiutil create -quiet -volname microterm -srcfolder "$DMG" -ov -format UDZO "$DIST/$NAME.dmg"
+# A versioned volume name ("microterm 1.0.0-arm64"): rebuilds and upgrades then mount at
+# different paths, so Launch Services never confuses one ejected image with another.
+case "$TARGET" in aarch64-*) ARCH=arm64 ;; x86_64-*) ARCH=x64 ;; *) ARCH=${TARGET%%-*} ;; esac
+VOLNAME="microterm $VERSION-$ARCH"
+hdiutil create -quiet -volname "$VOLNAME" -srcfolder "$DMG" -ov -format UDZO "$DIST/$NAME.dmg"
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   codesign --force --timestamp -s "$APPLE_SIGNING_IDENTITY" "$DIST/$NAME.dmg"
 fi
+lsunregister "$DMG/microterm.app"
 rm -rf "$DMG"
 echo "built $DIST/$NAME.dmg and $DIST/$NAME.tar.gz"

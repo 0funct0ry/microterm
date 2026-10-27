@@ -24,3 +24,13 @@ need_licenses() {
     [ -f "$ROOT/$f" ] || { echo "error: $f is missing (run: make licenses)" >&2; exit 1; }
   done
 }
+
+# Drops temporary `.app` copies (staging dirs, a mounted DMG) from the LaunchServices database so
+# they do not linger as duplicate microterm entries in Launchpad and Spotlight. Best effort.
+lsunregister() {
+  lsr=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+  [ -x "$lsr" ] || return 0
+  for p in "$@"; do
+    [ -e "$p" ] && "$lsr" -u "$p" >/dev/null 2>&1 || true
+  done
+}

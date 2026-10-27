@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **First-run setup for a drag-installed macOS app.** On launch from `X.app` the app links
+  `microterm` and `mt` into `~/.local/bin` (re-checked every launch, so the links follow the app
+  when it moves; real files and foreign links are never replaced) and, once, adds that directory
+  to the login shell's profile like `install.sh` does. Local panes export `MICROTERM_EXECUTABLE`
+  and `MICROTERM_EXECUTABLE_DIR` and, in a bundled app, get the launcher directory on `PATH`, so
+  `microterm ctl` and `mt` work in the first pane with no setup. The bundle ships an `mt` link next
+  to the launcher. Set `MICROTERM_NO_CLI_SETUP=1` to skip the links and the profile edit.
 - **M13 — Release engineering and website (v1.0.0).**
   - **App icon.** A μ inside a small terminal window, used for the macOS `.app` and `.dmg`, the Linux
     hicolor icons and `.desktop` file, the dev-build Dock icon, the About dialog, the website and

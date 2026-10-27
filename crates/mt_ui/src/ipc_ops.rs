@@ -162,6 +162,51 @@ pub fn pane_env(pane: Id, tab: Id, window: Id, socket: Option<&Path>) -> Vec<(St
             s.to_string_lossy().into_owned(),
         ));
     }
+    if let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.canonicalize().ok())
+    {
+        env.extend(executable_env(&exe, std::env::var_os("PATH").as_deref()));
+    }
+    env
+}
+
+/// `MICROTERM_EXECUTABLE` (the `microterm` command) and `MICROTERM_EXECUTABLE_DIR` for a pane,
+/// given the running app binary. Inside a macOS bundle (`X.app/Contents/MacOS/microterm-app`) the
+/// command is the launcher in `Contents/Resources/bin`, and that directory is prepended to `PATH`
+/// so `microterm` and `mt` work in a drag-installed app with no setup. Elsewhere (dev builds,
+/// Linux) the binary itself is the command and `PATH` is left alone.
+fn executable_env(app_exe: &Path, path: Option<&std::ffi::OsStr>) -> Vec<(String, String)> {
+    let launcher = app_exe
+        .ancestors()
+        .nth(3)
+        .filter(|b| b.extension().is_some_and(|e| e == "app"))
+        .map(|b| b.join("Contents/Resources/bin/microterm"))
+        .filter(|l| l.exists());
+    let bundled = launcher.is_some();
+    let exe = launcher.unwrap_or_else(|| app_exe.to_path_buf());
+    let Some(dir) = exe.parent().map(Path::to_path_buf) else {
+        return Vec::new();
+    };
+    let mut env = vec![
+        (
+            "MICROTERM_EXECUTABLE".to_string(),
+            exe.to_string_lossy().into_owned(),
+        ),
+        (
+            "MICROTERM_EXECUTABLE_DIR".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ),
+    ];
+    if bundled {
+        let mut dirs = vec![dir.clone()];
+        if let Some(existing) = path {
+            dirs.extend(std::env::split_paths(existing).filter(|d| *d != dir));
+        }
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            env.push(("PATH".to_string(), joined.to_string_lossy().into_owned()));
+        }
+    }
     env
 }
 
@@ -1064,6 +1109,46 @@ mod tests {
         let e = plan_workspace_delete(&rows, "infra", false, ConfirmClose::Always).unwrap_err();
         assert_eq!(e.code, mt_proto::ErrorCode::ConfirmRequired);
         assert!(plan_workspace_delete(&rows, "infra", true, ConfirmClose::Always).is_ok());
+    }
+
+    #[test]
+    fn bundled_app_exports_the_launcher_and_prepends_its_dir_to_path() {
+        let root = std::env::temp_dir().join(format!("mt_exe_{}", std::process::id()));
+        let app = root.join("microterm.app");
+        let bin = app.join("Contents/Resources/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(bin.join("microterm"), "").unwrap();
+        let env = executable_env(
+            &app.join("Contents/MacOS/microterm-app"),
+            Some("/usr/bin:/bin".as_ref()),
+        );
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("MICROTERM_EXECUTABLE"),
+            Some(bin.join("microterm").to_str().unwrap())
+        );
+        assert_eq!(get("MICROTERM_EXECUTABLE_DIR"), Some(bin.to_str().unwrap()));
+        assert_eq!(
+            get("PATH"),
+            Some(format!("{}:/usr/bin:/bin", bin.display()).as_str())
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unbundled_binary_exports_itself_and_leaves_path_alone() {
+        let env = executable_env(
+            Path::new("/x/target/debug/microterm"),
+            Some("/bin".as_ref()),
+        );
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("MICROTERM_EXECUTABLE"),
+            Some("/x/target/debug/microterm")
+        );
+        assert_eq!(get("MICROTERM_EXECUTABLE_DIR"), Some("/x/target/debug"));
+        assert_eq!(get("PATH"), None);
     }
 
     #[test]

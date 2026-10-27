@@ -20,6 +20,8 @@ for f in microterm-*.dmg; do
       [ -f "$mnt/$want" ] || { echo "error: $f lacks $want" >&2; fail=1; }
     done
     [ -f "$mnt/microterm.app/Contents/Resources/LICENSE" ] || { echo "error: $f: app lacks LICENSE" >&2; fail=1; }
+    lsr=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    [ -x "$lsr" ] && "$lsr" -u "$mnt/microterm.app" >/dev/null 2>&1 || true
     hdiutil detach -quiet "$mnt"
   fi
 done

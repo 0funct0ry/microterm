@@ -23,6 +23,9 @@ C ?=
 PREFIX ?= $(HOME)/.local
 MUX_TARGETS ?= x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 
+# LaunchServices tool used to drop temporary .app copies from the app database (macOS).
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
 # Minimum Node for the Starlight site (site/package.json "engines").
 NODE_MIN_MAJOR := 22
 
@@ -290,7 +293,8 @@ ifeq ($(UNAME_S),Darwin)
 	rm -rf "$$HOME/Applications/microterm.app"; mkdir -p "$$HOME/Applications"; \
 	cp -R "dist/stage-$$host/microterm.app" "$$HOME/Applications/microterm.app"; \
 	ln -sf "$$HOME/Applications/microterm.app/Contents/Resources/bin/microterm" "$(PREFIX)/bin/microterm"; \
-	echo "installed ~/Applications/microterm.app, $(PREFIX)/bin/microterm -> launcher"
+	ln -sf microterm "$(PREFIX)/bin/mt"; \
+	echo "installed ~/Applications/microterm.app, $(PREFIX)/bin/{microterm,mt} -> launcher"
 else
 	@host=$$(rustc -vV | sed -n 's/^host: //p'); s="dist/stage-$$host"/microterm-*; \
 	install -m755 $$s/bin/microterm "$(PREFIX)/bin/microterm"; \
@@ -321,6 +325,7 @@ clean: ## Remove Rust build output
 	$(CARGO) clean
 
 clean-dist: ## Remove what `make bundle` and `make release-dry` generate (dist/, licence check file)
+	@if [ -x "$(LSREGISTER)" ]; then for a in dist/*/microterm.app; do [ -e "$$a" ] && "$(LSREGISTER)" -u "$$PWD/$$a" >/dev/null 2>&1; done; fi; true
 	rm -rf dist target/THIRD-PARTY-LICENSES.check.html
 
 clean-site: ## Remove the site's build output and dependencies
