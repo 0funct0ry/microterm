@@ -9,7 +9,7 @@ import { VERSION } from '../version';
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const site = 'https://0funct0ry.github.io/microterm';
 const version = VERSION;
-const title = 'microterm: a fast, quiet terminal for macOS and Linux';
+const title = 'microterm: a high-performance, cross-platform terminal with GPU acceleration';
 const description =
   'GPU-rendered terminal with workspaces, quick select, vi-style copy mode and SSH sessions that survive a dropped connection. Configured in one TOML file.';
 ---
@@ -42,7 +42,7 @@ const description =
     <a class="brand" href={`${base}/`}><img class="brand-mark" src={logo.src} width="24" height="24" alt="" />microterm</a>
     <nav class="nav-links" aria-label="Primary">
       <a href="#features" class="hide-sm">Features</a>
-      <a href="#ssh" class="hide-sm">SSH</a>
+      <a href="#osc" class="hide-sm">Integrations</a>
       <a href="#compare" class="hide-sm">Compare</a>
       <a href={`${base}/docs/installation/`}>Docs</a>
       <a href="https://github.com/0funct0ry/microterm">GitHub</a>
@@ -56,13 +56,10 @@ const description =
 <main>
 <div class="wrap">
   <section class="hero" style="padding-top:72px">
-    <h1>A fast, quiet terminal for macOS and Linux.</h1>
-    <p class="lede">GPU-rendered, configured in one TOML file that reloads as you save. Workspaces, quick select, a vi-style copy mode and SSH sessions that survive a dropped connection are built in.</p>
+    <h1>A high-performance, cross-platform terminal with GPU acceleration.</h1>
+    <p class="lede">Featuring GPU-accelerated rendering, zero-config setup, automatic configuration reload on save, built-in workspaces, shell integration and more.</p>
     <div class="cta">
-      <div class="oneliner" role="group" aria-label="Install with Homebrew">
-        <code><span class="p">$ </span>brew install --cask 0funct0ry/tap/microterm</code>
-        <button class="copy" data-copy="brew install --cask 0funct0ry/tap/microterm">Copy</button>
-      </div>
+      <a class="btn primary" href="#install">Get started</a>
       <a class="btn" href={`${base}/docs/installation/`}>Read the docs</a>
     </div>
     <p class="meta-line">v{version} for macOS 12+ and Linux (Wayland or X11). MIT licensed.</p>
@@ -112,35 +109,35 @@ const description =
   <!-- features -->
   <section id="features">
     <div class="sec-head">
-      <h2>Everything you used to bolt on</h2>
-      <p>tmux for sessions, a hint plugin for hashes, a script for recording. microterm does these itself, with the same keys on both platforms.</p>
+      <h2>Essential tools, built in</h2>
+      <p>microterm includes the capabilities that teams typically assemble from separate tools. You can record terminal sessions for documentation and review, and you can reach every action through a searchable command palette. Shell integration tracks commands, their output and their exit status. Remote control lets scripts and automation drive the terminal from the command line. Each feature works the same way on macOS and Linux.</p>
     </div>
     <div class="groups">
       <div class="group">
-        <div><h3>Grab text without the mouse</h3><p>Copy what you see in two keystrokes.</p></div>
+        <div><h3>Keyboard-Driven Text Selection</h3><p>Select and copy visible terminal text using just two keystrokes, without requiring a mouse.</p></div>
         <div class="feat">
-          <div><h4>Quick select <kbd data-k="qs"></kbd></h4><p>Labels every git hash, IP, path, UUID and URL on screen. Type a label to copy it, or the capital letter to paste it too.</p></div>
-          <div><h4>Copy mode <kbd data-k="cm"></kbd></h4><p>vi motions over the scrollback: <code>w b e</code>, <code>gg G</code>, search with <code>/</code>, block selection with <code>Ctrl-v</code>.</p></div>
-          <div><h4>Hyperlinks</h4><p>OSC 8 links plus your own regex rules. Turn <code>PAY-12</code> into a link to your tracker in one line of config.</p></div>
-          <div><h4>Mouse that behaves</h4><p>Full SGR reporting for vim and htop. Hold Shift to select anyway. Word, line and block selection.</p></div>
+          <div><h4>Quick Select <kbd data-k="qs"></kbd></h4><p>Automatically labels Git hashes, IP addresses, file paths, UUIDs, and URLs visible on screen. Type a label to copy the corresponding value, or enter its uppercase variant to paste it directly.</p><!-- TBD screenshot (quick-select.png): Quick select active over a git log or ls output: yellow hint labels on hashes, paths, IPs and URLs. --><figure class="shot" data-shot="quick-select"><figcaption>Screenshot TBD: Quick select active over a git log or ls output: yellow hint labels on hashes, paths, IPs and URLs.</figcaption></figure></div>
+          <div><h4>Copy Mode <kbd data-k="cm"></kbd></h4><p>Navigate and select text in scrollback using familiar Vim motions, including <code>w</code>, <code>b</code>, <code>e</code>, <code>gg</code>, and <code>G</code>. Search with <code>/</code> and select rectangular blocks with <code>Ctrl-V</code>.</p><!-- TBD screenshot (copy-mode.png): Copy mode in scrollback: mode indicator visible, cursor mid-buffer, a rectangular (Ctrl-V) block selection highlighted. --><figure class="shot" data-shot="copy-mode"><figcaption>Screenshot TBD: Copy mode in scrollback: mode indicator visible, cursor mid-buffer, a rectangular (Ctrl-V) block selection highlighted.</figcaption></figure></div>
+          <div><h4>Hyperlink Support</h4><p>Supports OSC 8 hyperlinks and custom regular-expression rules for automatically identifying and linking text in terminal output. Configure a rule in a single line to turn identifiers such as <code>ISSUE-12</code> into clickable links to your issue tracker or other external resources.</p><!-- TBD screenshot (hyperlinks.png): Output containing ISSUE-12 and a URL, mouse hovering the link so it is underlined, with the link target shown. --><figure class="shot" data-shot="hyperlinks"><figcaption>Screenshot TBD: Output containing ISSUE-12 and a URL, mouse hovering the link so it is underlined, with the link target shown.</figcaption></figure></div>
+          <div><h4>Intuitive Mouse Support</h4><p>Full SGR mouse reporting for applications such as Vim and htop. Hold Shift to select text independently of application mouse handling. Supports word, line, and rectangular block selection.</p><!-- TBD screenshot (mouse.png): htop or Vim running with mouse reporting, plus a Shift-drag text selection made over it. --><figure class="shot" data-shot="mouse"><figcaption>Screenshot TBD: htop or Vim running with mouse reporting, plus a Shift-drag text selection made over it.</figcaption></figure></div>
         </div>
       </div>
       <div class="group">
-        <div><h3>Keep sessions organised</h3><p>Group work the way tmux does, with native tabs.</p></div>
+        <div><h3>Keep sessions organised</h3><p>Organize terminal sessions with native tabs and split panes, providing a familiar workflow similar to tmux.</p></div>
         <div class="feat">
-          <div><h4>Workspaces</h4><p>Named groups of windows and tabs. Switch between "payments" and "infra" and only that work is on screen.</p></div>
-          <div><h4>Command palette <kbd data-k="pal"></kbd></h4><p>Every action, tab, workspace and theme, fuzzy-searchable, with its shortcut shown next to it.</p></div>
-          <div><h4>Launcher</h4><p>One list for launch profiles, SSH hosts and workspaces. Declare startup workspaces in config.</p></div>
-          <div><h4>Splits</h4><p>Split any tab into panes, locally or over SSH, with focus following the mouse if you want it.</p></div>
+          <div><h4>Workspaces</h4><p>Create named groups of windows and tabs for different projects or environments. Switch between workspaces such as <code>payments</code> and <code>infra</code> to keep related tasks organized and separate.</p><!-- TBD screenshot (workspaces.png): Workspace switcher open listing payments and infra, with the active workspace's tabs visible behind it. --><figure class="shot" data-shot="workspaces"><figcaption>Screenshot TBD: Workspace switcher open listing payments and infra, with the active workspace's tabs visible behind it.</figcaption></figure></div>
+          <div><h4>Command palette <kbd data-k="pal"></kbd></h4><p>Quickly find and execute actions, switch tabs and workspaces, and change themes through a searchable command palette. Fuzzy search helps locate commands, with keyboard shortcuts displayed alongside each action.</p><!-- TBD screenshot (command-palette.png): Command palette open with a partial fuzzy query, matched letters highlighted and shortcuts on the right. --><figure class="shot" data-shot="command-palette"><figcaption>Screenshot TBD: Command palette open with a partial fuzzy query, matched letters highlighted and shortcuts on the right.</figcaption></figure></div>
+          <div><h4>Launcher</h4><p>Access launch profiles, SSH hosts, and workspaces from a unified launcher. Define startup workspaces in the configuration to automatically organize your terminal environment when you launch the application.</p><!-- TBD screenshot (launcher.png): Launcher open showing launch profiles, SSH hosts and workspaces grouped in one list. --><figure class="shot" data-shot="launcher"><figcaption>Screenshot TBD: Launcher open showing launch profiles, SSH hosts and workspaces grouped in one list.</figcaption></figure></div>
+          <div><h4>Splits</h4><p>Divide any tab into multiple panes for parallel workflows, with support for both local sessions and SSH connections. Optionally enable mouse-following focus to switch between panes simply by moving the pointer.</p><!-- TBD screenshot (splits.png): One tab split into three panes (one local, one SSH), focused pane border highlighted. --><figure class="shot" data-shot="splits"><figcaption>Screenshot TBD: One tab split into three panes (one local, one SSH), focused pane border highlighted.</figcaption></figure></div>
         </div>
       </div>
       <div class="group">
-        <div><h3>Make it yours</h3><p>One file, no restarts.</p></div>
+        <div><h3>Flexible Configuration</h3><p>Customize your terminal with a single configuration file and apply changes instantly, without restarting.</p></div>
         <div class="feat">
-          <div><h4>Live config</h4><p>Save <code>microterm.toml</code> and colours, fonts and keys change in every window. A typo shows the line and column and keeps the last good config.</p></div>
-          <div><h4>53 themes</h4><p>One Dark and One Light plus Catppuccin, Tokyo Night, Rosé Pine, Kanagawa and more. Follows the system appearance if you want it to.</p></div>
-          <div><h4>Real typography</h4><p>Ligatures that break apart under the cursor, colour emoji, CJK, and a fallback chain you control.</p></div>
-          <div><h4>Every underline</h4><p>Bold, italic, <span style="text-decoration:underline double">double</span>, <span style="text-decoration:underline wavy;text-decoration-color:#d07277">curly</span>, dotted and coloured underlines, strikethrough, true colour.</p></div>
+          <div><h4>Live Configuration</h4><p>Save <code>microterm.toml</code> and colours, fonts and keys change in every window. A typo shows the line and column and keeps the last good config.</p><!-- TBD screenshot (live-config.png): Editor with microterm.toml beside a terminal window, ideally the config error banner showing line and column. --><figure class="shot" data-shot="live-config"><figcaption>Screenshot TBD: Editor with microterm.toml beside a terminal window, ideally the config error banner showing line and column.</figcaption></figure></div>
+          <div><h4>Extensive Dark and Light Theme Collection</h4><p>Choose from an extensive theme collection. Optionally synchronize the terminal's appearance with your system's light or dark mode.</p><!-- TBD screenshot (themes.png): Grid or side-by-side of the same session in several themes (e.g. One Dark, One Light, Tokyo Night, Catppuccin). --><figure class="shot" data-shot="themes"><figcaption>Screenshot TBD: Grid or side-by-side of the same session in several themes (e.g. One Dark, One Light, Tokyo Night, Catppuccin).</figcaption></figure></div>
+          <div><h4>Advanced Typography</h4><p>Enhance terminal readability with font ligatures that separate when the cursor moves over them, colour emoji, and support for CJK characters. Configure the font fallback chain to control how different characters and symbols are rendered.</p><!-- TBD screenshot (typography.png): Code with ligatures (=>, !=, ->), one ligature broken apart under the cursor, plus colour emoji and CJK text. --><figure class="shot" data-shot="typography"><figcaption>Screenshot TBD: Code with ligatures (=>, !=, ->), one ligature broken apart under the cursor, plus colour emoji and CJK text.</figcaption></figure></div>
+          <div><h4>Complete Text Styling</h4><p>Renders every text style that modern command-line tools use, including bold, italic, and strikethrough. Supports <span style="text-decoration:underline double">double</span>, <span style="text-decoration:underline wavy;text-decoration-color:#d07277">curly</span>, dotted, and coloured underlines, as well as full 24-bit true colour.</p><!-- TBD screenshot (text-styling.png): Output of a style test script: bold, italic, strikethrough, double/curly/dotted/coloured underlines and a 24-bit gradient. --><figure class="shot" data-shot="text-styling"><figcaption>Screenshot TBD: Output of a style test script: bold, italic, strikethrough, double/curly/dotted/coloured underlines and a 24-bit gradient.</figcaption></figure></div>
         </div>
       </div>
     </div>
@@ -163,8 +160,8 @@ const description =
 <span class="k">ligatures</span> = <span class="k">true</span>
 
 <span class="sec">[[hyperlink_rules]]</span>
-<span class="k">regex</span>  = <span class="str">'\b(PAY-\d+)\b'</span>
-<span class="k">format</span> = <span class="str">"https://tracker.example.com/$1"</span>
+<span class="k">regex</span>  = <span class="str">'\b(ISSUE-\d+)\b'</span>
+<span class="k">format</span> = <span class="str">"https://issues.example.com/$1"</span>
 
 <span class="sec">[[workspaces]]</span>
 <span class="k">name</span> = <span class="str">"payments"</span>
@@ -192,17 +189,17 @@ $ microterm ctl workspace switch infra</pre>
   </section>
 
   <!-- ssh -->
-  <section id="ssh">
+  <section id="osc">
     <div class="sec-head">
-      <h2>SSH sessions that outlive your Wi-Fi</h2>
-      <p>microterm runs a small daemon on the remote host. Your shells live there, so a dropped connection pauses the view instead of killing the work.</p>
+      <h2>Terminal extensions via private OSC</h2>
+      <p>Microterm reserves OSC 7700–7799 for its own extensions, so a process can drive UI state directly from the PTY stream: progress bars, tab colours, status segments, and gutter marks. Because PTY output is untrusted, the range is gated behind a master switch that is off by default and has to be explicitly turned on via the config file or the command palette only.</p>
     </div>
     <ol class="steps">
-      <li><span class="n">1</span><h4>Connect</h4><p>Pick a host from the launcher or run <code>microterm ssh prod</code>. Reads your <code>~/.ssh/config</code>, agent and known hosts.</p></li>
-      <li><span class="n">2</span><h4>Lose the network</h4><p>The tab dims and shows the retry count. Processes on the host keep running.</p></li>
-      <li><span class="n">3</span><h4>Pick up where you were</h4><p>On reconnect the screen and scrollback come back exactly as the remote shell left them.</p></li>
+      <li><span class="n">1</span><h4>Enable the feature</h4><p>Turn on private OSC in <code>microterm.toml</code> or through the command palette. Each sequence can also be enabled or disabled individually.</p></li>
+      <li><span class="n">2</span><h4>Print a sequence</h4><p>Any program can send a sequence with a single <code>printf</code> command. No plugin or extra software is required, and the sequences also work over SSH.</p></li>
+      <li><span class="n">3</span><h4>See the result</h4><p>Status segments, progress bars, tab colours, pane badges, gutter marks, and pane-specific palette entries appear in the interface immediately.</p></li>
     </ol>
-    <div class="ssh-cta"><button class="chipbtn" data-act="drop">Try it in the demo above</button><span>The daemon is uploaded and version-matched automatically.</span></div>
+    <div class="ssh-cta"><a class="chipbtn" href={`${base}/docs/private-osc/`}>Read the private OSC reference</a><span>Sequences use the reserved range 7700–7799, so they do not conflict with other terminals.</span></div>
   </section>
 
   <!-- compare -->
