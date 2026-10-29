@@ -5,6 +5,19 @@ import '../styles/tokens.css';
 import '../styles/marketing.css';
 import logo from '../assets/logo.svg';
 import { VERSION } from '../version';
+import { Image } from 'astro:assets';
+import shotQuickSelect from '../assets/screens/quick-select.png';
+import shotCopyMode from '../assets/screens/copy-mode.png';
+import shotHyperlinks from '../assets/screens/hyperlinks.png';
+import shotMouse from '../assets/screens/mouse.png';
+import shotWorkspaces from '../assets/screens/workspaces.png';
+import shotCommandPalette from '../assets/screens/command-palette.png';
+import shotLauncher from '../assets/screens/launcher.png';
+import shotSplits from '../assets/screens/splits.png';
+import shotLiveConfig from '../assets/screens/live-config.png';
+import shotThemes from '../assets/screens/themes.png';
+import shotTypography from '../assets/screens/typography.png';
+import shotTextStyling from '../assets/screens/text-styling.png';
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const site = 'https://0funct0ry.github.io/microterm';
@@ -43,7 +56,7 @@ const description =
     <nav class="nav-links" aria-label="Primary">
       <a href="#features" class="hide-sm">Features</a>
       <a href="#osc" class="hide-sm">Integrations</a>
-      <a href="#compare" class="hide-sm">Compare</a>
+      <a href="#principles" class="hide-sm">Principles</a>
       <a href={`${base}/docs/installation/`}>Docs</a>
       <a href="https://github.com/0funct0ry/microterm">GitHub</a>
     </nav>
@@ -116,28 +129,28 @@ const description =
       <div class="group">
         <div><h3>Keyboard-Driven Text Selection</h3><p>Select and copy visible terminal text using just two keystrokes, without requiring a mouse.</p></div>
         <div class="feat">
-          <div><h4>Quick Select <kbd data-k="qs"></kbd></h4><p>Automatically labels Git hashes, IP addresses, file paths, UUIDs, and URLs visible on screen. Type a label to copy the corresponding value, or enter its uppercase variant to paste it directly.</p><!-- TBD screenshot (quick-select.png): Quick select active over a git log or ls output: yellow hint labels on hashes, paths, IPs and URLs. --><figure class="shot" data-shot="quick-select"><figcaption>Screenshot TBD: Quick select active over a git log or ls output: yellow hint labels on hashes, paths, IPs and URLs.</figcaption></figure></div>
-          <div><h4>Copy Mode <kbd data-k="cm"></kbd></h4><p>Navigate and select text in scrollback using familiar Vim motions, including <code>w</code>, <code>b</code>, <code>e</code>, <code>gg</code>, and <code>G</code>. Search with <code>/</code> and select rectangular blocks with <code>Ctrl-V</code>.</p><!-- TBD screenshot (copy-mode.png): Copy mode in scrollback: mode indicator visible, cursor mid-buffer, a rectangular (Ctrl-V) block selection highlighted. --><figure class="shot" data-shot="copy-mode"><figcaption>Screenshot TBD: Copy mode in scrollback: mode indicator visible, cursor mid-buffer, a rectangular (Ctrl-V) block selection highlighted.</figcaption></figure></div>
-          <div><h4>Hyperlink Support</h4><p>Supports OSC 8 hyperlinks and custom regular-expression rules for automatically identifying and linking text in terminal output. Configure a rule in a single line to turn identifiers such as <code>ISSUE-12</code> into clickable links to your issue tracker or other external resources.</p><!-- TBD screenshot (hyperlinks.png): Output containing ISSUE-12 and a URL, mouse hovering the link so it is underlined, with the link target shown. --><figure class="shot" data-shot="hyperlinks"><figcaption>Screenshot TBD: Output containing ISSUE-12 and a URL, mouse hovering the link so it is underlined, with the link target shown.</figcaption></figure></div>
-          <div><h4>Intuitive Mouse Support</h4><p>Full SGR mouse reporting for applications such as Vim and htop. Hold Shift to select text independently of application mouse handling. Supports word, line, and rectangular block selection.</p><!-- TBD screenshot (mouse.png): htop or Vim running with mouse reporting, plus a Shift-drag text selection made over it. --><figure class="shot" data-shot="mouse"><figcaption>Screenshot TBD: htop or Vim running with mouse reporting, plus a Shift-drag text selection made over it.</figcaption></figure></div>
+          <div><h4>Quick Select <kbd data-k="qs"></kbd></h4><p>Automatically labels Git hashes, IP addresses, file paths, UUIDs, and URLs visible on screen. Type a label to copy the corresponding value, or enter its uppercase variant to paste it directly.</p><figure class="shot" data-shot="quick-select"><button type="button" class="shot-btn" data-full={shotQuickSelect.src} aria-label="Enlarge screenshot: Quick Select hint labels over git log output"><Image src={shotQuickSelect} alt="Quick Select hint labels over git log output" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Copy Mode <kbd data-k="cm"></kbd></h4><p>Navigate and select text in scrollback using familiar Vim motions, including <code>w</code>, <code>b</code>, <code>e</code>, <code>gg</code>, and <code>G</code>. Search with <code>/</code> and select rectangular blocks with <code>Ctrl-V</code>.</p><figure class="shot" data-shot="copy-mode"><button type="button" class="shot-btn" data-full={shotCopyMode.src} aria-label="Enlarge screenshot: Copy Mode with a rectangular block selection in the scrollback"><Image src={shotCopyMode} alt="Copy Mode with a rectangular block selection in the scrollback" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Hyperlink Support</h4><p>Supports OSC 8 hyperlinks and custom regular-expression rules for automatically identifying and linking text in terminal output. Configure a rule in a single line to turn identifiers such as <code>ISSUE-12</code> into clickable links to your issue tracker or other external resources.</p><figure class="shot" data-shot="hyperlinks"><button type="button" class="shot-btn" data-full={shotHyperlinks.src} aria-label="Enlarge screenshot: Terminal output with a hovered, underlined hyperlink"><Image src={shotHyperlinks} alt="Terminal output with a hovered, underlined hyperlink" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Intuitive Mouse Support</h4><p>Full SGR mouse reporting for applications such as Vim and htop. Hold Shift to select text independently of application mouse handling. Supports word, line, and rectangular block selection.</p><figure class="shot" data-shot="mouse"><button type="button" class="shot-btn" data-full={shotMouse.src} aria-label="Enlarge screenshot: Shift-drag text selection over an application using mouse reporting"><Image src={shotMouse} alt="Shift-drag text selection over an application using mouse reporting" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
         </div>
       </div>
       <div class="group">
         <div><h3>Keep sessions organised</h3><p>Organize terminal sessions with native tabs and split panes, providing a familiar workflow similar to tmux.</p></div>
         <div class="feat">
-          <div><h4>Workspaces</h4><p>Create named groups of windows and tabs for different projects or environments. Switch between workspaces such as <code>payments</code> and <code>infra</code> to keep related tasks organized and separate.</p><!-- TBD screenshot (workspaces.png): Workspace switcher open listing payments and infra, with the active workspace's tabs visible behind it. --><figure class="shot" data-shot="workspaces"><figcaption>Screenshot TBD: Workspace switcher open listing payments and infra, with the active workspace's tabs visible behind it.</figcaption></figure></div>
-          <div><h4>Command palette <kbd data-k="pal"></kbd></h4><p>Quickly find and execute actions, switch tabs and workspaces, and change themes through a searchable command palette. Fuzzy search helps locate commands, with keyboard shortcuts displayed alongside each action.</p><!-- TBD screenshot (command-palette.png): Command palette open with a partial fuzzy query, matched letters highlighted and shortcuts on the right. --><figure class="shot" data-shot="command-palette"><figcaption>Screenshot TBD: Command palette open with a partial fuzzy query, matched letters highlighted and shortcuts on the right.</figcaption></figure></div>
-          <div><h4>Launcher</h4><p>Access launch profiles, SSH hosts, and workspaces from a unified launcher. Define startup workspaces in the configuration to automatically organize your terminal environment when you launch the application.</p><!-- TBD screenshot (launcher.png): Launcher open showing launch profiles, SSH hosts and workspaces grouped in one list. --><figure class="shot" data-shot="launcher"><figcaption>Screenshot TBD: Launcher open showing launch profiles, SSH hosts and workspaces grouped in one list.</figcaption></figure></div>
-          <div><h4>Splits</h4><p>Divide any tab into multiple panes for parallel workflows, with support for both local sessions and SSH connections. Optionally enable mouse-following focus to switch between panes simply by moving the pointer.</p><!-- TBD screenshot (splits.png): One tab split into three panes (one local, one SSH), focused pane border highlighted. --><figure class="shot" data-shot="splits"><figcaption>Screenshot TBD: One tab split into three panes (one local, one SSH), focused pane border highlighted.</figcaption></figure></div>
+          <div><h4>Workspaces</h4><p>Create named groups of windows and tabs for different projects or environments. Switch between workspaces such as <code>payments</code> and <code>infra</code> to keep related tasks organized and separate.</p><figure class="shot" data-shot="workspaces"><button type="button" class="shot-btn" data-full={shotWorkspaces.src} aria-label="Enlarge screenshot: Workspace switcher listing the payments and infra workspaces"><Image src={shotWorkspaces} alt="Workspace switcher listing the payments and infra workspaces" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Command palette <kbd data-k="pal"></kbd></h4><p>Quickly find and execute actions, switch tabs and workspaces, and change themes through a searchable command palette. Fuzzy search helps locate commands, with keyboard shortcuts displayed alongside each action.</p><figure class="shot" data-shot="command-palette"><button type="button" class="shot-btn" data-full={shotCommandPalette.src} aria-label="Enlarge screenshot: Command palette with a fuzzy query and keyboard shortcuts"><Image src={shotCommandPalette} alt="Command palette with a fuzzy query and keyboard shortcuts" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Launcher</h4><p>Access launch profiles, SSH hosts, and workspaces from a unified launcher. Define startup workspaces in the configuration to automatically organize your terminal environment when you launch the application.</p><figure class="shot" data-shot="launcher"><button type="button" class="shot-btn" data-full={shotLauncher.src} aria-label="Enlarge screenshot: Launcher listing launch profiles, SSH hosts, and workspaces"><Image src={shotLauncher} alt="Launcher listing launch profiles, SSH hosts, and workspaces" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Splits</h4><p>Divide any tab into multiple panes for parallel workflows, with support for both local sessions and SSH connections. Optionally enable mouse-following focus to switch between panes simply by moving the pointer.</p><figure class="shot" data-shot="splits"><button type="button" class="shot-btn" data-full={shotSplits.src} aria-label="Enlarge screenshot: A tab split into several local and SSH panes"><Image src={shotSplits} alt="A tab split into several local and SSH panes" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
         </div>
       </div>
       <div class="group">
         <div><h3>Flexible Configuration</h3><p>Customize your terminal with a single configuration file and apply changes instantly, without restarting.</p></div>
         <div class="feat">
-          <div><h4>Live Configuration</h4><p>Save <code>microterm.toml</code> and colours, fonts and keys change in every window. A typo shows the line and column and keeps the last good config.</p><!-- TBD screenshot (live-config.png): Editor with microterm.toml beside a terminal window, ideally the config error banner showing line and column. --><figure class="shot" data-shot="live-config"><figcaption>Screenshot TBD: Editor with microterm.toml beside a terminal window, ideally the config error banner showing line and column.</figcaption></figure></div>
-          <div><h4>Extensive Dark and Light Theme Collection</h4><p>Choose from an extensive theme collection. Optionally synchronize the terminal's appearance with your system's light or dark mode.</p><!-- TBD screenshot (themes.png): Grid or side-by-side of the same session in several themes (e.g. One Dark, One Light, Tokyo Night, Catppuccin). --><figure class="shot" data-shot="themes"><figcaption>Screenshot TBD: Grid or side-by-side of the same session in several themes (e.g. One Dark, One Light, Tokyo Night, Catppuccin).</figcaption></figure></div>
-          <div><h4>Advanced Typography</h4><p>Enhance terminal readability with font ligatures that separate when the cursor moves over them, colour emoji, and support for CJK characters. Configure the font fallback chain to control how different characters and symbols are rendered.</p><!-- TBD screenshot (typography.png): Code with ligatures (=>, !=, ->), one ligature broken apart under the cursor, plus colour emoji and CJK text. --><figure class="shot" data-shot="typography"><figcaption>Screenshot TBD: Code with ligatures (=>, !=, ->), one ligature broken apart under the cursor, plus colour emoji and CJK text.</figcaption></figure></div>
-          <div><h4>Complete Text Styling</h4><p>Renders every text style that modern command-line tools use, including bold, italic, and strikethrough. Supports <span style="text-decoration:underline double">double</span>, <span style="text-decoration:underline wavy;text-decoration-color:#d07277">curly</span>, dotted, and coloured underlines, as well as full 24-bit true colour.</p><!-- TBD screenshot (text-styling.png): Output of a style test script: bold, italic, strikethrough, double/curly/dotted/coloured underlines and a 24-bit gradient. --><figure class="shot" data-shot="text-styling"><figcaption>Screenshot TBD: Output of a style test script: bold, italic, strikethrough, double/curly/dotted/coloured underlines and a 24-bit gradient.</figcaption></figure></div>
+          <div><h4>Live Configuration</h4><p>Save <code>microterm.toml</code> and colours, fonts and keys change in every window. A typo shows the line and column and keeps the last good config.</p><figure class="shot" data-shot="live-config"><button type="button" class="shot-btn" data-full={shotLiveConfig.src} aria-label="Enlarge screenshot: microterm.toml being edited with changes applied live"><Image src={shotLiveConfig} alt="microterm.toml being edited with changes applied live" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Extensive Dark and Light Theme Collection</h4><p>Choose from an extensive theme collection. Optionally synchronize the terminal's appearance with your system's light or dark mode.</p><figure class="shot" data-shot="themes"><button type="button" class="shot-btn" data-full={shotThemes.src} aria-label="Enlarge screenshot: The same session shown in several bundled themes"><Image src={shotThemes} alt="The same session shown in several bundled themes" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Advanced Typography</h4><p>Enhance terminal readability with font ligatures that separate when the cursor moves over them, colour emoji, and support for CJK characters. Configure the font fallback chain to control how different characters and symbols are rendered.</p><figure class="shot" data-shot="typography"><button type="button" class="shot-btn" data-full={shotTypography.src} aria-label="Enlarge screenshot: Code with ligatures, colour emoji, and CJK text"><Image src={shotTypography} alt="Code with ligatures, colour emoji, and CJK text" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
+          <div><h4>Complete Text Styling</h4><p>Renders every text style that modern command-line tools use, including bold, italic, and strikethrough. Supports <span style="text-decoration:underline double">double</span>, <span style="text-decoration:underline wavy;text-decoration-color:#d07277">curly</span>, dotted, and coloured underlines, as well as full 24-bit true colour.</p><figure class="shot" data-shot="text-styling"><button type="button" class="shot-btn" data-full={shotTextStyling.src} aria-label="Enlarge screenshot: Bold, italic, strikethrough, underline styles, and a true-colour gradient"><Image src={shotTextStyling} alt="Bold, italic, strikethrough, underline styles, and a true-colour gradient" widths={[640, 1280]} sizes="(max-width: 900px) 100vw, 560px" loading="lazy" /></button></figure></div>
         </div>
       </div>
     </div>
@@ -202,39 +215,97 @@ $ microterm ctl workspace switch infra</pre>
     <div class="ssh-cta"><a class="chipbtn" href={`${base}/docs/private-osc/`}>Read the private OSC reference</a><span>Sequences use the reserved range 7700–7799, so they do not conflict with other terminals.</span></div>
   </section>
 
-  <!-- compare -->
-  <section id="compare">
+  <!-- principles -->
+  <section id="principles">
     <div class="sec-head">
-      <h2>How it compares</h2>
-      <p>microterm is new. Here is where it stands next to terminals you might already use, including the rows where it falls short.</p>
+      <h2>Design principles</h2>
+      <p>A small set of commitments that shape every decision in microterm.</p>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th scope="col"></th><th scope="col">microterm</th><th scope="col">WezTerm</th><th scope="col">Kitty</th><th scope="col">Alacritty</th><th scope="col">Ghostty</th></tr></thead>
-        <tbody>
-          <tr><td>macOS and Linux</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-          <tr><td>Windows</td><td class="no">No</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td><td class="no">No</td></tr>
-          <tr><td>Built-in tabs</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
-          <tr><td>Splits</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
-          <tr><td>SSH sessions survive disconnects</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="no">No</td><td class="no">No</td></tr>
-          <tr><td>Inline images</td><td class="soon">v1.2</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td></tr>
-          <tr><td>Config format</td><td>TOML (Lua in v1.3)</td><td>Lua</td><td>kitty.conf</td><td>TOML</td><td>Own format</td></tr>
-          <tr><td>Track record</td><td class="no">New</td><td>Years</td><td>Years</td><td>Years</td><td>Since 2024</td></tr>
-        </tbody>
-      </table>
+    <div class="bento">
+      <div class="bento-lead">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+        <div class="bento-bars" aria-hidden="true"><span style="height:40%"></span><span style="height:55%"></span><span style="height:48%"></span><span style="height:70%"></span><span style="height:62%"></span><span style="height:85%"></span><span style="height:78%"></span><span style="height:92%"></span><span style="height:88%"></span><span style="height:100%"></span></div>
+        <h3>GPU-Rendered</h3>
+        <p>Every frame is drawn on the GPU through GPUI, so scrolling and large outputs stay smooth.</p>
+      </div>
+      <div>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m2 2 20 20"/></svg>
+        <h3>No Telemetry</h3>
+        <p>microterm never collects usage data or contacts a server you did not configure.</p>
+        <svg class="bento-mark" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m2 2 20 20"/></svg>
+      </div>
+      <div>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10M12 3v18M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
+        <h3>MIT Licensed</h3>
+        <p>The source is open and free to use, modify, and redistribute.</p>
+        <svg class="bento-mark" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10M12 3v18M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
+      </div>
+      <div>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <h3>macOS and Linux Only</h3>
+        <p>Focusing on two platforms keeps behaviour consistent and native on each.</p>
+        <svg class="bento-mark" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      </div>
+      <div>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+        <h3>Keyboard First</h3>
+        <p>Every action is reachable from the keyboard and the command palette.</p>
+        <svg class="bento-mark" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+      </div>
+      <div>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 13l-2 2 2 2M14 17l2-2-2-2"/></svg>
+        <h3>Zero Setup, Fully Configurable</h3>
+        <p>microterm runs well with no configuration at all, and every setting is quick to change when you need it.</p>
+        <ul class="bento-list">
+          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M8 13h8M8 17h5"/></svg><span><strong>Plain-text configuration.</strong> All settings live in a single, validated TOML file.</span></li>
+          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg><span><strong>Live reload.</strong> Changes apply as soon as you save the file, with no restart.</span></li>
+          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg><span><strong>One step away.</strong> Run <code>Open config</code> from the command palette to edit the file.</span></li>
+          <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg><span><strong>Scriptable control.</strong> Use <code>microterm ctl</code> to change the running terminal from a shell or script.</span></li>
+        </ul>
+        <svg class="bento-mark" width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 13l-2 2 2 2M14 17l2-2-2-2"/></svg>
+      </div>
     </div>
-    <p class="note">As of October 2026. Check each project's documentation before deciding, and open an issue if a row is wrong.</p>
   </section>
 
-  <!-- roadmap -->
-  <section id="roadmap">
-    <div class="sec-head"><h2>What's next</h2><p>Each release is small and ships when it works end to end.</p></div>
-    <ol class="roadmap">
-      <li class="now"><span class="v">v1.0</span><h4>Today</h4><p>Tabs, splits, workspaces, SSH, serial ports, quick select, copy mode, CLI.</p></li>
-      <li><span class="v">v1.2</span><h4>Images</h4><p>Kitty and iTerm2 graphics.</p></li>
-      <li><span class="v">v1.3</span><h4>Lua config</h4><p>Logic, variables and callbacks, same schema as TOML.</p></li>
-      <li><span class="v">v1.4</span><h4>Plugins</h4><p>One-line GitHub plugins, pinned to a commit.</p></li>
-    </ol>
+  <!-- faq -->
+  <section id="faq">
+    <div class="sec-head">
+      <h2>Frequently asked questions</h2>
+      <p>Short answers to the questions people ask most before installing microterm.</p>
+    </div>
+    <div class="faq">
+      <aside class="faq-help">
+        <span class="faq-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></svg></span>
+        <h3>Still have a question?</h3>
+        <p>Read the documentation, or open an issue on GitHub.</p>
+        <div class="faq-links">
+          <a class="chipbtn" href={`${base}/docs/installation/`}>Documentation</a>
+          <a class="chipbtn" href="https://github.com/0funct0ry/microterm/issues">GitHub issues</a>
+        </div>
+      </aside>
+      <div class="faq-list">
+        <details open>
+          <summary>Does microterm run on Windows?</summary>
+          <p>No. microterm supports macOS and Linux only, so that behaviour stays consistent and native on both platforms.</p>
+        </details>
+        <details>
+          <summary>Do I need to configure anything before using it?</summary>
+          <p>No. microterm works with sensible defaults out of the box. When you want to change something, run <code>Open config</code> from the command palette.</p>
+        </details>
+        <details>
+          <summary>Where is the configuration file?</summary>
+          <p>At <code>~/.config/microterm/microterm.toml</code>. Changes apply as soon as you save the file.</p>
+        </details>
+        <details>
+          <summary>Does microterm collect any data?</summary>
+          <p>No. microterm has no telemetry and only connects to servers you configure, such as SSH hosts.</p>
+        </details>
+        <details>
+          <summary>How do I report a bug or request a feature?</summary>
+          <p>Open an issue on GitHub. Include your operating system, microterm version, and steps to reproduce the problem.</p>
+        </details>
+      </div>
+    </div>
   </section>
 
   <!-- install -->
@@ -245,7 +316,8 @@ $ microterm ctl workspace switch infra</pre>
         <button role="tab" aria-selected="true" data-i="0">Homebrew (macOS)</button>
         <button role="tab" aria-selected="false" data-i="1">Homebrew (Linux)</button>
         <button role="tab" aria-selected="false" data-i="2">Install script</button>
-        <button role="tab" aria-selected="false" data-i="3">Manual download</button>
+        <button role="tab" aria-selected="false" data-i="3">Disk image (macOS)</button>
+        <button role="tab" aria-selected="false" data-i="4">Manual download (Linux)</button>
       </div>
       <div class="install-body">
         <pre class="code" id="instCode"></pre>
@@ -262,8 +334,14 @@ $ microterm ctl workspace switch infra</pre>
     <nav aria-label="Footer"><a href={`${base}/docs/installation/`}>Docs</a><a href="https://github.com/0funct0ry/microterm">GitHub</a><a href="https://github.com/0funct0ry/microterm/releases">Releases</a><a href={`${base}/docs/roadmap/`}>Roadmap</a><a href={`${base}/docs/changelog/`}>Changelog</a><a href="https://github.com/0funct0ry/microterm/blob/main/LICENSE">LICENSE</a><a href={`${base}/THIRD-PARTY-LICENSES.html`}>Third-party notices</a></nav>
   </div>
 </footer>
+<dialog class="lightbox" id="lightbox" aria-label="Screenshot">
+  <button type="button" class="lightbox-close" aria-label="Close">&times;</button>
+  <img alt="" />
+  <p class="lightbox-cap"></p>
+</dialog>
   <script>
     import '../scripts/demo.js';
+    import '../scripts/lightbox.js';
   </script>
   </body>
 </html>

@@ -407,6 +407,7 @@ const INST = [
   `<span class="cm"># macOS 12 or later, Apple Silicon or Intel</span>\nbrew install --cask 0funct0ry/tap/microterm`,
   `<span class="cm"># Linux: needs a Vulkan driver (Mesa is fine)</span>\nbrew install 0funct0ry/tap/microterm`,
   `<span class="cm"># Detects your OS and CPU, verifies the checksum, installs to ~/.local</span>\ncurl -fsSL https://0funct0ry.github.io/microterm/install.sh | sh`,
+  `<span class="cm"># Download microterm-${V}-aarch64-apple-darwin.dmg (x86_64 for Intel), open it,\n# and drag microterm.app to Applications. Then, once:</span>\nxattr -dr com.apple.quarantine /Applications/microterm.app\n<span class="cm"># First launch adds microterm and mt to ~/.local/bin; open a new shell to use them.</span>`,
   `<span class="cm"># Download the archive for your platform, then:</span>\ntar -xzf microterm-${V}-x86_64-unknown-linux-gnu.tar.gz\n./microterm-${V}/bin/microterm --version\n<span class="cm"># All files and SHA256SUMS: github.com/0funct0ry/microterm/releases</span>`,
 ];
 const instCode=document.getElementById("instCode");
