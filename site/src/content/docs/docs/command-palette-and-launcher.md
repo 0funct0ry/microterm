@@ -8,6 +8,8 @@ description: Run any action, jump to workspaces, tabs and themes, and start laun
 Press `⌘⇧P` (macOS) or `Ctrl+Shift+P` (Linux). Type to fuzzy-search; matched characters are
 highlighted and each action shows its keybinding.
 
+<video src="/demos/command-palette.mp4" autoplay loop muted playsinline preload="metadata" aria-label="The command palette filtering actions as a query is typed" style="width:100%;border-radius:8px"></video>
+
 A one-character prefix picks a provider:
 
 | Prefix | Provider | Example | Result |
@@ -45,6 +47,8 @@ except the ones that need an argument (`SendString`, `SpawnCommand`, …): bind 
 - your `[[launch]]` profiles,
 - **New tab in …** for each domain (`local`, then your [SSH domains](/docs/ssh-domains/) with a connection dot), plus *Connect to host…* and *Connect to serial port…* ([serial ports](/docs/serial-ports/)),
 - workspaces.
+
+<video src="/demos/launcher.mp4" autoplay loop muted playsinline preload="metadata" aria-label="The launcher listing profiles, hosts and workspaces" style="width:100%;border-radius:8px"></video>
 
 ```toml
 [[launch]]

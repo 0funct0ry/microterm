@@ -9,6 +9,8 @@ at the terminal cursor. While copy mode is active the pane receives no keyboard 
 its output keeps rendering. The pill at the top right shows the mode (`COPY`, `VISUAL`,
 `V-LINE`, `V-BLOCK`) and any count or key sequence you have started.
 
+<video src="/demos/copy-mode.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Copy mode moving through scrollback with Vim keys and copying a selection" style="width:100%;border-radius:8px"></video>
+
 ## Keys
 
 | Keys | Motion or action |

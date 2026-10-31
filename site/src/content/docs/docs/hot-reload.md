@@ -7,6 +7,8 @@ microterm watches its config file, the directory that contains it (editors save 
 temporary file over the original) and the `themes/` directory next to it. Changes are debounced
 for 150 ms, then the file is parsed, validated, compared with the active config and applied.
 
+<video src="/demos/live-config.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Saving the config file and every window updating without a restart" style="width:100%;border-radius:8px"></video>
+
 The swap is **atomic**: either the whole new config applies or none of it does.
 
 ## What each change does

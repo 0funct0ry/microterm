@@ -11,6 +11,12 @@ const VERSION = cargo.match(/\[workspace\.package\][^[]*?version\s*=\s*"([^"]+)"
 const BASE = '/microterm';
 function rehypeBaseLinks() {
   const walk = (node) => {
+    // Raw HTML in content (the demo videos) arrives as `raw` nodes before rehype-raw runs.
+    if (node.type === 'raw' && typeof node.value === 'string') node.value = node.value.replaceAll('src="/demos/', `src="${BASE}/demos/`);
+    if (node.type === 'element' && (node.tagName === 'video' || node.tagName === 'source')) {
+      const src = node.properties?.src;
+      if (typeof src === 'string' && src.startsWith('/demos/')) node.properties.src = BASE + src;
+    }
     if (node.type === 'element' && node.tagName === 'a') {
       const href = node.properties?.href;
       if (typeof href === 'string' && href.startsWith('/docs/')) node.properties.href = BASE + href;

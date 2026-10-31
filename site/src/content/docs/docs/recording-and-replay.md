@@ -7,6 +7,8 @@ microterm records terminals in the [asciicast v2](https://docs.asciinema.org/man
 format, so recordings play in `asciinema play`, embed in web pages with the asciinema player and
 diff well (one JSON line per event).
 
+<video src="/demos/session-recording.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Recording a pane and playing the recording back" style="width:100%;border-radius:8px"></video>
+
 ## Record a command
 
 ```sh

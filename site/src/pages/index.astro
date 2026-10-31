@@ -77,45 +77,19 @@ const description =
     </div>
     <p class="meta-line">v{version} for macOS 12+ and Linux (Wayland or X11). MIT licensed.</p>
 
-    <!-- interactive demo -->
+    <!-- shortcuts -->
     <div class="demo">
-      <div class="term" id="term" tabindex="0" aria-label="Interactive microterm demo. Focus it and use the shortcuts listed below.">
-        <div class="tb">
-          <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
-          <button class="ws-chip" id="wsChip" title="Switch workspace"><span id="wsName">payments</span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-          <div class="tb-title" id="tbTitle">~/src/payments-api — zsh</div>
-          <div class="domain"><span class="dot ok" id="domDot"></span><span id="domName">local</span></div>
-        </div>
-        <div class="tabs" role="tablist" id="tabs"></div>
-        <div class="viewport" id="vp">
-          <div class="grid" id="grid" aria-live="off"></div>
-          <div class="layer" id="layer"></div>
-          <div class="pill" id="pill">Copy mode</div>
-          <div class="palette" id="palette" role="dialog" aria-label="Command palette">
-            <input id="palIn" placeholder="Run an action, switch workspace or pick a theme" autocomplete="off" spellcheck="false" aria-controls="palList">
-            <ul id="palList" role="listbox"></ul>
-          </div>
-          <div class="recon" id="recon">
-            <div class="recon-card" role="status">
-              <h4><span class="dot warn"></span>Connection to prod lost</h4>
-              <p id="reconMsg">Reconnecting in 2 s (attempt 1). The remote session keeps running.</p>
-              <div class="row"><button class="fill" id="reconNow">Reconnect now</button><button id="reconClose">Close tab</button></div>
-            </div>
-          </div>
-          <div class="toasts" id="toasts" aria-live="polite"></div>
-        </div>
+      <p class="demo-lead">Every action has a default shortcut, and every shortcut can be rebound in the configuration file.</p>
+      <div class="keycaps">
+        <div style="--i:0"><div class="keys" data-keys="pal" aria-hidden="true"></div><h3>Command palette</h3><p>Run any action by name.</p></div>
+        <div style="--i:1"><div class="keys" data-keys="qs" aria-hidden="true"></div><h3>Quick select</h3><p>Copy hashes, IP addresses, and URLs by label.</p></div>
+        <div style="--i:2"><div class="keys" data-keys="cm" aria-hidden="true"></div><h3>Copy mode</h3><p>Navigate scrollback with Vim motions.</p></div>
+        <div style="--i:3"><div class="keys" data-keys="la" aria-hidden="true"></div><h3>Launcher</h3><p>Open profiles, hosts, and workspaces.</p></div>
+        <div style="--i:4"><div class="keys" data-keys="ws" aria-hidden="true"></div><h3>Workspaces</h3><p>Switch between projects instantly.</p></div>
+        <div style="--i:5"><div class="keys" data-keys="sr" aria-hidden="true"></div><h3>Split right</h3><p>Open a second pane side by side.</p></div>
+        <div style="--i:6"><div class="keys" data-keys="sd" aria-hidden="true"></div><h3>Split down</h3><p>Stack a second pane below.</p></div>
+        <div style="--i:7"><div class="keys" data-keys="nt" aria-hidden="true"></div><h3>New tab</h3><p>Start another shell in one keystroke.</p></div>
       </div>
-
-      <div class="controls">
-        <span>Click the terminal, then try</span>
-        <div class="try">
-          <button class="chipbtn" data-act="qs"><kbd data-k="qs"></kbd>Quick select</button>
-          <button class="chipbtn" data-act="cm"><kbd data-k="cm"></kbd>Copy mode</button>
-          <button class="chipbtn" data-act="pal"><kbd data-k="pal"></kbd>Command palette</button>
-          <button class="chipbtn" data-act="drop">Drop the SSH connection</button>
-        </div>
-      </div>
-      <div class="swatches" id="swatches" role="group" aria-label="Terminal theme"></div>
     </div>
   </section>
 
@@ -157,47 +131,30 @@ const description =
   </section>
 
   <!-- config + cli -->
-  <section>
+  <section id="configure">
     <div class="sec-head">
       <h2>Configure in TOML, script from the shell</h2>
       <p>The config is a single readable file. Everything the UI can do, <code>microterm ctl</code> can do too, with JSON output for scripts.</p>
     </div>
-    <div class="split2">
-      <div class="panel">
-        <div class="panel-h">~/.config/microterm/microterm.toml</div>
-<pre class="code"><span class="k">theme</span> = &#123; dark = <span class="str">"Tokyo Night"</span>, light = <span class="str">"One Light"</span> &#125;
-
-<span class="sec">[font]</span>
-<span class="k">family</span>    = <span class="str">"JetBrains Mono"</span>
-<span class="k">size</span>      = <span class="num">13.5</span>
-<span class="k">ligatures</span> = <span class="k">true</span>
-
-<span class="sec">[[hyperlink_rules]]</span>
+    <div class="cs-story">
+      <div class="cs-scene"><div class="cs-st"><span class="cs-num">1</span><div><h3>Two ways in</h3><p>Edit a single TOML file, or drive the running app with <code>microterm ctl</code>. Both change the same live state.</p></div></div><svg viewBox="0 0 760 300" role="img" aria-label="Both the TOML file and microterm ctl change the running app, which updates themes, fonts, tabs and splits live"><defs><marker id="cs-ar" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--accent)"/></marker></defs><g font-family="sans-serif"><rect x="20" y="40" width="190" height="80" rx="12" fill="var(--surface)" stroke="var(--border)"/><text x="115" y="72" text-anchor="middle" font-size="15" font-weight="700" fill="var(--text)">microterm.toml</text><text x="115" y="96" text-anchor="middle" font-size="12.5" fill="var(--muted)">edit, save, done</text><rect x="20" y="180" width="190" height="80" rx="12" fill="#16171a" stroke="#2b2e35"/><text x="115" y="212" text-anchor="middle" font-size="15" font-weight="700" fill="#7ee787" font-family="monospace">$ microterm ctl</text><text x="115" y="236" text-anchor="middle" font-size="12.5" fill="#8b949e">script it, get JSON</text><path class="cs-flow" d="M210 80 C290 80 290 150 340 150" fill="none" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#cs-ar)"/><path class="cs-flow" d="M210 220 C290 220 290 150 340 150" fill="none" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#cs-ar)"/><rect x="345" y="90" width="150" height="120" rx="14" fill="#282c33" stroke="#464b57"/><circle cx="364" cy="108" r="5" fill="#ff5f57"/><circle cx="380" cy="108" r="5" fill="#febc2e"/><circle cx="396" cy="108" r="5" fill="#28c840"/><text x="420" y="168" text-anchor="middle" font-size="17" font-weight="700" fill="#dce0e5">microterm</text><text x="420" y="190" text-anchor="middle" font-size="12" fill="#a9afbc">live, no restart</text><path class="cs-flow" d="M495 150 C540 150 540 55 580 55" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#cs-ar)" style="animation-delay:0.0s"/><rect x="584" y="38" width="150" height="34" rx="17" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="659" y="60" text-anchor="middle" font-size="14" font-weight="600" fill="var(--accent)">Themes</text><path class="cs-flow" d="M495 150 C540 150 540 118 580 118" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#cs-ar)" style="animation-delay:0.2s"/><rect x="584" y="101" width="150" height="34" rx="17" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="659" y="123" text-anchor="middle" font-size="14" font-weight="600" fill="var(--accent)">Fonts</text><path class="cs-flow" d="M495 150 C540 150 540 181 580 181" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#cs-ar)" style="animation-delay:0.4s"/><rect x="584" y="164" width="150" height="34" rx="17" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="659" y="186" text-anchor="middle" font-size="14" font-weight="600" fill="var(--accent)">Tabs</text><path class="cs-flow" d="M495 150 C540 150 540 244 580 244" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#cs-ar)" style="animation-delay:0.6000000000000001s"/><rect x="584" y="227" width="150" height="34" rx="17" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="659" y="249" text-anchor="middle" font-size="14" font-weight="600" fill="var(--accent)">Splits</text></g></svg></div>
+      <div class="cs-scene" id="cs-map"><div class="cs-st"><span class="cs-num">2</span><div><h3>See what each setting does</h3><p>Every setting in the file maps to something you can see: colours, text, links, and tabs.</p></div></div><div class="cs-two"><div class="cs-code"><div class="cs-ph">~/.config/microterm/microterm.toml</div><pre><span class="cs-ln" data-p="theme"><span class="k">theme</span> = &#123; dark = <span class="str">"Tokyo Night"</span>, light = <span class="str">"One Light"</span> &#125;</span><span class="cs-ln" data-p="font"><span class="sec">[font]</span>
+<span class="k">family</span> = <span class="str">"JetBrains Mono"</span>
+<span class="k">size</span>   = <span class="num">13.5</span></span><span class="cs-ln" data-p="link"><span class="sec">[[hyperlink_rules]]</span>
 <span class="k">regex</span>  = <span class="str">'\b(ISSUE-\d+)\b'</span>
-<span class="k">format</span> = <span class="str">"https://issues.example.com/$1"</span>
-
-<span class="sec">[[workspaces]]</span>
-<span class="k">name</span> = <span class="str">"payments"</span>
-<span class="k">tabs</span> = [
-  &#123; title = <span class="str">"api"</span>, cwd = <span class="str">"~/src/payments-api"</span> &#125;,
-  &#123; title = <span class="str">"watch"</span>, command = [<span class="str">"cargo"</span>, <span class="str">"watch"</span>] &#125;,
-]</pre>
-      </div>
-      <div class="panel">
-        <div class="panel-h">zsh</div>
-<pre class="code"><span class="cm"># open a tab in the current window and run tests</span>
-$ microterm ctl tab new --title tests -- cargo test
-<span class="num">14</span>
-
-<span class="cm"># read what it printed</span>
-$ microterm ctl pane get-text --pane 14 | tail -3
-
-<span class="cm"># record a session as asciicast v2</span>
-$ microterm record -o demo.cast -- ./scripts/demo.sh
-
-<span class="cm"># jump to a workspace from anywhere</span>
-$ microterm ctl workspace switch infra</pre>
-      </div>
+<span class="k">format</span> = <span class="str">"https://issues.example.com/$1"</span></span><span class="cs-ln" data-p="tabs"><span class="sec">[[workspaces.tabs]]</span>
+<span class="k">title</span> = <span class="str">"api"</span>
+<span class="k">cwd</span>   = <span class="str">"~/src/payments-api"</span></span></pre></div><div class="cs-win"><div class="cs-mw"><div class="cs-tb"><i></i><i></i><i></i><span class="cs-chip">payments</span></div><div class="cs-tabs"><span class="on">api</span><span>tests</span></div><pre class="cs-out"><span class="a">payments-api</span> main ❯ cargo test
+running 42 tests ... ok
+see <span class="cs-lk on">ISSUE-12</span> for details</pre><div class="cs-toast">Saved · applied live</div></div><span class="cs-lbl"></span></div></div></div>
+      <div class="cs-scene" id="cs-live"><div class="cs-st"><span class="cs-num">3</span><div><h3>Edit and watch it apply</h3><p>Save the file and every window updates within a moment, without a restart.</p></div></div><div class="cs-two"><div class="cs-code"><div class="cs-ph">~/.config/microterm/microterm.toml</div><pre class="cs-live"><span class="cs-ln"><span class="k">theme</span> = <span class="str">"Tokyo Night"</span></span><span class="cs-ln"> </span><span class="cs-ln"><span class="sec">[font]</span></span><span class="cs-ln"><span class="k">family</span> = <span class="str">"JetBrains Mono"</span></span><span class="cs-ln"><span class="k">size</span>   = <span class="num">13.5</span></span><span class="cs-ln"><span class="k">ligatures</span> = <span class="k">true</span></span></pre></div><div class="cs-mw"><div class="cs-tb"><i></i><i></i><i></i><span class="cs-chip">payments</span></div><div class="cs-tabs"><span class="on">api</span><span>tests</span></div><pre class="cs-out"><span class="a">payments-api</span> main ❯ cargo test
+running 42 tests ... ok
+see <span class="cs-lk on">ISSUE-12</span> for details</pre><div class="cs-toast">Saved · applied live</div></div></div></div>
+      <div class="cs-scene" id="cs-shell"><div class="cs-st"><span class="cs-num">4</span><div><h3>Script it from the shell</h3><p>Everything the UI can do, <code>microterm ctl</code> can do, with JSON output for scripts.</p></div></div><div class="cs-three"><div class="cs-zsh"><div class="cs-ph">zsh</div><pre class="cs-term"><span class="p">$</span> microterm ctl tab new --title tests -- cargo test
+<span class="d">14</span>
+</pre></div><div class="cs-mid"><div class="cs-pipe"><span class="cs-dot"></span></div></div><div class="cs-mw"><div class="cs-tb"><i></i><i></i><i></i><span class="cs-chip">payments</span></div><div class="cs-tabs"><span>api</span><span class="on">tests</span></div><pre class="cs-out"><span class="a">payments-api</span> main ❯ cargo test
+running 42 tests ... ok
+see <span class="cs-lk on">ISSUE-12</span> for details</pre><div class="cs-toast">Saved · applied live</div></div></div></div>
     </div>
   </section>
 
@@ -342,6 +299,7 @@ $ microterm ctl workspace switch infra</pre>
   <script>
     import '../scripts/demo.js';
     import '../scripts/lightbox.js';
+    import '../scripts/story.js';
   </script>
   </body>
 </html>

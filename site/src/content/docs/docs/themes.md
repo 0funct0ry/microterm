@@ -26,6 +26,8 @@ Or open the **Select theme** command from the palette. Moving the selection prev
 live; **Enter** keeps it for this session and **Esc** reverts. To make a choice permanent, put it
 in the config file.
 
+<video src="/demos/theme-switcher.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Choosing a theme from the palette with a live preview" style="width:100%;border-radius:8px"></video>
+
 ## Your own themes
 
 Put `*.toml` files in `themes/` next to your config file (`~/.config/microterm/themes/`). A user

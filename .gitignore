@@ -11,3 +11,4 @@ dist/
 site/public/install.sh
 site/public/THIRD-PARTY-LICENSES.html
 site/public/LICENSE.txt
+site/src/assets/demos/

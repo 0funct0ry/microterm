@@ -7,6 +7,8 @@ Quick select labels everything on screen that looks like something you would wan
 Press **Cmd+Shift+Space** (Linux: **Ctrl+Shift+Space**) and a chip appears at the start of each
 match. Type a chip's letters to act on it.
 
+<video src="/demos/quick-select.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Quick select labelling hashes, paths and URLs, then copying one by label" style="width:100%;border-radius:8px"></video>
+
 | Typing | Result |
 |--------|--------|
 | a lowercase label, such as `a` or `sd` | copies the match and leaves quick select |

@@ -129,6 +129,8 @@ A workspace is a named group of windows, like a tmux session. **One workspace is
 time.** Switching hides the windows of the old workspace (their shells keep running) and shows
 the windows of the new one. The `default` workspace always exists.
 
+<video src="/demos/workspaces.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Switching between the payments and infra workspaces" style="width:100%;border-radius:8px"></video>
+
 | Action | macOS | Linux |
 |---|---|---|
 | Workspace switcher | `⌘⌥W` | `Ctrl+Alt+W` |

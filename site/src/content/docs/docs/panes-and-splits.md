@@ -7,6 +7,8 @@ A tab can hold several **panes**, each a real shell, arranged as a tree of split
 local tabs and in [SSH domains](/docs/ssh-domains/); a pane you split off an SSH pane runs on the
 same host.
 
+<video src="/demos/splits.mp4" autoplay loop muted playsinline preload="metadata" aria-label="Splitting a tab into panes, resizing and moving focus" style="width:100%;border-radius:8px"></video>
+
 ## Keys
 
 | Action | macOS | Linux |
